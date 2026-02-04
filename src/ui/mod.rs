@@ -28,9 +28,9 @@ pub fn render(app: &App, frame: &mut Frame) {
             let resolved = ws.layout.resolve(body);
             if let Some((_, rect)) = resolved.iter().find(|(id, _)| *id == ws.active_group) {
                 let (vt_row, vt_col) = pane.screen().cursor_position();
-                // Offset by rect position + 1 for border
+                // Offset by rect position + 1 border + 1 padding
                 let tab_bar_offset: u16 = if group.tab_count() > 1 { 1 } else { 0 };
-                let cursor_x = rect.x + 1 + vt_col;
+                let cursor_x = rect.x + 2 + vt_col;
                 let cursor_y = rect.y + 1 + tab_bar_offset + vt_row;
                 if cursor_x < rect.x + rect.width && cursor_y < rect.y + rect.height {
                     frame.set_cursor_position(ratatui::layout::Position {

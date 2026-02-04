@@ -27,19 +27,22 @@ pub fn render_group(group: &PaneGroup, is_active: bool, frame: &mut Frame, area:
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.width == 0 || inner.height == 0 {
+    if inner.width <= 2 || inner.height == 0 {
         return;
     }
+
+    // 1-cell padding on left and right
+    let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, inner.height);
 
     let has_tab_bar = group.tab_count() > 1;
 
     if has_tab_bar {
-        // Split inner area: 1 row for tab bar, rest for content
+        // Split padded area: 1 row for tab bar, rest for content
         let [tab_area, content_area] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Fill(1),
         ])
-        .areas(inner);
+        .areas(padded);
 
         render_tab_bar(group, is_active, frame, tab_area);
 
@@ -47,9 +50,9 @@ pub fn render_group(group: &PaneGroup, is_active: bool, frame: &mut Frame, area:
         let paragraph = Paragraph::new(lines);
         frame.render_widget(paragraph, content_area);
     } else {
-        let lines: Vec<Line<'static>> = render_screen(pane.screen(), inner);
+        let lines: Vec<Line<'static>> = render_screen(pane.screen(), padded);
         let paragraph = Paragraph::new(lines);
-        frame.render_widget(paragraph, inner);
+        frame.render_widget(paragraph, padded);
     }
 }
 
