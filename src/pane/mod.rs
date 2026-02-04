@@ -185,6 +185,11 @@ impl Pane {
 
     pub fn process_output(&mut self, bytes: &[u8]) {
         self.vt.process(bytes);
+        // Sync title from OSC escape sequences (e.g. \e]0;title\a)
+        let osc_title = self.vt.screen().title();
+        if !osc_title.is_empty() {
+            self.title = osc_title.to_string();
+        }
     }
 
     pub fn resize_pty(&mut self, cols: u16, rows: u16) {
