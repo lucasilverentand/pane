@@ -51,6 +51,17 @@ impl PaneGroup {
         true
     }
 
+    pub fn remove_tab(&mut self, idx: usize) -> Option<Pane> {
+        if self.tabs.len() <= 1 {
+            return None;
+        }
+        let pane = self.tabs.remove(idx);
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len() - 1;
+        }
+        Some(pane)
+    }
+
     pub fn next_tab(&mut self) {
         if !self.tabs.is_empty() {
             self.active_tab = (self.active_tab + 1) % self.tabs.len();
@@ -99,6 +110,7 @@ pub struct Pane {
     pub exited: bool,
     pub command: Option<String>,
     pub cwd: PathBuf,
+    pub scroll_offset: usize,
     pty_writer: Option<Box<dyn Write + Send>>,
     pty_child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
@@ -152,6 +164,7 @@ impl Pane {
             exited: false,
             command,
             cwd,
+            scroll_offset: 0,
             pty_writer: Some(pty_handle.writer),
             pty_child: Some(pty_handle.child),
             pty_master: Some(pty_handle.master),
@@ -170,6 +183,7 @@ impl Pane {
             exited: true,
             command: None,
             cwd: PathBuf::from("/"),
+            scroll_offset: 0,
             pty_writer: None,
             pty_child: None,
             pty_master: None,
@@ -183,8 +197,41 @@ impl Pane {
         }
     }
 
+    pub fn is_scrolled(&self) -> bool {
+        self.scroll_offset > 0
+    }
+
+    pub fn scroll_up(&mut self, n: usize) {
+        let max_offset = self.vt.screen().size().0 as usize;
+        self.scroll_offset = self.scroll_offset.saturating_add(n).min(max_offset);
+        self.vt.set_scrollback(self.scroll_offset);
+        self.scroll_offset = self.vt.screen().scrollback();
+    }
+
+    pub fn scroll_down(&mut self, n: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(n);
+        self.vt.set_scrollback(self.scroll_offset);
+        self.scroll_offset = self.vt.screen().scrollback();
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        let max_offset = self.vt.screen().size().0 as usize;
+        self.scroll_offset = max_offset;
+        self.vt.set_scrollback(self.scroll_offset);
+        self.scroll_offset = self.vt.screen().scrollback();
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll_offset = 0;
+        self.vt.set_scrollback(0);
+    }
+
     pub fn process_output(&mut self, bytes: &[u8]) {
         self.vt.process(bytes);
+        // Sync scrollback offset: vt100 auto-adjusts when content scrolls
+        if self.scroll_offset > 0 {
+            self.scroll_offset = self.vt.screen().scrollback();
+        }
         // Sync title from OSC escape sequences (e.g. \e]0;title\a)
         let osc_title = self.vt.screen().title();
         if !osc_title.is_empty() {
@@ -193,6 +240,9 @@ impl Pane {
     }
 
     pub fn resize_pty(&mut self, cols: u16, rows: u16) {
+        if self.scroll_offset > 0 {
+            self.scroll_to_bottom();
+        }
         self.vt.set_size(rows, cols);
         if let Some(master) = &self.pty_master {
             let _ = master.resize(PtySize {
@@ -207,5 +257,225 @@ impl Pane {
     pub fn screen(&self) -> &vt100::Screen {
         self.vt.screen()
     }
+}
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_spawn_error_sets_title() {
+        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "bad thing");
+        assert_eq!(pane.title, "shell (error)");
+    }
+
+    #[test]
+    fn test_spawn_error_sets_exited() {
+        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Agent, "fail");
+        assert!(pane.exited);
+    }
+
+    #[test]
+    fn test_spawn_error_has_no_pty() {
+        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "err");
+        assert!(pane.pty_writer.is_none());
+        assert!(pane.pty_child.is_none());
+        assert!(pane.pty_master.is_none());
+    }
+
+    #[test]
+    fn test_spawn_error_writes_message_to_screen() {
+        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "something broke");
+        let content = pane.screen().contents();
+        assert!(content.contains("[error: something broke]"));
+    }
+
+    #[test]
+    fn test_spawn_error_empty_message() {
+        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        let content = pane.screen().contents();
+        assert!(content.contains("[error: ]"));
+    }
+
+    #[test]
+    fn test_spawn_error_preserves_kind() {
+        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::DevServer, "fail");
+        assert_eq!(pane.kind, PaneKind::DevServer);
+        assert_eq!(pane.title, "server (error)");
+    }
+
+    #[test]
+    fn test_spawn_error_preserves_id() {
+        let id = PaneId::new_v4();
+        let pane = Pane::spawn_error(id, PaneKind::Shell, "err");
+        assert_eq!(pane.id, id);
+    }
+
+    #[test]
+    fn test_process_output_updates_screen() {
+        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        pane.vt = vt100::Parser::new(24, 80, 0);
+        pane.process_output(b"hello world");
+        let content = pane.screen().contents();
+        assert!(content.contains("hello world"));
+    }
+
+    #[test]
+    fn test_process_output_osc_title_update() {
+        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        pane.vt = vt100::Parser::new(24, 80, 0);
+        // OSC 0 sets window title: ESC ] 0 ; title BEL
+        pane.process_output(b"\x1b]0;my-custom-title\x07");
+        assert_eq!(pane.title, "my-custom-title");
+    }
+
+    #[test]
+    fn test_process_output_empty_osc_title_keeps_existing() {
+        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        pane.title = "original".to_string();
+        pane.vt = vt100::Parser::new(24, 80, 0);
+        // Regular output without OSC title — title should stay
+        pane.process_output(b"some output");
+        assert_eq!(pane.title, "original");
+    }
+
+    #[test]
+    fn test_resize_pty_updates_vt_size() {
+        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        pane.resize_pty(120, 40);
+        let (rows, cols) = pane.screen().size();
+        assert_eq!(rows, 40);
+        assert_eq!(cols, 120);
+    }
+
+    #[test]
+    fn test_write_input_on_error_pane_does_not_panic() {
+        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "err");
+        // Should be a no-op since there's no PTY writer
+        pane.write_input(b"hello");
+    }
+
+    #[test]
+    fn test_pane_group_close_middle_tab() {
+        let gid = PaneGroupId::new_v4();
+        let p1_id = PaneId::new_v4();
+        let p2_id = PaneId::new_v4();
+        let p3_id = PaneId::new_v4();
+        let p1 = Pane::spawn_error(p1_id, PaneKind::Shell, "t1");
+        let p2 = Pane::spawn_error(p2_id, PaneKind::Shell, "t2");
+        let p3 = Pane::spawn_error(p3_id, PaneKind::Shell, "t3");
+        let mut group = PaneGroup::new(gid, p1);
+        group.add_tab(p2);
+        group.add_tab(p3);
+        // Active is 2 (last added). Close middle tab (index 1).
+        assert!(group.close_tab(1));
+        assert_eq!(group.tab_count(), 2);
+        // active_tab was 2, now clamped to 1
+        assert_eq!(group.active_tab, 1);
+        assert_eq!(group.active_pane().id, p3_id);
+    }
+
+    #[test]
+    fn test_pane_group_close_active_first_tab() {
+        let gid = PaneGroupId::new_v4();
+        let p1 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "t1");
+        let p2_id = PaneId::new_v4();
+        let p2 = Pane::spawn_error(p2_id, PaneKind::Shell, "t2");
+        let mut group = PaneGroup::new(gid, p1);
+        group.add_tab(p2);
+        // Switch to first tab
+        group.active_tab = 0;
+        assert!(group.close_tab(0));
+        assert_eq!(group.tab_count(), 1);
+        assert_eq!(group.active_tab, 0);
+        assert_eq!(group.active_pane().id, p2_id);
+    }
+
+    #[test]
+    fn test_pane_kind_label_devserver() {
+        assert_eq!(PaneKind::DevServer.label(), "server");
+    }
+
+    #[test]
+    fn test_pane_kind_clone_eq() {
+        let k1 = PaneKind::Agent;
+        let k2 = k1.clone();
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn test_scroll_initial_state() {
+        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "test");
+        assert_eq!(pane.scroll_offset, 0);
+        assert!(!pane.is_scrolled());
+    }
+
+    #[test]
+    fn test_scroll_up_no_scrollback() {
+        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        pane.vt = vt100::Parser::new(3, 80, 1000);
+        // No content → no scrollback available
+        pane.scroll_up(5);
+        // vt100 clamps to 0 since there's nothing to scroll
+        assert_eq!(pane.scroll_offset, 0);
+        assert!(!pane.is_scrolled());
+    }
+
+    #[test]
+    fn test_scroll_up_with_scrollback() {
+        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        pane.vt = vt100::Parser::new(3, 80, 1000);
+        // Generate 20 lines to push content into scrollback
+        for i in 0..20 {
+            pane.vt.process(format!("line {}\r\n", i).as_bytes());
+        }
+        pane.scroll_up(5);
+        assert!(pane.is_scrolled());
+        assert!(pane.scroll_offset > 0);
+    }
+
+    #[test]
+    fn test_scroll_to_bottom() {
+        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        pane.vt = vt100::Parser::new(3, 80, 1000);
+        for i in 0..20 {
+            pane.vt.process(format!("line {}\r\n", i).as_bytes());
+        }
+        pane.scroll_up(5);
+        assert!(pane.is_scrolled());
+        pane.scroll_to_bottom();
+        assert_eq!(pane.scroll_offset, 0);
+        assert!(!pane.is_scrolled());
+    }
+
+    #[test]
+    fn test_scroll_to_top() {
+        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        pane.vt = vt100::Parser::new(3, 80, 1000);
+        for i in 0..20 {
+            pane.vt.process(format!("line {}\r\n", i).as_bytes());
+        }
+        pane.scroll_to_top();
+        assert!(pane.is_scrolled());
+        // Should be at maximum available scrollback
+        let offset = pane.scroll_offset;
+        assert!(offset > 0);
+        // Scrolling up more shouldn't increase it (already at top)
+        pane.scroll_up(100);
+        assert_eq!(pane.scroll_offset, offset);
+    }
+
+    #[test]
+    fn test_resize_resets_scroll() {
+        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        pane.vt = vt100::Parser::new(3, 80, 1000);
+        for i in 0..20 {
+            pane.vt.process(format!("line {}\r\n", i).as_bytes());
+        }
+        pane.scroll_up(5);
+        assert!(pane.is_scrolled());
+        pane.resize_pty(80, 5);
+        assert_eq!(pane.scroll_offset, 0);
+        assert!(!pane.is_scrolled());
+    }
 }

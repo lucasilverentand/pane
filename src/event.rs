@@ -1,5 +1,6 @@
 use crate::layout::PaneId;
-use crossterm::event::{Event, EventStream, KeyEvent, MouseEventKind};
+use crate::system_stats::SystemStats;
+use crossterm::event::{Event, EventStream, KeyEvent, MouseButton, MouseEventKind};
 use futures::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -8,10 +9,15 @@ use tokio::sync::mpsc;
 pub enum AppEvent {
     Key(KeyEvent),
     MouseDown { x: u16, y: u16 },
+    MouseDrag { x: u16, y: u16 },
+    MouseMove { x: u16, y: u16 },
+    MouseUp,
+    MouseScroll { up: bool },
     Resize(u16, u16),
     Tick,
     PtyOutput { pane_id: PaneId, bytes: Vec<u8> },
     PtyExited { pane_id: PaneId },
+    SystemStats(SystemStats),
 }
 
 pub fn start_event_loop(event_tx: mpsc::UnboundedSender<AppEvent>) {
@@ -28,6 +34,15 @@ pub fn start_event_loop(event_tx: mpsc::UnboundedSender<AppEvent>) {
                             MouseEventKind::Down(_) => {
                                 AppEvent::MouseDown { x: m.column, y: m.row }
                             }
+                            MouseEventKind::Drag(MouseButton::Left) => {
+                                AppEvent::MouseDrag { x: m.column, y: m.row }
+                            }
+                            MouseEventKind::Moved => {
+                                AppEvent::MouseMove { x: m.column, y: m.row }
+                            }
+                            MouseEventKind::Up(_) => AppEvent::MouseUp,
+                            MouseEventKind::ScrollUp => AppEvent::MouseScroll { up: true },
+                            MouseEventKind::ScrollDown => AppEvent::MouseScroll { up: false },
                             _ => continue,
                         },
                         Event::Resize(w, h) => AppEvent::Resize(w, h),

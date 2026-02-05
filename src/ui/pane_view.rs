@@ -1,28 +1,55 @@
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
 };
 
+use crate::app::Mode;
+use crate::config::Theme;
+use crate::layout::SplitDirection;
 use crate::pane::{terminal::render_screen, PaneGroup};
 
-pub fn render_group(group: &PaneGroup, is_active: bool, frame: &mut Frame, area: Rect) {
+pub fn render_group(
+    group: &PaneGroup,
+    is_active: bool,
+    mode: &Mode,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let pane = group.active_pane();
-    let title = format!("  {} ", pane.title);
-
-    let border_style = if is_active {
-        Style::default().fg(Color::Cyan)
+    let title = if pane.is_scrolled() {
+        format!("  {} [+{}] ", pane.title, pane.scroll_offset)
     } else {
-        Style::default().fg(Color::DarkGray)
+        format!("  {} ", pane.title)
     };
 
-    let block = Block::default()
+    let border_style = if is_active {
+        Style::default().fg(theme.border_active)
+    } else {
+        Style::default().fg(theme.border_inactive)
+    };
+
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(border_style)
         .title(title);
+
+    if is_active {
+        let indicator = match mode {
+            Mode::Scroll => " SCROLL ",
+            _ => " ACTIVE ",
+        };
+        block = block.title_bottom(Line::styled(
+            indicator,
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -37,14 +64,13 @@ pub fn render_group(group: &PaneGroup, is_active: bool, frame: &mut Frame, area:
     let has_tab_bar = group.tab_count() > 1;
 
     if has_tab_bar {
-        // Split padded area: 1 row for tab bar, rest for content
         let [tab_area, content_area] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Fill(1),
         ])
         .areas(padded);
 
-        render_tab_bar(group, is_active, frame, tab_area);
+        render_tab_bar(group, theme, frame, tab_area);
 
         let lines: Vec<Line<'static>> = render_screen(pane.screen(), content_area);
         let paragraph = Paragraph::new(lines);
@@ -56,7 +82,7 @@ pub fn render_group(group: &PaneGroup, is_active: bool, frame: &mut Frame, area:
     }
 }
 
-fn render_tab_bar(group: &PaneGroup, _is_active: bool, frame: &mut Frame, area: Rect) {
+fn render_tab_bar(group: &PaneGroup, theme: &Theme, frame: &mut Frame, area: Rect) {
     let mut spans: Vec<Span> = vec![Span::raw(" ")];
 
     for (i, tab) in group.tabs.iter().enumerate() {
@@ -65,10 +91,10 @@ fn render_tab_bar(group: &PaneGroup, _is_active: bool, frame: &mut Frame, area: 
 
         let style = if is_active_tab {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.tab_active)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.tab_inactive)
         };
 
         let prefix = if is_active_tab { "*" } else { " " };
@@ -78,4 +104,45 @@ fn render_tab_bar(group: &PaneGroup, _is_active: bool, frame: &mut Frame, area: 
     let line = Line::from(spans);
     let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);
+}
+
+/// Render a folded pane group as a thin line.
+pub fn render_folded(
+    _group: &PaneGroup,
+    is_active: bool,
+    direction: SplitDirection,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let fg = if is_active {
+        theme.accent
+    } else {
+        theme.border_inactive
+    };
+    let style = Style::default().fg(fg);
+    let buf = frame.buffer_mut();
+
+    match direction {
+        SplitDirection::Horizontal => {
+            // Vertical thin line (1 cell wide)
+            let x = area.x;
+            for y in area.y..area.y + area.height {
+                if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
+                    cell.set_symbol("│");
+                    cell.set_style(style);
+                }
+            }
+        }
+        SplitDirection::Vertical => {
+            // Horizontal thin line (1 cell tall)
+            let y = area.y;
+            for x in area.x..area.x + area.width {
+                if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
+                    cell.set_symbol("─");
+                    cell.set_style(style);
+                }
+            }
+        }
+    }
 }

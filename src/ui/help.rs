@@ -6,7 +6,9 @@ use ratatui::{
     Frame,
 };
 
-pub fn render(frame: &mut Frame, area: Rect) {
+use crate::config::Theme;
+
+pub fn render(theme: &Theme, frame: &mut Frame, area: Rect) {
     let popup_area = centered_rect(60, 70, area);
 
     frame.render_widget(Clear, popup_area);
@@ -15,17 +17,17 @@ pub fn render(frame: &mut Frame, area: Rect) {
         .title(" keybindings ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(theme.accent));
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
     let heading = Style::default()
-        .fg(Color::Cyan)
+        .fg(theme.accent)
         .add_modifier(Modifier::BOLD);
     let key_style = Style::default().fg(Color::Yellow);
     let desc_style = Style::default().fg(Color::White);
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = Style::default().fg(theme.dim);
 
     let lines = vec![
         Line::raw(""),
@@ -44,10 +46,12 @@ pub fn render(frame: &mut Frame, area: Rect) {
         Line::raw(""),
         Line::styled("  Tabs", heading),
         Line::raw(""),
-        line_entry("    Ctrl+n         ", "New tab menu", key_style, desc_style),
+        line_entry("    Ctrl+n         ", "New tab", key_style, desc_style),
+        line_entry("    Ctrl+Shift+n   ", "New dev server tab", key_style, desc_style),
         line_entry("    Ctrl+Tab       ", "Next tab (or Alt+])", key_style, desc_style),
         line_entry("    Ctrl+Shift+Tab ", "Prev tab (or Alt+[)", key_style, desc_style),
         line_entry("    Ctrl+w         ", "Close tab / group", key_style, desc_style),
+        line_entry("    Alt+Shift+hjkl ", "Move tab left/down/up/right", key_style, desc_style),
         Line::raw(""),
         Line::styled("  Resizing", heading),
         Line::raw(""),
