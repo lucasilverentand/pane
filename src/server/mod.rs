@@ -6,3 +6,4 @@ pub mod framing;
 pub mod id_map;
 pub mod protocol;
 pub mod state;
+pub mod tmux_shim;

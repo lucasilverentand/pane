@@ -4,6 +4,14 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use tokio::sync::mpsc;
 
+/// Environment variables to make child processes think they're inside tmux.
+pub struct TmuxEnv {
+    /// Value for $TMUX: "<socket_path>,<pid>,0"
+    pub tmux_value: String,
+    /// Value for $TMUX_PANE: "%N"
+    pub tmux_pane: String,
+}
+
 pub struct PtyHandle {
     pub writer: Box<dyn Write + Send>,
     pub child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -17,6 +25,7 @@ pub fn spawn_pty(
     event_tx: mpsc::UnboundedSender<AppEvent>,
     pane_id: PaneId,
     cwd: Option<&std::path::Path>,
+    tmux_env: Option<TmuxEnv>,
 ) -> anyhow::Result<PtyHandle> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(size)?;
@@ -28,6 +37,11 @@ pub fn spawn_pty(
     }
     cmd_builder.env("PANE", "1");
     cmd_builder.env("PANE_PANE", pane_id.to_string());
+
+    if let Some(ref env) = tmux_env {
+        cmd_builder.env("TMUX", &env.tmux_value);
+        cmd_builder.env("TMUX_PANE", &env.tmux_pane);
+    }
 
     let child = pair.slave.spawn_command(cmd_builder)?;
     drop(pair.slave);

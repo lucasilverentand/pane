@@ -281,8 +281,47 @@ async fn handle_client(
     clients: ClientRegistry,
     client_id: u64,
 ) -> Result<()> {
-    // Read the initial Attach request
+    // Read the initial request
     let first_msg: ClientRequest = framing::recv_required(&mut stream).await?;
+
+    // Handle CommandSync: execute command, send result, disconnect immediately.
+    if let ClientRequest::CommandSync(cmd_str) = &first_msg {
+        let result = {
+            let parsed = command_parser::parse(cmd_str);
+            match parsed {
+                Ok(parsed_cmd) => {
+                    let mut state_guard = state.lock().await;
+                    let mut id_map_guard = id_map.lock().await;
+                    match crate::server::command::execute(&parsed_cmd, &mut state_guard, &mut id_map_guard, &broadcast_tx) {
+                        Ok(crate::server::command::CommandResult::Ok(output)) => {
+                            ServerResponse::CommandOutput { output, pane_id: None, window_id: None, success: true }
+                        }
+                        Ok(crate::server::command::CommandResult::OkWithId { output, pane_id, window_id }) => {
+                            ServerResponse::CommandOutput { output, pane_id, window_id, success: true }
+                        }
+                        Ok(crate::server::command::CommandResult::LayoutChanged) => {
+                            // Also broadcast the layout change to connected TUI clients
+                            let render_state = RenderState::from_server_state(&state_guard);
+                            let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
+                            ServerResponse::CommandOutput { output: String::new(), pane_id: None, window_id: None, success: true }
+                        }
+                        Ok(crate::server::command::CommandResult::SessionEnded) => {
+                            ServerResponse::CommandOutput { output: String::new(), pane_id: None, window_id: None, success: true }
+                        }
+                        Err(e) => {
+                            ServerResponse::CommandOutput { output: e.to_string(), pane_id: None, window_id: None, success: false }
+                        }
+                    }
+                }
+                Err(e) => {
+                    ServerResponse::CommandOutput { output: format!("parse error: {}", e), pane_id: None, window_id: None, success: false }
+                }
+            }
+        };
+        framing::send(&mut stream, &result).await?;
+        return Ok(());
+    }
+
     let session_name = match &first_msg {
         ClientRequest::Attach { session_name } => session_name.clone(),
         _ => {
@@ -418,6 +457,9 @@ async fn handle_client(
             ClientRequest::Attach { .. } => {
                 // Already attached, ignore
             }
+            ClientRequest::CommandSync(_) => {
+                // CommandSync is handled before attach; ignore if received mid-session
+            }
         }
     }
 
@@ -504,6 +546,11 @@ async fn handle_command(
                 Ok(crate::server::command::CommandResult::Ok(output)) => {
                     if !output.is_empty() {
                         // Send output as a display message response
+                        let _ = broadcast_tx.send(ServerResponse::Error(format!("[cmd] {}", output)));
+                    }
+                }
+                Ok(crate::server::command::CommandResult::OkWithId { output, .. }) => {
+                    if !output.is_empty() {
                         let _ = broadcast_tx.send(ServerResponse::Error(format!("[cmd] {}", output)));
                     }
                 }
@@ -869,5 +916,279 @@ mod tests {
         // Client 2 resizes larger
         registry.update_size(2, 200, 50).await;
         assert_eq!(registry.min_size().await, Some((120, 40)));
+    }
+
+    // --- CommandSync protocol tests ---
+
+    #[tokio::test]
+    async fn test_command_sync_list_windows() {
+        let (mut client, handle, _state) = setup_test_server().await;
+
+        // Send CommandSync as the first message (no Attach needed)
+        framing::send(
+            &mut client,
+            &ClientRequest::CommandSync("list-windows".to_string()),
+        )
+        .await
+        .unwrap();
+
+        // Should receive a CommandOutput response
+        let resp: ServerResponse = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            framing::recv_required(&mut client),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        match resp {
+            ServerResponse::CommandOutput { output, success, .. } => {
+                assert!(success, "expected success, got output: {}", output);
+                assert!(output.contains("@0"), "expected window @0 in output: {}", output);
+            }
+            other => panic!("expected CommandOutput, got {:?}", other),
+        }
+
+        // Server should disconnect after CommandSync
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_command_sync_rename_session() {
+        let (mut client, handle, state) = setup_test_server().await;
+
+        framing::send(
+            &mut client,
+            &ClientRequest::CommandSync("rename-session sync-name".to_string()),
+        )
+        .await
+        .unwrap();
+
+        let resp: ServerResponse = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            framing::recv_required(&mut client),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        match resp {
+            ServerResponse::CommandOutput { success, .. } => {
+                assert!(success);
+            }
+            other => panic!("expected CommandOutput, got {:?}", other),
+        }
+
+        // Verify the state was actually changed
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let s = state.lock().await;
+        assert_eq!(s.session_name, "sync-name");
+        drop(s);
+
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_command_sync_parse_error() {
+        let (mut client, handle, _state) = setup_test_server().await;
+
+        framing::send(
+            &mut client,
+            &ClientRequest::CommandSync("nonexistent-command --foo".to_string()),
+        )
+        .await
+        .unwrap();
+
+        let resp: ServerResponse = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            framing::recv_required(&mut client),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        match resp {
+            ServerResponse::CommandOutput { success, output, .. } => {
+                assert!(!success, "expected failure for unknown command");
+                assert!(output.contains("parse error"), "expected parse error, got: {}", output);
+            }
+            other => panic!("expected CommandOutput, got {:?}", other),
+        }
+
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    }
+
+    // --- OkWithId tests (SplitWindow, NewWindow, NewSession) ---
+
+    #[tokio::test]
+    async fn test_command_sync_split_window_returns_id() {
+        let (mut client, handle, _state) = setup_test_server().await;
+
+        framing::send(
+            &mut client,
+            &ClientRequest::CommandSync("split-window -h".to_string()),
+        )
+        .await
+        .unwrap();
+
+        let resp: ServerResponse = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            framing::recv_required(&mut client),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        match resp {
+            ServerResponse::CommandOutput { success, pane_id, window_id, .. } => {
+                assert!(success, "split-window should succeed");
+                assert!(pane_id.is_some(), "split-window should return a pane_id");
+                assert!(window_id.is_some(), "split-window should return a window_id");
+            }
+            other => panic!("expected CommandOutput, got {:?}", other),
+        }
+
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_command_sync_new_window_returns_id() {
+        let (mut client, handle, _state) = setup_test_server().await;
+
+        framing::send(
+            &mut client,
+            &ClientRequest::CommandSync("new-window".to_string()),
+        )
+        .await
+        .unwrap();
+
+        let resp: ServerResponse = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            framing::recv_required(&mut client),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        match resp {
+            ServerResponse::CommandOutput { success, pane_id, window_id, .. } => {
+                assert!(success, "new-window should succeed");
+                assert!(pane_id.is_some(), "new-window should return a pane_id");
+                assert!(window_id.is_some(), "new-window should return a window_id");
+            }
+            other => panic!("expected CommandOutput, got {:?}", other),
+        }
+
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_command_sync_new_session_returns_id() {
+        let (mut client, handle, _state) = setup_test_server().await;
+
+        framing::send(
+            &mut client,
+            &ClientRequest::CommandSync("new-session -d -s inner".to_string()),
+        )
+        .await
+        .unwrap();
+
+        let resp: ServerResponse = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            framing::recv_required(&mut client),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        match resp {
+            ServerResponse::CommandOutput { success, pane_id, window_id, .. } => {
+                assert!(success, "new-session should succeed");
+                assert!(pane_id.is_some(), "new-session should return a pane_id");
+                assert!(window_id.is_some(), "new-session should return a window_id");
+            }
+            other => panic!("expected CommandOutput, got {:?}", other),
+        }
+
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_command_sync_display_message() {
+        let (mut client, handle, _state) = setup_test_server().await;
+
+        framing::send(
+            &mut client,
+            &ClientRequest::CommandSync("display-message -p #{session_name}".to_string()),
+        )
+        .await
+        .unwrap();
+
+        let resp: ServerResponse = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            framing::recv_required(&mut client),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        match resp {
+            ServerResponse::CommandOutput { success, output, .. } => {
+                assert!(success);
+                assert_eq!(output, "test-session", "should expand session name");
+            }
+            other => panic!("expected CommandOutput, got {:?}", other),
+        }
+
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_command_select_pane_with_title() {
+        let (mut client, handle, state) = setup_test_server().await;
+
+        attach_and_consume_initial(&mut client).await;
+
+        // First list-panes to register %0 in the IdMap
+        framing::send(
+            &mut client,
+            &ClientRequest::Command("list-panes".to_string()),
+        )
+        .await
+        .unwrap();
+        let _resp: ServerResponse = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            framing::recv_required(&mut client),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        // Now select-pane with -T to set a title
+        framing::send(
+            &mut client,
+            &ClientRequest::Command("select-pane -t %0 -T my-title".to_string()),
+        )
+        .await
+        .unwrap();
+
+        // select-pane returns LayoutChanged (broadcast)
+        let resp: ServerResponse = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            framing::recv_required(&mut client),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            matches!(resp, ServerResponse::LayoutChanged { .. }),
+            "expected LayoutChanged, got {:?}",
+            resp
+        );
+
+        // Verify the title was set on the pane
+        let s = state.lock().await;
+        let ws = s.active_workspace();
+        let group = ws.groups.get(&ws.active_group).unwrap();
+        assert_eq!(group.active_pane().title, "my-title");
+        drop(s);
+
+        framing::send(&mut client, &ClientRequest::Detach)
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
     }
 }

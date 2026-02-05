@@ -157,6 +157,7 @@ impl App {
                 system_stats: crate::system_stats::SystemStats::default(),
                 event_tx,
                 last_size: (0, 0),
+                next_pane_number: 0,
             },
             session_list: sessions,
             session_selected: 0,

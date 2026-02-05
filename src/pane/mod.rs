@@ -120,6 +120,7 @@ pub struct Pane {
 }
 
 impl Pane {
+    #[allow(dead_code)]
     pub fn spawn(
         id: PaneId,
         kind: PaneKind,
@@ -127,6 +128,18 @@ impl Pane {
         rows: u16,
         event_tx: mpsc::UnboundedSender<AppEvent>,
         command: Option<String>,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_with_env(id, kind, cols, rows, event_tx, command, None)
+    }
+
+    pub fn spawn_with_env(
+        id: PaneId,
+        kind: PaneKind,
+        cols: u16,
+        rows: u16,
+        event_tx: mpsc::UnboundedSender<AppEvent>,
+        command: Option<String>,
+        tmux_env: Option<pty::TmuxEnv>,
     ) -> anyhow::Result<Self> {
         let (cmd, args): (&str, Vec<&str>) = match &kind {
             PaneKind::Shell => {
@@ -156,7 +169,7 @@ impl Pane {
             pixel_height: 0,
         };
 
-        let pty_handle = pty::spawn_pty(cmd, &args, size, event_tx, id, Some(&cwd))?;
+        let pty_handle = pty::spawn_pty(cmd, &args, size, event_tx, id, Some(&cwd), tmux_env)?;
         let vt = vt100::Parser::new(rows, cols, 1000);
 
         Ok(Self {

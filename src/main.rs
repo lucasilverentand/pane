@@ -51,6 +51,13 @@ enum Commands {
         /// Keys to send
         keys: String,
     },
+    /// tmux compatibility shim — accepts raw tmux CLI syntax
+    #[command(hide = true)]
+    Tmux {
+        /// All remaining arguments (passed through as raw tmux args)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -131,5 +138,6 @@ fn main() -> anyhow::Result<()> {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(server::daemon::send_keys(&session_name, &keys))
         }
+        Some(Commands::Tmux { args }) => server::tmux_shim::handle_tmux_args(args),
     }
 }

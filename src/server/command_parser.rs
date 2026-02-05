@@ -25,15 +25,17 @@ pub fn parse(input: &str) -> Result<Command> {
         "kill-server" => Ok(Command::KillServer),
         "list-sessions" | "ls" => Ok(Command::ListSessions),
         "rename-session" => parse_rename_session(args),
-        "new-window" => Ok(Command::NewWindow),
+        "has-session" | "has" => parse_has_session(args),
+        "new-session" | "new" => parse_new_session(args),
+        "new-window" | "neww" => parse_new_window(args),
         "kill-window" | "killw" => parse_kill_window(args),
         "select-window" | "selectw" => parse_select_window(args),
         "rename-window" | "renamew" => parse_rename_window(args),
-        "list-windows" | "lsw" => Ok(Command::ListWindows),
+        "list-windows" | "lsw" => parse_list_windows(args),
         "split-window" | "splitw" => parse_split_window(args),
         "kill-pane" | "killp" => parse_kill_pane(args),
         "select-pane" | "selectp" => parse_select_pane(args),
-        "list-panes" | "lsp" => Ok(Command::ListPanes),
+        "list-panes" | "lsp" => parse_list_panes(args),
         "send-keys" | "send" => parse_send_keys(args),
         "select-layout" => parse_select_layout(args),
         "resize-pane" | "resizep" => parse_resize_pane(args),
@@ -146,6 +148,45 @@ fn parse_rename_session(args: &[String]) -> Result<Command> {
     Ok(Command::RenameSession { new_name: args[0].clone() })
 }
 
+fn parse_has_session(args: &[String]) -> Result<Command> {
+    let (target_str, _rest) = extract_target(args);
+    let name = target_str.ok_or_else(|| anyhow::anyhow!("has-session requires -t NAME"))?;
+    Ok(Command::HasSession { name })
+}
+
+fn parse_new_session(args: &[String]) -> Result<Command> {
+    let mut name = None;
+    let mut window_name = None;
+    let mut detached = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-s" if i + 1 < args.len() => { name = Some(args[i + 1].clone()); i += 2; }
+            "-n" if i + 1 < args.len() => { window_name = Some(args[i + 1].clone()); i += 2; }
+            "-d" => { detached = true; i += 1; }
+            "-P" | "-F" => { i += 1; if args.get(i).map(|a| !a.starts_with('-')).unwrap_or(false) { i += 1; } }
+            _ => { i += 1; }
+        }
+    }
+    let name = name.unwrap_or_else(|| "default".to_string());
+    Ok(Command::NewSession { name, window_name, detached })
+}
+
+fn parse_new_window(args: &[String]) -> Result<Command> {
+    let mut target_session = None;
+    let mut window_name = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-t" if i + 1 < args.len() => { target_session = Some(args[i + 1].clone()); i += 2; }
+            "-n" if i + 1 < args.len() => { window_name = Some(args[i + 1].clone()); i += 2; }
+            "-P" | "-F" => { i += 1; if args.get(i).map(|a| !a.starts_with('-')).unwrap_or(false) { i += 1; } }
+            _ => { i += 1; }
+        }
+    }
+    Ok(Command::NewWindow { target_session, window_name })
+}
+
 fn parse_kill_window(args: &[String]) -> Result<Command> {
     let (target_str, _rest) = extract_target(args);
     let target = target_str.map(|s| parse_target_window(&s)).transpose()?;
@@ -171,10 +212,36 @@ fn parse_rename_window(args: &[String]) -> Result<Command> {
 }
 
 fn parse_split_window(args: &[String]) -> Result<Command> {
-    let (target_str, rest) = extract_target(args);
-    let target = target_str.map(|s| parse_target_pane(&s)).transpose()?;
-    let horizontal = rest.iter().any(|a| a == "-h");
-    Ok(Command::SplitWindow { horizontal, target })
+    let mut target = None;
+    let mut horizontal = false;
+    let mut size = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-h" => { horizontal = true; i += 1; }
+            "-v" => { horizontal = false; i += 1; }
+            "-t" if i + 1 < args.len() => {
+                target = Some(parse_target_pane(&args[i + 1])?);
+                i += 2;
+            }
+            "-l" if i + 1 < args.len() => {
+                let val = &args[i + 1];
+                if let Some(pct) = val.strip_suffix('%') {
+                    size = Some(SplitSize::Percent(pct.parse().unwrap_or(50)));
+                } else if let Ok(cells) = val.parse::<u16>() {
+                    size = Some(SplitSize::Cells(cells));
+                }
+                i += 2;
+            }
+            "-P" | "-F" => {
+                // Skip -P and -F (format) flags - handled by shim
+                i += 1;
+                if i < args.len() && !args[i].starts_with('-') { i += 1; }
+            }
+            _ => { i += 1; }
+        }
+    }
+    Ok(Command::SplitWindow { horizontal, target, size })
 }
 
 fn parse_kill_pane(args: &[String]) -> Result<Command> {
@@ -184,24 +251,58 @@ fn parse_kill_pane(args: &[String]) -> Result<Command> {
 }
 
 fn parse_select_pane(args: &[String]) -> Result<Command> {
-    let (target_str, rest) = extract_target(args);
-
-    // Check for directional flags: -L, -R, -U, -D
-    for arg in &rest {
-        match arg.as_str() {
-            "-L" => return Ok(Command::SelectPane { target: TargetPane::Direction(PaneDirection::Left) }),
-            "-R" => return Ok(Command::SelectPane { target: TargetPane::Direction(PaneDirection::Right) }),
-            "-U" => return Ok(Command::SelectPane { target: TargetPane::Direction(PaneDirection::Up) }),
-            "-D" => return Ok(Command::SelectPane { target: TargetPane::Direction(PaneDirection::Down) }),
-            _ => {}
+    let mut target_str = None;
+    let mut title = None;
+    let mut direction = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-t" if i + 1 < args.len() => { target_str = Some(args[i + 1].clone()); i += 2; }
+            "-T" if i + 1 < args.len() => { title = Some(args[i + 1].clone()); i += 2; }
+            "-P" => { i += 1; if i < args.len() && !args[i].starts_with('-') { i += 1; } } // skip -P "fg=..."
+            "-L" => { direction = Some(PaneDirection::Left); i += 1; }
+            "-R" => { direction = Some(PaneDirection::Right); i += 1; }
+            "-U" => { direction = Some(PaneDirection::Up); i += 1; }
+            "-D" => { direction = Some(PaneDirection::Down); i += 1; }
+            _ => { i += 1; }
         }
+    }
+
+    if let Some(dir) = direction {
+        return Ok(Command::SelectPane { target: TargetPane::Direction(dir), title });
     }
 
     let target = target_str
         .map(|s| parse_target_pane(&s))
         .transpose()?
         .ok_or_else(|| anyhow::anyhow!("select-pane requires -t TARGET or direction flag"))?;
-    Ok(Command::SelectPane { target })
+    Ok(Command::SelectPane { target, title })
+}
+
+fn parse_list_windows(args: &[String]) -> Result<Command> {
+    let mut format = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-F" if i + 1 < args.len() => { format = Some(args[i + 1].clone()); i += 2; }
+            "-t" if i + 1 < args.len() => { i += 2; } // skip -t TARGET for now
+            _ => { i += 1; }
+        }
+    }
+    Ok(Command::ListWindows { format })
+}
+
+fn parse_list_panes(args: &[String]) -> Result<Command> {
+    let mut format = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-F" if i + 1 < args.len() => { format = Some(args[i + 1].clone()); i += 2; }
+            "-t" if i + 1 < args.len() => { i += 2; } // skip -t TARGET for now
+            _ => { i += 1; }
+        }
+    }
+    Ok(Command::ListPanes { format })
 }
 
 fn parse_send_keys(args: &[String]) -> Result<Command> {
@@ -246,12 +347,18 @@ fn parse_resize_pane(args: &[String]) -> Result<Command> {
 }
 
 fn parse_display_message(args: &[String]) -> Result<Command> {
-    let message = if args.is_empty() {
-        String::new()
-    } else {
-        args.join(" ")
-    };
-    Ok(Command::DisplayMessage { message })
+    let mut to_stdout = false;
+    let mut msg_parts = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-p" => { to_stdout = true; i += 1; }
+            "-t" if i + 1 < args.len() => { i += 2; } // skip target
+            _ => { msg_parts.push(args[i].clone()); i += 1; }
+        }
+    }
+    let message = msg_parts.join(" ");
+    Ok(Command::DisplayMessage { message, to_stdout })
 }
 
 #[cfg(test)]
@@ -327,37 +434,49 @@ mod tests {
     #[test]
     fn test_parse_new_window() {
         let cmd = parse("new-window").unwrap();
-        assert_eq!(cmd, Command::NewWindow);
+        assert_eq!(cmd, Command::NewWindow { target_session: None, window_name: None });
     }
 
     #[test]
     fn test_parse_split_window_horizontal() {
         let cmd = parse("split-window -h").unwrap();
-        assert_eq!(cmd, Command::SplitWindow { horizontal: true, target: None });
+        assert_eq!(cmd, Command::SplitWindow { horizontal: true, target: None, size: None });
     }
 
     #[test]
     fn test_parse_split_window_vertical() {
         let cmd = parse("split-window").unwrap();
-        assert_eq!(cmd, Command::SplitWindow { horizontal: false, target: None });
+        assert_eq!(cmd, Command::SplitWindow { horizontal: false, target: None, size: None });
     }
 
     #[test]
     fn test_parse_split_window_with_target() {
         let cmd = parse("split-window -h -t %3").unwrap();
-        assert_eq!(cmd, Command::SplitWindow { horizontal: true, target: Some(TargetPane::Id(3)) });
+        assert_eq!(cmd, Command::SplitWindow { horizontal: true, target: Some(TargetPane::Id(3)), size: None });
+    }
+
+    #[test]
+    fn test_parse_split_window_with_size() {
+        let cmd = parse("split-window -h -l 70%").unwrap();
+        assert_eq!(cmd, Command::SplitWindow { horizontal: true, target: None, size: Some(SplitSize::Percent(70)) });
     }
 
     #[test]
     fn test_parse_select_pane_by_id() {
         let cmd = parse("select-pane -t %5").unwrap();
-        assert_eq!(cmd, Command::SelectPane { target: TargetPane::Id(5) });
+        assert_eq!(cmd, Command::SelectPane { target: TargetPane::Id(5), title: None });
     }
 
     #[test]
     fn test_parse_select_pane_directional() {
         let cmd = parse("select-pane -L").unwrap();
-        assert_eq!(cmd, Command::SelectPane { target: TargetPane::Direction(PaneDirection::Left) });
+        assert_eq!(cmd, Command::SelectPane { target: TargetPane::Direction(PaneDirection::Left), title: None });
+    }
+
+    #[test]
+    fn test_parse_select_pane_with_title() {
+        let cmd = parse(r#"select-pane -t %0 -T "my title""#).unwrap();
+        assert_eq!(cmd, Command::SelectPane { target: TargetPane::Id(0), title: Some("my title".to_string()) });
     }
 
     #[test]
@@ -413,13 +532,20 @@ mod tests {
     #[test]
     fn test_parse_list_panes() {
         let cmd = parse("list-panes").unwrap();
-        assert_eq!(cmd, Command::ListPanes);
+        assert_eq!(cmd, Command::ListPanes { format: None });
     }
 
     #[test]
     fn test_parse_list_panes_alias() {
         let cmd = parse("lsp").unwrap();
-        assert_eq!(cmd, Command::ListPanes);
+        assert_eq!(cmd, Command::ListPanes { format: None });
+    }
+
+    #[test]
+    fn test_parse_list_panes_with_format() {
+        let input = "list-panes -F \"#{pane_id}\"";
+        let cmd = parse(input).unwrap();
+        assert_eq!(cmd, Command::ListPanes { format: Some("#{pane_id}".to_string()) });
     }
 
     #[test]
@@ -437,7 +563,13 @@ mod tests {
     #[test]
     fn test_parse_display_message() {
         let cmd = parse("display-message hello world").unwrap();
-        assert_eq!(cmd, Command::DisplayMessage { message: "hello world".to_string() });
+        assert_eq!(cmd, Command::DisplayMessage { message: "hello world".to_string(), to_stdout: false });
+    }
+
+    #[test]
+    fn test_parse_display_message_stdout() {
+        let cmd = parse("display-message -p hello").unwrap();
+        assert_eq!(cmd, Command::DisplayMessage { message: "hello".to_string(), to_stdout: true });
     }
 
     #[test]
@@ -470,13 +602,13 @@ mod tests {
     #[test]
     fn test_parse_list_windows() {
         let cmd = parse("list-windows").unwrap();
-        assert_eq!(cmd, Command::ListWindows);
+        assert_eq!(cmd, Command::ListWindows { format: None });
     }
 
     #[test]
     fn test_parse_list_windows_alias() {
         let cmd = parse("lsw").unwrap();
-        assert_eq!(cmd, Command::ListWindows);
+        assert_eq!(cmd, Command::ListWindows { format: None });
     }
 
     #[test]

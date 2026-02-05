@@ -8,6 +8,13 @@ use crate::server::id_map::IdMap;
 use crate::server::protocol::{RenderState, ServerResponse};
 use crate::server::state::ServerState;
 
+/// How to size a new split.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SplitSize {
+    Percent(u8),
+    Cells(u16),
+}
+
 /// A parsed, typed command that can be executed against the server state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
@@ -15,19 +22,21 @@ pub enum Command {
     KillServer,
     ListSessions,
     RenameSession { new_name: String },
+    HasSession { name: String },
+    NewSession { name: String, window_name: Option<String>, detached: bool },
 
     // Window (PaneGroup) commands
-    NewWindow,
+    NewWindow { target_session: Option<String>, window_name: Option<String> },
     KillWindow { target: Option<TargetWindow> },
     SelectWindow { target: TargetWindow },
     RenameWindow { target: Option<TargetWindow>, new_name: String },
-    ListWindows,
+    ListWindows { format: Option<String> },
 
     // Pane commands
-    SplitWindow { horizontal: bool, target: Option<TargetPane> },
+    SplitWindow { horizontal: bool, target: Option<TargetPane>, size: Option<SplitSize> },
     KillPane { target: Option<TargetPane> },
-    SelectPane { target: TargetPane },
-    ListPanes,
+    SelectPane { target: TargetPane, title: Option<String> },
+    ListPanes { format: Option<String> },
     SendKeys { target: Option<TargetPane>, keys: Vec<String> },
 
     // Layout commands
@@ -35,7 +44,7 @@ pub enum Command {
     ResizePane { target: Option<TargetPane>, direction: ResizeDirection, amount: u16 },
 
     // Misc commands
-    DisplayMessage { message: String },
+    DisplayMessage { message: String, to_stdout: bool },
 }
 
 /// Target specifier for a window (group).
@@ -76,6 +85,12 @@ pub enum ResizeDirection {
 pub enum CommandResult {
     /// Command executed successfully; send this response back.
     Ok(String),
+    /// Command created a pane/window; return the new IDs for -P -F formatting.
+    OkWithId {
+        output: String,
+        pane_id: Option<u32>,
+        window_id: Option<u32>,
+    },
     /// Command caused a layout change; broadcast the new render state.
     LayoutChanged,
     /// Command requires the server to shut down.
@@ -110,14 +125,66 @@ pub fn execute(
             Ok(CommandResult::Ok(String::new()))
         }
 
-        Command::NewWindow => {
+        Command::HasSession { name } => {
+            let sessions = crate::server::daemon::list_sessions();
+            if sessions.contains(name) {
+                Ok(CommandResult::Ok(String::new()))
+            } else {
+                bail!("session not found: {}", name);
+            }
+        }
+
+        Command::NewSession { window_name, .. } => {
+            // In context of an already-running server, this creates a new workspace
             let (w, h) = state.last_size;
             let bar_h = state.workspace_bar_height();
             let cols = w.saturating_sub(4);
             let rows = h.saturating_sub(2 + bar_h + 1);
-            state.add_tab_to_active_group(PaneKind::Shell, None, cols, rows)?;
+            state.new_workspace(cols, rows)?;
+            if let Some(wname) = window_name {
+                let ws = state.active_workspace_mut();
+                if let Some(group) = ws.groups.get_mut(&ws.active_group) {
+                    group.name = Some(wname.clone());
+                }
+            }
+            let ws = state.active_workspace();
+            let gid = ws.active_group;
+            let win_n = id_map.register_window(gid);
+            let pane_n = if let Some(group) = ws.groups.get(&gid) {
+                id_map.register_pane(group.active_pane().id)
+            } else {
+                0
+            };
             broadcast_layout(state, broadcast_tx);
-            Ok(CommandResult::LayoutChanged)
+            Ok(CommandResult::OkWithId {
+                output: String::new(),
+                pane_id: Some(pane_n),
+                window_id: Some(win_n),
+            })
+        }
+
+        Command::NewWindow { window_name, .. } => {
+            let (w, h) = state.last_size;
+            let bar_h = state.workspace_bar_height();
+            let cols = w.saturating_sub(4);
+            let rows = h.saturating_sub(2 + bar_h + 1);
+            let pane_id = state.add_tab_to_active_group(PaneKind::Shell, None, cols, rows)?;
+            if let Some(wname) = window_name {
+                let ws = state.active_workspace_mut();
+                if let Some(group) = ws.groups.get_mut(&ws.active_group) {
+                    group.name = Some(wname.clone());
+                }
+            }
+            let ws = state.active_workspace();
+            let gid = ws.active_group;
+            let win_n = id_map.register_window(gid);
+            let pane_n = id_map.register_pane(pane_id);
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::OkWithId {
+                output: String::new(),
+                pane_id: Some(pane_n),
+                window_id: Some(win_n),
+            })
         }
 
         Command::KillWindow { target } => {
@@ -152,21 +219,27 @@ pub fn execute(
             Ok(CommandResult::Ok(String::new()))
         }
 
-        Command::ListWindows => {
+        Command::ListWindows { format } => {
             let ws = state.active_workspace();
             let mut lines = Vec::new();
             for (gid, group) in &ws.groups {
-                let n = id_map.register_window(*gid);
+                let win_n = id_map.register_window(*gid);
                 let name = group.name.as_deref().unwrap_or(
                     group.tabs.get(group.active_tab).map(|p| p.title.as_str()).unwrap_or(""),
                 );
-                let active = if *gid == ws.active_group { " (active)" } else { "" };
-                lines.push(format!("@{}: {} [{} panes]{}", n, name, group.tab_count(), active));
+                let active_flag = *gid == ws.active_group;
+                if let Some(fmt) = &format {
+                    let pane_n = id_map.register_pane(group.active_pane().id);
+                    lines.push(expand_format(fmt, win_n, pane_n, name, group, active_flag, state));
+                } else {
+                    let active = if active_flag { " (active)" } else { "" };
+                    lines.push(format!("@{}: {} [{} panes]{}", win_n, name, group.tab_count(), active));
+                }
             }
             Ok(CommandResult::Ok(lines.join("\n")))
         }
 
-        Command::SplitWindow { horizontal, target } => {
+        Command::SplitWindow { horizontal, target, .. } => {
             if let Some(target) = target {
                 let group_id = resolve_pane_to_group(target, state, id_map)?;
                 state.active_workspace_mut().active_group = group_id;
@@ -180,9 +253,15 @@ pub fn execute(
             let bar_h = state.workspace_bar_height();
             let cols = w.saturating_sub(4);
             let rows = h.saturating_sub(2 + bar_h + 1);
-            state.split_active_group(direction, PaneKind::Shell, cols, rows)?;
+            let (new_group_id, new_pane_id) = state.split_active_group(direction, PaneKind::Shell, cols, rows)?;
+            let pane_n = id_map.register_pane(new_pane_id);
+            let win_n = id_map.register_window(new_group_id);
             broadcast_layout(state, broadcast_tx);
-            Ok(CommandResult::LayoutChanged)
+            Ok(CommandResult::OkWithId {
+                output: String::new(),
+                pane_id: Some(pane_n),
+                window_id: Some(win_n),
+            })
         }
 
         Command::KillPane { target } => {
@@ -230,24 +309,35 @@ pub fn execute(
             Ok(CommandResult::LayoutChanged)
         }
 
-        Command::SelectPane { target } => {
+        Command::SelectPane { target, title } => {
             let group_id = resolve_pane_to_group(target, state, id_map)?;
             state.active_workspace_mut().active_group = group_id;
+            if let Some(t) = title {
+                let ws = state.active_workspace_mut();
+                if let Some(group) = ws.groups.get_mut(&group_id) {
+                    group.active_pane_mut().title = t.clone();
+                }
+            }
             broadcast_layout(state, broadcast_tx);
             Ok(CommandResult::LayoutChanged)
         }
 
-        Command::ListPanes => {
+        Command::ListPanes { format } => {
             let mut lines = Vec::new();
             for ws in &state.workspaces {
                 for (gid, group) in &ws.groups {
                     let wn = id_map.register_window(*gid);
+                    let active_flag = *gid == ws.active_group;
                     for pane in &group.tabs {
                         let pn = id_map.register_pane(pane.id);
-                        let exited_flag = if pane.exited { " (dead)" } else { "" };
-                        lines.push(format!(
-                            "%{}: @{} {} [{}]{}", pn, wn, pane.title, pane.kind.label(), exited_flag
-                        ));
+                        if let Some(fmt) = &format {
+                            lines.push(expand_format(fmt, wn, pn, &pane.title, group, active_flag, state));
+                        } else {
+                            let exited_flag = if pane.exited { " (dead)" } else { "" };
+                            lines.push(format!(
+                                "%{}: @{} {} [{}]{}", pn, wn, pane.title, pane.kind.label(), exited_flag
+                            ));
+                        }
                     }
                 }
             }
@@ -291,8 +381,24 @@ pub fn execute(
             Ok(CommandResult::LayoutChanged)
         }
 
-        Command::DisplayMessage { message } => {
-            Ok(CommandResult::Ok(message.clone()))
+        Command::DisplayMessage { message, .. } => {
+            // When to_stdout is true, the shim will print this.
+            // Here we just expand format variables in the message.
+            let ws = state.active_workspace();
+            let gid = ws.active_group;
+            let win_n = id_map.register_window(gid);
+            let pane_n = if let Some(group) = ws.groups.get(&gid) {
+                id_map.register_pane(group.active_pane().id)
+            } else {
+                0
+            };
+            let group = ws.groups.get(&gid);
+            let expanded = if let Some(group) = group {
+                expand_format(message, win_n, pane_n, &group.active_pane().title, group, true, state)
+            } else {
+                message.clone()
+            };
+            Ok(CommandResult::Ok(expanded))
         }
     }
 }
@@ -371,6 +477,36 @@ fn resolve_pane_to_group(
 ) -> Result<PaneGroupId> {
     let (gid, _) = resolve_pane_target(Some(target), state, id_map)?;
     Ok(gid)
+}
+
+/// Expand tmux format string variables like #{pane_id}, #{window_id}, etc.
+fn expand_format(
+    fmt: &str,
+    window_id: u32,
+    pane_id: u32,
+    pane_title: &str,
+    group: &crate::pane::PaneGroup,
+    is_active: bool,
+    state: &ServerState,
+) -> String {
+    let mut result = fmt.to_string();
+    result = result.replace("#{pane_id}", &format!("%{}", pane_id));
+    result = result.replace("#{window_id}", &format!("@{}", window_id));
+    result = result.replace("#{window_index}", &format!("{}", window_id));
+    result = result.replace("#{window_name}", group.name.as_deref().unwrap_or(pane_title));
+    result = result.replace("#{pane_title}", pane_title);
+    result = result.replace("#{pane_index}", &format!("{}", pane_id));
+    result = result.replace("#{pane_current_command}", pane_title);
+    result = result.replace("#{session_name}", &state.session_name);
+    result = result.replace("#{session_id}", &format!("${}", 0)); // session id always $0 for now
+    result = result.replace("#{window_active}", if is_active { "1" } else { "0" });
+    result = result.replace("#{pane_active}", if is_active { "1" } else { "0" });
+    result = result.replace("#{pane_width}", &format!("{}", state.last_size.0.saturating_sub(4)));
+    result = result.replace("#{pane_height}", &format!("{}", state.last_size.1.saturating_sub(3)));
+    // Handle pane_pid: not available directly, use 0 as placeholder
+    result = result.replace("#{pane_pid}", "0");
+    result = result.replace("#{pane_tty}", "/dev/null");
+    result
 }
 
 /// Parse a key literal string into bytes to send to a pane.
@@ -456,7 +592,7 @@ mod tests {
             Command::RenameSession { new_name: "x".to_string() },
             Command::RenameSession { new_name: "x".to_string() },
         );
-        assert_ne!(Command::KillServer, Command::ListPanes);
+        assert_ne!(Command::KillServer, Command::ListPanes { format: None });
     }
 
     #[test]
@@ -471,5 +607,91 @@ mod tests {
         let t1 = TargetPane::Id(3);
         let t2 = TargetPane::Direction(PaneDirection::Left);
         assert_ne!(t1, t2);
+    }
+
+    /// Helper: create a minimal ServerState + PaneGroup for expand_format tests.
+    fn make_test_state_and_group() -> (ServerState, crate::pane::PaneGroup) {
+        let (event_tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let state = ServerState::new_session(
+            "my-session".to_string(),
+            &event_tx,
+            120,
+            40,
+            crate::config::Config::default(),
+        )
+        .unwrap();
+        let ws = state.active_workspace();
+        let group = ws.groups.values().next().unwrap();
+        // Clone the group data we need (can't return references)
+        let group_clone = crate::pane::PaneGroup {
+            id: group.id,
+            tabs: Vec::new(), // empty for format tests — only metadata matters
+            active_tab: 0,
+            name: Some("my-window".to_string()),
+        };
+        (state, group_clone)
+    }
+
+    #[test]
+    fn test_expand_format_pane_id() {
+        let (state, group) = make_test_state_and_group();
+        let result = expand_format("#{pane_id}", 0, 5, "bash", &group, true, &state);
+        assert_eq!(result, "%5");
+    }
+
+    #[test]
+    fn test_expand_format_window_id() {
+        let (state, group) = make_test_state_and_group();
+        let result = expand_format("#{window_id}", 3, 0, "bash", &group, true, &state);
+        assert_eq!(result, "@3");
+    }
+
+    #[test]
+    fn test_expand_format_session_name() {
+        let (state, group) = make_test_state_and_group();
+        let result = expand_format("#{session_name}", 0, 0, "bash", &group, true, &state);
+        assert_eq!(result, "my-session");
+    }
+
+    #[test]
+    fn test_expand_format_window_name() {
+        let (state, group) = make_test_state_and_group();
+        let result = expand_format("#{window_name}", 0, 0, "bash", &group, true, &state);
+        assert_eq!(result, "my-window");
+    }
+
+    #[test]
+    fn test_expand_format_active_flags() {
+        let (state, group) = make_test_state_and_group();
+        let active = expand_format("#{pane_active}", 0, 0, "bash", &group, true, &state);
+        assert_eq!(active, "1");
+        let inactive = expand_format("#{pane_active}", 0, 0, "bash", &group, false, &state);
+        assert_eq!(inactive, "0");
+        let win_active = expand_format("#{window_active}", 0, 0, "bash", &group, true, &state);
+        assert_eq!(win_active, "1");
+    }
+
+    #[test]
+    fn test_expand_format_compound() {
+        let (state, group) = make_test_state_and_group();
+        let result = expand_format(
+            "#{session_name}:#{window_id}.#{pane_id}",
+            2, 7, "vim", &group, true, &state,
+        );
+        assert_eq!(result, "my-session:@2.%7");
+    }
+
+    #[test]
+    fn test_expand_format_pane_title() {
+        let (state, group) = make_test_state_and_group();
+        let result = expand_format("#{pane_title}", 0, 0, "my-title", &group, true, &state);
+        assert_eq!(result, "my-title");
+    }
+
+    #[test]
+    fn test_expand_format_no_placeholders() {
+        let (state, group) = make_test_state_and_group();
+        let result = expand_format("plain text", 0, 0, "bash", &group, true, &state);
+        assert_eq!(result, "plain text");
     }
 }

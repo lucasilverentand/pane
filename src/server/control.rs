@@ -79,6 +79,9 @@ pub async fn run_control_mode(
                 ServerResponse::Error(msg) => {
                     let _ = writeln!(out, "%error {}", msg);
                 }
+                ServerResponse::CommandOutput { .. } => {
+                    // CommandSync responses are sent directly, not broadcast
+                }
             }
             let _ = out.flush();
         }
@@ -112,6 +115,12 @@ pub async fn run_control_mode(
 
                 match command::execute(&cmd, &mut state, &mut id_map, &broadcast_tx) {
                     Ok(command::CommandResult::Ok(output)) => {
+                        if !output.is_empty() {
+                            writeln!(out, "{}", output)?;
+                        }
+                        writeln!(out, "%end {} {} 0", chrono::Utc::now().timestamp(), cmd_num)?;
+                    }
+                    Ok(command::CommandResult::OkWithId { output, .. }) => {
                         if !output.is_empty() {
                             writeln!(out, "{}", output)?;
                         }

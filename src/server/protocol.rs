@@ -123,6 +123,9 @@ pub enum ClientRequest {
     MouseUp,
     MouseScroll { up: bool },
     Command(String),
+    /// Synchronous command: execute and return result on this stream, then disconnect.
+    /// Used by the tmux shim for fire-and-forget commands.
+    CommandSync(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +141,13 @@ pub enum ServerResponse {
     StatsUpdate(SerializableSystemStats),
     SessionEnded,
     Error(String),
+    /// Synchronous command result: output text, optional pane/window IDs, and success flag.
+    CommandOutput {
+        output: String,
+        pane_id: Option<u32>,
+        window_id: Option<u32>,
+        success: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------

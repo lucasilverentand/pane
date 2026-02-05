@@ -24,6 +24,8 @@ pub struct ServerState {
     pub system_stats: SystemStats,
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
     pub last_size: (u16, u16),
+    /// Counter for assigning tmux-compatible %N pane IDs.
+    pub next_pane_number: u32,
 }
 
 fn auto_workspace_name() -> String {
@@ -47,6 +49,23 @@ fn auto_workspace_name() -> String {
 }
 
 impl ServerState {
+    /// Build tmux env vars for a new pane, incrementing the pane counter.
+    pub fn next_tmux_env(&mut self) -> crate::pane::pty::TmuxEnv {
+        let n = self.next_pane_number;
+        self.next_pane_number += 1;
+        let socket_path = crate::server::daemon::socket_path(&self.session_name);
+        crate::pane::pty::TmuxEnv {
+            tmux_value: format!("{},{},0", socket_path.display(), std::process::id()),
+            tmux_pane: format!("%{}", n),
+        }
+    }
+
+    /// Get the last assigned pane number (the one just assigned by next_tmux_env).
+    #[allow(dead_code)]
+    pub fn last_pane_number(&self) -> u32 {
+        self.next_pane_number.saturating_sub(1)
+    }
+
     pub fn active_workspace(&self) -> &Workspace {
         &self.workspaces[self.active_workspace]
     }
@@ -93,7 +112,14 @@ impl ServerState {
         let pane_id = PaneId::new_v4();
         let group_id = PaneGroupId::new_v4();
 
-        let pane = match Pane::spawn(pane_id, PaneKind::Shell, cols, rows, event_tx.clone(), None) {
+        // Build tmux env for the first pane
+        let socket_path = crate::server::daemon::socket_path(&name);
+        let tmux_env = crate::pane::pty::TmuxEnv {
+            tmux_value: format!("{},{},0", socket_path.display(), std::process::id()),
+            tmux_pane: "%0".to_string(),
+        };
+
+        let pane = match Pane::spawn_with_env(pane_id, PaneKind::Shell, cols, rows, event_tx.clone(), None, Some(tmux_env)) {
             Ok(p) => p,
             Err(e) => Pane::spawn_error(pane_id, PaneKind::Shell, &e.to_string()),
         };
@@ -111,6 +137,7 @@ impl ServerState {
             system_stats: SystemStats::default(),
             event_tx: event_tx.clone(),
             last_size: (cols.saturating_add(2), rows.saturating_add(3)),
+            next_pane_number: 1, // 0 was already used
         })
     }
 
@@ -123,6 +150,10 @@ impl ServerState {
     ) -> anyhow::Result<Self> {
         let size = ratatui::layout::Rect::new(0, 0, width, height);
         let mut workspaces = Vec::new();
+        let mut pane_counter: u32 = 0;
+
+        let socket_path = crate::server::daemon::socket_path(&session.name);
+        let pid = std::process::id();
 
         for ws_config in &session.workspaces {
             let layout = ws_config.layout.clone();
@@ -138,13 +169,20 @@ impl ServerState {
                     .unwrap_or((80, 24));
 
                 for pane_config in &group_config.tabs {
-                    let pane = match Pane::spawn(
+                    let tmux_env = crate::pane::pty::TmuxEnv {
+                        tmux_value: format!("{},{},0", socket_path.display(), pid),
+                        tmux_pane: format!("%{}", pane_counter),
+                    };
+                    pane_counter += 1;
+
+                    let pane = match Pane::spawn_with_env(
                         pane_config.id,
                         pane_config.kind.clone(),
                         cols,
                         rows,
                         event_tx.clone(),
                         pane_config.command.clone(),
+                        Some(tmux_env),
                     ) {
                         Ok(mut p) => {
                             if !pane_config.title.ends_with("(error)") {
@@ -188,8 +226,13 @@ impl ServerState {
         if workspaces.is_empty() {
             let pane_id = PaneId::new_v4();
             let group_id = PaneGroupId::new_v4();
+            let tmux_env = crate::pane::pty::TmuxEnv {
+                tmux_value: format!("{},{},0", socket_path.display(), pid),
+                tmux_pane: format!("%{}", pane_counter),
+            };
+            pane_counter += 1;
             let pane =
-                match Pane::spawn(pane_id, PaneKind::Shell, 80, 24, event_tx.clone(), None) {
+                match Pane::spawn_with_env(pane_id, PaneKind::Shell, 80, 24, event_tx.clone(), None, Some(tmux_env)) {
                     Ok(p) => p,
                     Err(e) => Pane::spawn_error(pane_id, PaneKind::Shell, &e.to_string()),
                 };
@@ -207,6 +250,7 @@ impl ServerState {
             system_stats: SystemStats::default(),
             event_tx,
             last_size: (width, height),
+            next_pane_number: pane_counter,
         })
     }
 
@@ -354,10 +398,11 @@ impl ServerState {
         command: Option<String>,
         cols: u16,
         rows: u16,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<PaneId> {
         let pane_id = PaneId::new_v4();
+        let tmux_env = self.next_tmux_env();
         let pane =
-            match Pane::spawn(pane_id, kind.clone(), cols, rows, self.event_tx.clone(), command) {
+            match Pane::spawn_with_env(pane_id, kind.clone(), cols, rows, self.event_tx.clone(), command, Some(tmux_env)) {
                 Ok(p) => p,
                 Err(e) => Pane::spawn_error(pane_id, kind, &e.to_string()),
             };
@@ -366,21 +411,23 @@ impl ServerState {
         if let Some(group) = ws.groups.get_mut(&ws.active_group) {
             group.add_tab(pane);
         }
-        Ok(())
+        Ok(pane_id)
     }
 
+    /// Split the active group and return (new_group_id, new_pane_id) for the created pane.
     pub fn split_active_group(
         &mut self,
         direction: SplitDirection,
         kind: PaneKind,
         cols: u16,
         rows: u16,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<(PaneGroupId, PaneId)> {
         let new_group_id = PaneGroupId::new_v4();
         let pane_id = PaneId::new_v4();
+        let tmux_env = self.next_tmux_env();
 
         let pane =
-            match Pane::spawn(pane_id, kind.clone(), cols, rows, self.event_tx.clone(), None) {
+            match Pane::spawn_with_env(pane_id, kind.clone(), cols, rows, self.event_tx.clone(), None, Some(tmux_env)) {
                 Ok(p) => p,
                 Err(e) => Pane::spawn_error(pane_id, kind, &e.to_string()),
             };
@@ -394,20 +441,22 @@ impl ServerState {
 
         let (w, h) = self.last_size;
         self.resize_all_panes(w, h);
-        Ok(())
+        Ok((new_group_id, pane_id))
     }
 
     pub fn new_workspace(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
         let pane_id = PaneId::new_v4();
         let group_id = PaneGroupId::new_v4();
+        let tmux_env = self.next_tmux_env();
 
-        let pane = match Pane::spawn(
+        let pane = match Pane::spawn_with_env(
             pane_id,
             PaneKind::Shell,
             cols,
             rows,
             self.event_tx.clone(),
             None,
+            Some(tmux_env),
         ) {
             Ok(p) => p,
             Err(e) => Pane::spawn_error(pane_id, PaneKind::Shell, &e.to_string()),
@@ -446,8 +495,9 @@ impl ServerState {
             return Ok(());
         }
 
+        let tmux_env = self.next_tmux_env();
         let new_pane =
-            match Pane::spawn(id, kind.clone(), cols, rows, self.event_tx.clone(), command) {
+            match Pane::spawn_with_env(id, kind.clone(), cols, rows, self.event_tx.clone(), command, Some(tmux_env)) {
                 Ok(p) => p,
                 Err(e) => Pane::spawn_error(id, kind, &e.to_string()),
             };
@@ -586,5 +636,55 @@ mod tests {
         state.new_workspace(80, 24).unwrap();
         assert_eq!(state.workspaces.len(), 2);
         assert_eq!(state.active_workspace, 1);
+    }
+
+    #[tokio::test]
+    async fn test_next_tmux_env_increments() {
+        let (event_tx, _rx) = mpsc::unbounded_channel();
+        let mut state = ServerState::new_session(
+            "tmux-test".to_string(),
+            &event_tx,
+            80,
+            24,
+            Config::default(),
+        )
+        .unwrap();
+
+        // new_session already uses pane 0, so next_pane_number starts at 1
+        assert_eq!(state.next_pane_number, 1);
+
+        let env1 = state.next_tmux_env();
+        assert_eq!(env1.tmux_pane, "%1");
+        assert!(env1.tmux_value.contains(",0")); // ends with ",<pid>,0"
+        assert!(env1.tmux_value.contains("tmux-test.sock"));
+
+        let env2 = state.next_tmux_env();
+        assert_eq!(env2.tmux_pane, "%2");
+
+        let env3 = state.next_tmux_env();
+        assert_eq!(env3.tmux_pane, "%3");
+
+        assert_eq!(state.next_pane_number, 4);
+    }
+
+    #[tokio::test]
+    async fn test_last_pane_number() {
+        let (event_tx, _rx) = mpsc::unbounded_channel();
+        let mut state = ServerState::new_session(
+            "test".to_string(),
+            &event_tx,
+            80,
+            24,
+            Config::default(),
+        )
+        .unwrap();
+        // new_session uses pane 0, so last_pane_number = 0 initially
+        assert_eq!(state.last_pane_number(), 0);
+
+        state.next_tmux_env(); // assigns %1
+        assert_eq!(state.last_pane_number(), 1);
+
+        state.next_tmux_env(); // assigns %2
+        assert_eq!(state.last_pane_number(), 2);
     }
 }
