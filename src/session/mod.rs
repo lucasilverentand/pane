@@ -8,12 +8,18 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+fn default_version() -> u32 {
+    1
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub id: Uuid,
     pub name: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default = "default_version")]
+    pub version: u32,
     pub workspaces: Vec<WorkspaceConfig>,
     pub active_workspace: usize,
 }
@@ -24,6 +30,8 @@ pub struct WorkspaceConfig {
     pub layout: LayoutNode,
     pub groups: Vec<PaneGroupConfig>,
     pub active_group: PaneGroupId,
+    #[serde(default)]
+    pub sync_panes: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -31,6 +39,8 @@ pub struct PaneGroupConfig {
     pub id: PaneGroupId,
     pub tabs: Vec<PaneConfig>,
     pub active_tab: usize,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -45,10 +55,10 @@ pub struct PaneConfig {
 }
 
 impl Session {
-    pub fn from_app(app: &crate::app::App) -> Self {
+    pub fn from_state(state: &crate::server::state::ServerState) -> Self {
         let mut workspaces = Vec::new();
 
-        for ws in &app.workspaces {
+        for ws in &state.workspaces {
             let mut groups = Vec::new();
 
             for (gid, group) in &ws.groups {
@@ -88,6 +98,7 @@ impl Session {
                     id: *gid,
                     tabs,
                     active_tab: group.active_tab,
+                    name: group.name.clone(),
                 });
             }
 
@@ -96,16 +107,18 @@ impl Session {
                 layout: ws.layout.clone(),
                 groups,
                 active_group: ws.active_group,
+                sync_panes: ws.sync_panes,
             });
         }
 
         Session {
-            id: app.session_id,
-            name: app.session_name.clone(),
-            created_at: app.session_created_at,
+            id: state.session_id,
+            name: state.session_name.clone(),
+            created_at: state.session_created_at,
             updated_at: Utc::now(),
+            version: 2,
             workspaces,
-            active_workspace: app.active_workspace,
+            active_workspace: state.active_workspace,
         }
     }
 }
@@ -127,6 +140,7 @@ mod tests {
             name: "test-session".to_string(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            version: 2,
             workspaces: vec![WorkspaceConfig {
                 name: "1".to_string(),
                 layout: LayoutNode::Split {
@@ -165,6 +179,7 @@ mod tests {
                             },
                         ],
                         active_tab: 0,
+                        name: None,
                     },
                     PaneGroupConfig {
                         id: group_id2,
@@ -178,9 +193,11 @@ mod tests {
                             scrollback: vec!["ready on localhost:3000".to_string()],
                         }],
                         active_tab: 0,
+                        name: None,
                     },
                 ],
                 active_group: group_id1,
+                sync_panes: false,
             }],
             active_workspace: 0,
         }
@@ -259,6 +276,7 @@ mod tests {
             name: "empty".to_string(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            version: 2,
             workspaces: vec![WorkspaceConfig {
                 name: "1".to_string(),
                 layout: LayoutNode::Leaf(group_id),
@@ -266,8 +284,10 @@ mod tests {
                     id: group_id,
                     tabs: vec![],
                     active_tab: 0,
+                    name: None,
                 }],
                 active_group: group_id,
+                sync_panes: false,
             }],
             active_workspace: 0,
         };

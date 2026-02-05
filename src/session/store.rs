@@ -53,8 +53,19 @@ pub fn save_to_dir(session: &Session, dir: &Path) -> Result<()> {
 pub fn load_from_dir(id: &Uuid, dir: &Path) -> Result<Session> {
     let path = dir.join(format!("{}.json", id));
     let json = fs::read_to_string(path)?;
-    let session: Session = serde_json::from_str(&json)?;
+    let mut session: Session = serde_json::from_str(&json)?;
+    migrate_session(&mut session);
     Ok(session)
+}
+
+/// Migrate a session to the latest version (currently v2).
+/// v1 (no explicit version field) -> v2: adds version, sync_panes, group name fields.
+/// The `#[serde(default)]` annotations handle missing fields during deserialization,
+/// so migration only needs to bump the version number for re-saving.
+fn migrate_session(session: &mut Session) {
+    if session.version < 2 {
+        session.version = 2;
+    }
 }
 
 pub fn list_from_dir(dir: &Path) -> Result<Vec<SessionSummary>> {
@@ -112,6 +123,7 @@ mod tests {
             name: name.to_string(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            version: 2,
             workspaces: vec![WorkspaceConfig {
                 name: "1".to_string(),
                 layout: LayoutNode::Leaf(group_id),
@@ -127,8 +139,10 @@ mod tests {
                         scrollback: vec!["$ echo hello".to_string(), "hello".to_string()],
                     }],
                     active_tab: 0,
+                    name: None,
                 }],
                 active_group: group_id,
+                sync_panes: false,
             }],
             active_workspace: 0,
         }
@@ -247,6 +261,7 @@ mod tests {
             name: "multi".to_string(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            version: 2,
             workspaces: vec![WorkspaceConfig {
                 name: "1".to_string(),
                 layout: LayoutNode::Leaf(group_id),
@@ -273,8 +288,10 @@ mod tests {
                         },
                     ],
                     active_tab: 0,
+                    name: None,
                 }],
                 active_group: group_id,
+                sync_panes: false,
             }],
             active_workspace: 0,
         };
@@ -282,5 +299,48 @@ mod tests {
         save_to_dir(&session, dir.path()).unwrap();
         let summaries = list_from_dir(dir.path()).unwrap();
         assert_eq!(summaries[0].pane_count, 2);
+    }
+
+    #[test]
+    fn test_v1_session_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create a v1 session (no "version" field, no "sync_panes", no group "name")
+        let id = Uuid::new_v4();
+        let group_id = PaneGroupId::new_v4();
+        let pane_id = PaneId::new_v4();
+        let v1_json = serde_json::json!({
+            "id": id.to_string(),
+            "name": "old-session",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+            "workspaces": [{
+                "name": "1",
+                "layout": { "Leaf": group_id.to_string() },
+                "groups": [{
+                    "id": group_id.to_string(),
+                    "tabs": [{
+                        "id": pane_id.to_string(),
+                        "kind": "Shell",
+                        "title": "shell",
+                        "command": null,
+                        "cwd": "/tmp",
+                        "env": {},
+                        "scrollback": []
+                    }],
+                    "active_tab": 0
+                }],
+                "active_group": group_id.to_string()
+            }],
+            "active_workspace": 0
+        });
+        let path = dir.path().join(format!("{}.json", id));
+        std::fs::write(&path, serde_json::to_string_pretty(&v1_json).unwrap()).unwrap();
+
+        let loaded = load_from_dir(&id, dir.path()).unwrap();
+        // Migration should bump version to 2
+        assert_eq!(loaded.version, 2);
+        // Default values should be present
+        assert_eq!(loaded.workspaces[0].sync_panes, false);
+        assert_eq!(loaded.workspaces[0].groups[0].name, None);
     }
 }

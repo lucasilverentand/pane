@@ -1,6 +1,6 @@
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
@@ -8,13 +8,15 @@ use ratatui::{
 
 use crate::app::Mode;
 use crate::config::Theme;
+use crate::copy_mode::CopyModeState;
 use crate::layout::SplitDirection;
-use crate::pane::{terminal::render_screen, PaneGroup};
+use crate::pane::{terminal::{render_screen, render_screen_copy_mode}, PaneGroup};
 
 pub fn render_group(
     group: &PaneGroup,
     is_active: bool,
     mode: &Mode,
+    copy_mode_state: Option<&CopyModeState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
@@ -40,6 +42,7 @@ pub fn render_group(
 
     if is_active {
         let indicator = match mode {
+            Mode::Copy => " COPY ",
             Mode::Scroll => " SCROLL ",
             _ => " ACTIVE ",
         };
@@ -61,25 +64,75 @@ pub fn render_group(
     // 1-cell padding on left and right
     let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, inner.height);
 
+    // Only apply copy mode rendering to the active pane
+    let cms = if is_active { copy_mode_state } else { None };
+
+    // Reserve a row for search bar if search is active
+    let show_search = cms.map_or(false, |c| c.search_active);
+
     let has_tab_bar = group.tab_count() > 1;
 
     if has_tab_bar {
-        let [tab_area, content_area] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Fill(1),
-        ])
-        .areas(padded);
+        let constraints = if show_search {
+            vec![
+                Constraint::Length(1),
+                Constraint::Fill(1),
+                Constraint::Length(1),
+            ]
+        } else {
+            vec![Constraint::Length(1), Constraint::Fill(1)]
+        };
+        let areas = Layout::vertical(constraints).split(padded);
+        let tab_area = areas[0];
+        let content_area = areas[1];
 
         render_tab_bar(group, theme, frame, tab_area);
+        render_content(pane.screen(), cms, frame, content_area);
 
-        let lines: Vec<Line<'static>> = render_screen(pane.screen(), content_area);
-        let paragraph = Paragraph::new(lines);
-        frame.render_widget(paragraph, content_area);
+        if show_search {
+            render_search_bar(cms.unwrap(), theme, frame, areas[2]);
+        }
     } else {
-        let lines: Vec<Line<'static>> = render_screen(pane.screen(), padded);
-        let paragraph = Paragraph::new(lines);
-        frame.render_widget(paragraph, padded);
+        let constraints = if show_search {
+            vec![Constraint::Fill(1), Constraint::Length(1)]
+        } else {
+            vec![Constraint::Fill(1)]
+        };
+        let areas = Layout::vertical(constraints).split(padded);
+        let content_area = areas[0];
+
+        render_content(pane.screen(), cms, frame, content_area);
+
+        if show_search {
+            render_search_bar(cms.unwrap(), theme, frame, areas[1]);
+        }
     }
+}
+
+fn render_content(
+    screen: &vt100::Screen,
+    cms: Option<&CopyModeState>,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let lines: Vec<Line<'static>> = match cms {
+        Some(cms) => render_screen_copy_mode(screen, area, cms),
+        None => render_screen(screen, area),
+    };
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_search_bar(cms: &CopyModeState, theme: &Theme, frame: &mut Frame, area: Rect) {
+    let line = Line::from(vec![
+        Span::styled("/", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("{}_", cms.search_query),
+            Style::default().fg(Color::White),
+        ),
+    ]);
+    let paragraph = Paragraph::new(line);
+    frame.render_widget(paragraph, area);
 }
 
 fn render_tab_bar(group: &PaneGroup, theme: &Theme, frame: &mut Frame, area: Rect) {

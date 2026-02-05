@@ -6,6 +6,24 @@ use ratatui::{
 
 /// Convert a vt100 screen to ratatui Lines for rendering.
 pub fn render_screen(screen: &vt100::Screen, area: Rect) -> Vec<Line<'static>> {
+    render_screen_inner(screen, area, None)
+}
+
+/// Render screen with copy mode highlights overlaid.
+#[allow(dead_code)]
+pub fn render_screen_copy_mode(
+    screen: &vt100::Screen,
+    area: Rect,
+    cms: &crate::copy_mode::CopyModeState,
+) -> Vec<Line<'static>> {
+    render_screen_inner(screen, area, Some(cms))
+}
+
+fn render_screen_inner(
+    screen: &vt100::Screen,
+    area: Rect,
+    cms: Option<&crate::copy_mode::CopyModeState>,
+) -> Vec<Line<'static>> {
     let rows = area.height as usize;
     let cols = area.width as usize;
     let mut lines = Vec::with_capacity(rows);
@@ -17,14 +35,33 @@ pub fn render_screen(screen: &vt100::Screen, area: Rect) -> Vec<Line<'static>> {
 
         for col in 0..cols {
             let cell = screen.cell(row as u16, col as u16);
+            let mut style = match cell {
+                Some(ref cell) => cell_style(cell),
+                None => Style::default(),
+            };
+
+            // Apply copy mode overlays
+            if let Some(cms) = cms {
+                if row == cms.cursor_row && col == cms.cursor_col {
+                    // Copy mode cursor: reversed
+                    style = style.add_modifier(Modifier::REVERSED);
+                } else if cms.is_selected(row, col) {
+                    // Selection: reversed fg/bg
+                    style = style.add_modifier(Modifier::REVERSED);
+                } else if cms.is_search_match(row, col) {
+                    // Search match: yellow background
+                    style = style.bg(Color::Yellow).fg(Color::Black);
+                }
+            }
+
+            if style != current_style && !current_text.is_empty() {
+                spans.push(Span::styled(current_text.clone(), current_style));
+                current_text.clear();
+            }
+            current_style = style;
+
             match cell {
                 Some(cell) => {
-                    let style = cell_style(cell);
-                    if style != current_style && !current_text.is_empty() {
-                        spans.push(Span::styled(current_text.clone(), current_style));
-                        current_text.clear();
-                    }
-                    current_style = style;
                     let ch = cell.contents();
                     if ch.is_empty() {
                         current_text.push(' ');

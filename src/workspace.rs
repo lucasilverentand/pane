@@ -11,6 +11,8 @@ pub struct Workspace {
     /// Per-leaf custom minimum sizes set by user drag/resize.
     /// Falls back to global config defaults when absent.
     pub leaf_min_sizes: HashMap<PaneGroupId, (u16, u16)>,
+    /// When true, key input is broadcast to all panes in this workspace.
+    pub sync_panes: bool,
 }
 
 impl Workspace {
@@ -25,6 +27,7 @@ impl Workspace {
             groups,
             active_group,
             leaf_min_sizes: HashMap::new(),
+            sync_panes: false,
         }
     }
 

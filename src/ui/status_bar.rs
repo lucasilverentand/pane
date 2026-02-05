@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -8,46 +10,40 @@ use ratatui::{
 
 use crate::app::{App, Mode};
 use crate::config::Theme;
+use crate::ui::format::format_string;
 
 pub fn render(app: &App, theme: &Theme, frame: &mut Frame, area: Rect) {
     let (left, right) = match &app.mode {
         Mode::Normal => {
-            let left = build_left(app);
-            let mut right_parts: Vec<String> = Vec::new();
-            // System stats
-            if app.config.status_bar.show_cpu {
-                right_parts.push(app.system_stats.format_cpu());
-            }
-            if app.config.status_bar.show_memory {
-                right_parts.push(app.system_stats.format_memory());
-            }
-            if app.config.status_bar.show_load {
-                right_parts.push(app.system_stats.format_load());
-            }
-            if app.config.status_bar.show_disk {
-                right_parts.push(app.system_stats.format_disk());
-            }
-            let stats = if right_parts.is_empty() {
-                String::new()
-            } else {
-                format!("{}  ", right_parts.join(" │ "))
-            };
-            let right = format!("{}ctrl+h help ", stats);
+            let vars = build_vars(app);
+            let left = format_string(&app.state.config.status_bar.left, &vars);
+            let right = format_string(&app.state.config.status_bar.right, &vars);
             (left, right)
         }
         Mode::Scroll => {
-            let left = build_left(app);
-            let right = "j/k ↑↓  u/d page  g/G top/end  esc quit ".to_string();
-            (left, right)
+            let mode_left = build_mode_left(app, "[SCROLL] ");
+            let right = "j/k up/down  u/d page  g/G top/end  esc quit ".to_string();
+            (mode_left, right)
         }
         Mode::SessionPicker => (
             String::new(),
-            "↑↓ navigate  enter open  n new  d delete  q quit ".to_string(),
+            "up/down navigate  enter open  n new  d delete  q quit ".to_string(),
         ),
-        Mode::Help => (String::new(), "esc close ".to_string()),
+        Mode::Help => (String::new(), "esc close  / search  j/k scroll ".to_string()),
         Mode::DevServerInput => (
             String::new(),
             "type command, enter to confirm, esc to cancel ".to_string(),
+        ),
+        Mode::Copy => {
+            let mode_left = build_mode_left(app, "[COPY] ");
+            (
+                mode_left,
+                "hjkl move  v select  y yank  / search  esc quit ".to_string(),
+            )
+        }
+        Mode::CommandPalette => (
+            "[CMD] ".to_string(),
+            "type to filter  enter run  esc cancel ".to_string(),
         ),
     };
 
@@ -70,17 +66,76 @@ pub fn render(app: &App, theme: &Theme, frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn build_left(app: &App) -> String {
-    if app.workspaces.is_empty() {
+fn build_mode_left(app: &App, prefix: &str) -> String {
+    let title = pane_title(app);
+    format!("{}{}", prefix, title)
+}
+
+fn pane_title(app: &App) -> String {
+    if app.state.workspaces.is_empty() {
         return String::new();
     }
-
     let ws = app.active_workspace();
-    let pane_title = ws
-        .groups
+    ws.groups
         .get(&ws.active_group)
-        .map(|g| g.active_pane().title.as_str())
-        .unwrap_or("");
+        .map(|g| g.active_pane().title.clone())
+        .unwrap_or_default()
+}
 
-    format!(" {} ", pane_title)
+/// Build the template variables HashMap from app state.
+fn build_vars(app: &App) -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+
+    // Pane info
+    let title = pane_title(app);
+    vars.insert("pane_title".to_string(), title);
+
+    if !app.state.workspaces.is_empty() {
+        let ws = app.active_workspace();
+        vars.insert("session_name".to_string(), app.state.session_name.clone());
+        vars.insert("window_name".to_string(), ws.name.clone());
+
+        let group_ids = ws.layout.group_ids();
+        let pane_count = group_ids.len();
+        vars.insert("pane_count".to_string(), pane_count.to_string());
+
+        if let Some(idx) = group_ids.iter().position(|id| *id == ws.active_group) {
+            vars.insert("pane_index".to_string(), (idx + 1).to_string());
+        }
+        vars.insert(
+            "window_index".to_string(),
+            (app.state.active_workspace + 1).to_string(),
+        );
+    }
+
+    // System stats (conditionally include based on config)
+    if app.state.config.status_bar.show_cpu {
+        vars.insert("cpu".to_string(), app.state.system_stats.format_cpu());
+    }
+    if app.state.config.status_bar.show_memory {
+        vars.insert("mem".to_string(), app.state.system_stats.format_memory());
+    }
+    if app.state.config.status_bar.show_load {
+        vars.insert("load".to_string(), app.state.system_stats.format_load());
+    }
+    if app.state.config.status_bar.show_disk {
+        vars.insert("disk".to_string(), app.state.system_stats.format_disk());
+    }
+
+    // Build a combined stats string with separators for backward compat
+    let mut stat_parts: Vec<String> = Vec::new();
+    if app.state.config.status_bar.show_cpu {
+        stat_parts.push(app.state.system_stats.format_cpu());
+    }
+    if app.state.config.status_bar.show_memory {
+        stat_parts.push(app.state.system_stats.format_memory());
+    }
+    if app.state.config.status_bar.show_load {
+        stat_parts.push(app.state.system_stats.format_load());
+    }
+    if app.state.config.status_bar.show_disk {
+        stat_parts.push(app.state.system_stats.format_disk());
+    }
+
+    vars
 }

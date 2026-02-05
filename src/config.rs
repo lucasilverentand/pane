@@ -9,6 +9,7 @@ use serde::Deserialize;
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
 pub enum Action {
     Quit,
     NewWorkspace,
@@ -39,6 +40,14 @@ pub enum Action {
     SessionPicker,
     Help,
     ScrollMode,
+    CopyMode,
+    PasteClipboard,
+    SelectLayout(String),
+    ToggleSyncPanes,
+    CommandPalette,
+    RenameWindow,
+    RenamePane,
+    Detach,
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +98,9 @@ pub struct Behavior {
     pub min_pane_width: u16,
     pub min_pane_height: u16,
     pub fold_bar_size: u16,
+    pub vim_navigator: bool,
+    pub mouse: bool,
+    pub default_shell: Option<String>,
 }
 
 impl Default for Behavior {
@@ -97,6 +109,9 @@ impl Default for Behavior {
             min_pane_width: 100,
             min_pane_height: 4,
             fold_bar_size: 1,
+            vim_navigator: false,
+            mouse: true,
+            default_shell: None,
         }
     }
 }
@@ -112,6 +127,8 @@ pub struct StatusBarConfig {
     pub show_load: bool,
     pub show_disk: bool,
     pub update_interval_secs: u64,
+    pub left: String,
+    pub right: String,
 }
 
 impl Default for StatusBarConfig {
@@ -122,6 +139,8 @@ impl Default for StatusBarConfig {
             show_load: true,
             show_disk: false,
             update_interval_secs: 3,
+            left: " #{pane_title} ".to_string(),
+            right: "#{cpu} #{mem} #{load}  ctrl+h help ".to_string(),
         }
     }
 }
@@ -171,6 +190,7 @@ impl KeyMap {
             ("ctrl+/", Action::Help),
             ("ctrl+?", Action::Help),
             ("shift+pageup", Action::ScrollMode),
+            ("ctrl+p", Action::CommandPalette),
         ];
 
         for (key_str, action) in defaults {
@@ -198,6 +218,15 @@ impl KeyMap {
 
     pub fn lookup(&self, key: &KeyEvent) -> Option<&Action> {
         self.map.get(key)
+    }
+
+    /// Build a reverse map: Action → Vec<KeyEvent> for display purposes.
+    pub fn reverse_map(&self) -> HashMap<Action, Vec<KeyEvent>> {
+        let mut reverse: HashMap<Action, Vec<KeyEvent>> = HashMap::new();
+        for (key, action) in &self.map {
+            reverse.entry(action.clone()).or_default().push(*key);
+        }
+        reverse
     }
 
     /// Apply user overrides: for each (name, key_str), parse both, remove the old
@@ -254,6 +283,13 @@ fn action_name_map() -> HashMap<&'static str, Action> {
     m.insert("session_picker", Action::SessionPicker);
     m.insert("help", Action::Help);
     m.insert("scroll_mode", Action::ScrollMode);
+    m.insert("copy_mode", Action::CopyMode);
+    m.insert("paste_clipboard", Action::PasteClipboard);
+    m.insert("toggle_sync_panes", Action::ToggleSyncPanes);
+    m.insert("command_palette", Action::CommandPalette);
+    m.insert("rename_window", Action::RenameWindow);
+    m.insert("rename_pane", Action::RenamePane);
+    m.insert("detach", Action::Detach);
     m
 }
 
@@ -326,6 +362,9 @@ impl Config {
             if let Some(v) = b.min_pane_width { config.behavior.min_pane_width = v; }
             if let Some(v) = b.min_pane_height { config.behavior.min_pane_height = v; }
             if let Some(v) = b.fold_bar_size { config.behavior.fold_bar_size = v; }
+            if let Some(v) = b.vim_navigator { config.behavior.vim_navigator = v; }
+            if let Some(v) = b.mouse { config.behavior.mouse = v; }
+            if b.default_shell.is_some() { config.behavior.default_shell = b.default_shell; }
         }
 
         // Keys
@@ -340,6 +379,8 @@ impl Config {
             if let Some(v) = sb.show_load { config.status_bar.show_load = v; }
             if let Some(v) = sb.show_disk { config.status_bar.show_disk = v; }
             if let Some(v) = sb.update_interval_secs { config.status_bar.update_interval_secs = v; }
+            if let Some(v) = sb.left { config.status_bar.left = v; }
+            if let Some(v) = sb.right { config.status_bar.right = v; }
         }
 
         config
@@ -379,6 +420,9 @@ struct RawBehavior {
     min_pane_width: Option<u16>,
     min_pane_height: Option<u16>,
     fold_bar_size: Option<u16>,
+    vim_navigator: Option<bool>,
+    mouse: Option<bool>,
+    default_shell: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -388,6 +432,8 @@ struct RawStatusBar {
     show_load: Option<bool>,
     show_disk: Option<bool>,
     update_interval_secs: Option<u64>,
+    left: Option<String>,
+    right: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

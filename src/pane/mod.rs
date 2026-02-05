@@ -16,6 +16,8 @@ pub struct PaneGroup {
     pub id: PaneGroupId,
     pub tabs: Vec<Pane>,
     pub active_tab: usize,
+    /// Optional user-assigned window name.
+    pub name: Option<String>,
 }
 
 impl PaneGroup {
@@ -24,6 +26,7 @@ impl PaneGroup {
             id,
             tabs: vec![pane],
             active_tab: 0,
+            name: None,
         }
     }
 

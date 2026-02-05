@@ -1,3 +1,5 @@
+pub mod command_palette;
+pub mod format;
 pub mod help;
 pub mod layout_render;
 pub mod pane_view;
@@ -12,7 +14,7 @@ use crate::app::{App, Mode};
 use crate::layout::LayoutParams;
 
 pub fn render(app: &App, frame: &mut Frame) {
-    let theme = &app.config.theme;
+    let theme = &app.state.config.theme;
 
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(1),
@@ -22,10 +24,10 @@ pub fn render(app: &App, frame: &mut Frame) {
     .areas(frame.area());
 
     {
-        let names: Vec<String> = app.workspaces.iter().map(|ws| ws.name.clone()).collect();
+        let names: Vec<String> = app.state.workspaces.iter().map(|ws| ws.name.clone()).collect();
         workspace_bar::render(
             &names,
-            app.active_workspace,
+            app.state.active_workspace,
             app.hovered_workspace_tab,
             theme,
             frame,
@@ -33,17 +35,17 @@ pub fn render(app: &App, frame: &mut Frame) {
         );
     }
 
-    if !app.workspaces.is_empty() && app.mode != Mode::SessionPicker {
+    if !app.state.workspaces.is_empty() && app.mode != Mode::SessionPicker {
         layout_render::render_workspace(app, frame, body);
     }
     status_bar::render(app, theme, frame, footer);
 
     // Set cursor position from active pane's vt100 screen (not in scroll mode)
-    if app.mode == Mode::Normal && !app.workspaces.is_empty() {
+    if app.mode == Mode::Normal && !app.state.workspaces.is_empty() {
         let ws = app.active_workspace();
         if let Some(group) = ws.groups.get(&ws.active_group) {
             let pane = group.active_pane();
-            let params = LayoutParams::from(&app.config.behavior);
+            let params = LayoutParams::from(&app.state.config.behavior);
             let resolved = ws.layout.resolve_with_fold(body, params, &ws.leaf_min_sizes);
             for rp in &resolved {
                 if let crate::layout::ResolvedPane::Visible { id, rect } = rp {
@@ -83,9 +85,20 @@ pub fn render(app: &App, frame: &mut Frame) {
             render_dev_server_input(app, theme, frame, frame.area());
         }
         Mode::Help => {
-            help::render(theme, frame, frame.area());
+            help::render(
+                &app.state.config.keys,
+                &app.help_state,
+                theme,
+                frame,
+                frame.area(),
+            );
         }
-        Mode::Normal | Mode::Scroll => {}
+        Mode::CommandPalette => {
+            if let Some(ref cp_state) = app.command_palette_state {
+                command_palette::render(cp_state, theme, frame, frame.area());
+            }
+        }
+        Mode::Normal | Mode::Scroll | Mode::Copy => {}
     }
 }
 

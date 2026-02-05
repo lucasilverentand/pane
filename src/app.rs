@@ -1,23 +1,21 @@
-use std::collections::HashMap;
-
-use chrono::{DateTime, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tokio::sync::mpsc;
-use uuid::Uuid;
 
-use std::path::Path;
-use std::process::Command;
-
+use crate::clipboard;
 use crate::config::{self, Action, Config};
+use crate::copy_mode::{CopyModeAction, CopyModeState};
 use crate::event::{self, AppEvent};
 use crate::layout::{PaneId, ResolvedPane, Side, SplitDirection};
-use crate::pane::{Pane, PaneGroup, PaneGroupId, PaneKind};
+use crate::layout_presets::LayoutPreset;
+use crate::pane::{PaneGroupId, PaneKind};
+use crate::server::state::ServerState;
 use crate::session::store::SessionSummary;
 use crate::session::{self, Session};
-use crate::system_stats::{self, SystemStats};
+use crate::system_stats;
 use crate::tui::Tui;
 use crate::ui;
-use crate::workspace::Workspace;
+use crate::ui::command_palette::CommandPaletteState;
+use crate::ui::help::HelpState;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -26,6 +24,8 @@ pub enum Mode {
     SessionPicker,
     Help,
     DevServerInput,
+    Copy,
+    CommandPalette,
 }
 
 struct DragState {
@@ -38,79 +38,22 @@ struct DragState {
 pub struct App {
     pub should_quit: bool,
     pub mode: Mode,
-    pub workspaces: Vec<Workspace>,
-    pub active_workspace: usize,
-    pub session_name: String,
-    pub session_id: Uuid,
-    pub session_created_at: DateTime<Utc>,
+    pub state: ServerState,
     pub session_list: Vec<SessionSummary>,
     pub session_selected: usize,
     pub dev_server_input: String,
-    pub config: Config,
-    pub system_stats: SystemStats,
     pub hovered_workspace_tab: Option<usize>,
-    event_tx: mpsc::UnboundedSender<AppEvent>,
+    pub command_palette_state: Option<CommandPaletteState>,
+    pub help_state: HelpState,
+    pub copy_mode_state: Option<CopyModeState>,
     drag_state: Option<DragState>,
-    last_size: (u16, u16),
-}
-
-fn auto_workspace_name() -> String {
-    // Try git repo name
-    if let Ok(output) = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-    {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if let Some(name) = Path::new(&path).file_name() {
-                return name.to_string_lossy().into_owned();
-            }
-        }
-    }
-    // Fallback: current directory basename
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Some(name) = cwd.file_name() {
-            return name.to_string_lossy().into_owned();
-        }
-    }
-    "1".to_string()
 }
 
 impl App {
-    pub fn active_workspace(&self) -> &Workspace {
-        &self.workspaces[self.active_workspace]
-    }
+    // --- Delegation accessors for UI compatibility ---
 
-    pub fn active_workspace_mut(&mut self) -> &mut Workspace {
-        &mut self.workspaces[self.active_workspace]
-    }
-
-    /// Find a pane mutably across all workspaces/groups/tabs.
-    pub fn find_pane_mut(&mut self, pane_id: PaneId) -> Option<&mut Pane> {
-        for ws in &mut self.workspaces {
-            for group in ws.groups.values_mut() {
-                for pane in &mut group.tabs {
-                    if pane.id == pane_id {
-                        return Some(pane);
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// Find which workspace/group a pane belongs to.
-    fn find_pane_location(&self, pane_id: PaneId) -> Option<(usize, PaneGroupId)> {
-        for (ws_idx, ws) in self.workspaces.iter().enumerate() {
-            for (gid, group) in &ws.groups {
-                for pane in &group.tabs {
-                    if pane.id == pane_id {
-                        return Some((ws_idx, *gid));
-                    }
-                }
-            }
-        }
-        None
+    pub fn active_workspace(&self) -> &crate::workspace::Workspace {
+        self.state.active_workspace()
     }
 
     pub fn run_with_args(args: CliArgs, config: Config) -> anyhow::Result<()> {
@@ -122,7 +65,6 @@ impl App {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         event::start_event_loop(event_tx.clone());
 
-        // Start system stats collector
         system_stats::start_stats_collector(
             event_tx.clone(),
             config.status_bar.update_interval_secs,
@@ -160,8 +102,8 @@ impl App {
             }
 
             if app.should_quit {
-                if !app.workspaces.is_empty() {
-                    let session = Session::from_app(&app);
+                if !app.state.workspaces.is_empty() {
+                    let session = Session::from_state(&app.state);
                     let _ = session::store::save(&session);
                 }
                 break;
@@ -177,37 +119,23 @@ impl App {
         tui: &Tui,
         config: Config,
     ) -> anyhow::Result<Self> {
-        let pane_id = PaneId::new_v4();
-        let group_id = PaneGroupId::new_v4();
         let size = tui.size()?;
         let cols = size.width.saturating_sub(2);
         let rows = size.height.saturating_sub(3);
-
-        let pane = match Pane::spawn(pane_id, PaneKind::Shell, cols, rows, event_tx.clone(), None) {
-            Ok(p) => p,
-            Err(e) => Pane::spawn_error(pane_id, PaneKind::Shell, &e.to_string()),
-        };
-
-        let group = PaneGroup::new(group_id, pane);
-        let workspace = Workspace::new(auto_workspace_name(), group_id, group);
+        let state = ServerState::new_session(name, event_tx, cols, rows, config)?;
 
         Ok(Self {
             should_quit: false,
             mode: Mode::Normal,
-            workspaces: vec![workspace],
-            active_workspace: 0,
-            session_name: name,
-            session_id: Uuid::new_v4(),
-            session_created_at: Utc::now(),
+            state,
             session_list: Vec::new(),
             session_selected: 0,
             dev_server_input: String::new(),
-            config,
-            system_stats: SystemStats::default(),
             hovered_workspace_tab: None,
-            event_tx: event_tx.clone(),
+            command_palette_state: None,
+            help_state: HelpState::default(),
+            copy_mode_state: None,
             drag_state: None,
-            last_size: (size.width, size.height),
         })
     }
 
@@ -219,20 +147,25 @@ impl App {
         Self {
             should_quit: false,
             mode: Mode::SessionPicker,
-            workspaces: Vec::new(),
-            active_workspace: 0,
-            session_name: String::new(),
-            session_id: Uuid::new_v4(),
-            session_created_at: Utc::now(),
+            state: ServerState {
+                workspaces: Vec::new(),
+                active_workspace: 0,
+                session_name: String::new(),
+                session_id: uuid::Uuid::new_v4(),
+                session_created_at: chrono::Utc::now(),
+                config,
+                system_stats: crate::system_stats::SystemStats::default(),
+                event_tx,
+                last_size: (0, 0),
+            },
             session_list: sessions,
             session_selected: 0,
             dev_server_input: String::new(),
-            config,
-            system_stats: SystemStats::default(),
             hovered_workspace_tab: None,
-            event_tx,
+            command_palette_state: None,
+            help_state: HelpState::default(),
+            copy_mode_state: None,
             drag_state: None,
-            last_size: (0, 0),
         }
     }
 
@@ -243,97 +176,21 @@ impl App {
         config: Config,
     ) -> anyhow::Result<Self> {
         let size = tui.size()?;
-        let mut workspaces = Vec::new();
-
-        for ws_config in &session.workspaces {
-            let layout = ws_config.layout.clone();
-            let resolved =
-                layout.resolve(ratatui::layout::Rect::new(0, 0, size.width, size.height));
-            let mut groups = HashMap::new();
-
-            for group_config in &ws_config.groups {
-                let mut tabs = Vec::new();
-                let (cols, rows) = resolved
-                    .iter()
-                    .find(|(id, _)| *id == group_config.id)
-                    .map(|(_, r)| (r.width.saturating_sub(2), r.height.saturating_sub(2)))
-                    .unwrap_or((80, 24));
-
-                for pane_config in &group_config.tabs {
-                    let pane = match Pane::spawn(
-                        pane_config.id,
-                        pane_config.kind.clone(),
-                        cols,
-                        rows,
-                        event_tx.clone(),
-                        pane_config.command.clone(),
-                    ) {
-                        Ok(mut p) => {
-                            if !pane_config.title.ends_with("(error)") {
-                                p.title = pane_config.title.clone();
-                            }
-                            p
-                        }
-                        Err(e) => Pane::spawn_error(
-                            pane_config.id,
-                            pane_config.kind.clone(),
-                            &e.to_string(),
-                        ),
-                    };
-                    tabs.push(pane);
-                }
-
-                if !tabs.is_empty() {
-                    groups.insert(
-                        group_config.id,
-                        PaneGroup {
-                            id: group_config.id,
-                            tabs,
-                            active_tab: group_config.active_tab,
-                        },
-                    );
-                }
-            }
-
-            let active_group = ws_config.active_group;
-            workspaces.push(Workspace {
-                name: ws_config.name.clone(),
-                layout,
-                groups,
-                active_group,
-                leaf_min_sizes: HashMap::new(),
-            });
-        }
-
-        if workspaces.is_empty() {
-            let pane_id = PaneId::new_v4();
-            let group_id = PaneGroupId::new_v4();
-            let pane =
-                match Pane::spawn(pane_id, PaneKind::Shell, 80, 24, event_tx.clone(), None) {
-                    Ok(p) => p,
-                    Err(e) => Pane::spawn_error(pane_id, PaneKind::Shell, &e.to_string()),
-                };
-            let group = PaneGroup::new(group_id, pane);
-            workspaces.push(Workspace::new("1".to_string(), group_id, group));
-        }
+        let state =
+            ServerState::restore_session(session, event_tx, size.width, size.height, config)?;
 
         Ok(Self {
             should_quit: false,
             mode: Mode::Normal,
-            workspaces,
-            active_workspace: session.active_workspace,
-            session_name: session.name,
-            session_id: session.id,
-            session_created_at: session.created_at,
+            state,
             session_list: Vec::new(),
             session_selected: 0,
             dev_server_input: String::new(),
-            config,
-            system_stats: SystemStats::default(),
             hovered_workspace_tab: None,
-            event_tx,
+            command_palette_state: None,
+            copy_mode_state: None,
+            help_state: HelpState::default(),
             drag_state: None,
-            last_size: (size.width, size.height),
         })
     }
 
@@ -341,31 +198,33 @@ impl App {
         match event {
             AppEvent::Key(key) => self.handle_key_event(key, tui)?,
             AppEvent::PtyOutput { pane_id, bytes } => {
-                if let Some(pane) = self.find_pane_mut(pane_id) {
+                if let Some(pane) = self.state.find_pane_mut(pane_id) {
                     pane.process_output(&bytes);
                 }
             }
             AppEvent::PtyExited { pane_id } => {
-                self.handle_pty_exited(pane_id);
+                if self.state.handle_pty_exited(pane_id) {
+                    self.should_quit = true;
+                }
             }
             AppEvent::MouseScroll { up } => {
                 if self.mode == Mode::Normal || self.mode == Mode::Scroll {
                     if up {
-                        self.scroll_active_pane(|p| p.scroll_up(3));
-                        if self.is_active_pane_scrolled() {
+                        self.state.scroll_active_pane(|p| p.scroll_up(3));
+                        if self.state.is_active_pane_scrolled() {
                             self.mode = Mode::Scroll;
                         }
                     } else {
-                        self.scroll_active_pane(|p| p.scroll_down(3));
-                        if !self.is_active_pane_scrolled() {
+                        self.state.scroll_active_pane(|p| p.scroll_down(3));
+                        if !self.state.is_active_pane_scrolled() {
                             self.mode = Mode::Normal;
                         }
                     }
                 }
             }
             AppEvent::Resize(w, h) => {
-                self.last_size = (w, h);
-                self.resize_all_panes(w, h);
+                self.state.last_size = (w, h);
+                self.state.resize_all_panes(w, h);
                 if self.mode == Mode::Scroll {
                     self.mode = Mode::Normal;
                 }
@@ -385,63 +244,28 @@ impl App {
                 self.drag_state = None;
             }
             AppEvent::SystemStats(stats) => {
-                self.system_stats = stats;
+                self.state.system_stats = stats;
             }
             AppEvent::Tick => {}
         }
         Ok(())
     }
 
-    fn handle_pty_exited(&mut self, pane_id: PaneId) {
-        if let Some(pane) = self.find_pane_mut(pane_id) {
-            pane.exited = true;
-        }
-
-        let location = self.find_pane_location(pane_id);
-        if let Some((ws_idx, group_id)) = location {
-            let ws = &self.workspaces[ws_idx];
-            if let Some(group) = ws.groups.get(&group_id) {
-                if group.tab_count() <= 1 {
-                    let group_ids = ws.layout.group_ids();
-                    if group_ids.len() <= 1 && self.workspaces.len() <= 1 {
-                        self.should_quit = true;
-                        return;
-                    }
-                    let ws = &mut self.workspaces[ws_idx];
-                    if let Some(new_focus) = ws.layout.close_pane(group_id) {
-                        ws.groups.remove(&group_id);
-                        ws.active_group = new_focus;
-                    } else if self.workspaces.len() > 1 {
-                        self.workspaces.remove(ws_idx);
-                        if self.active_workspace >= self.workspaces.len() {
-                            self.active_workspace = self.workspaces.len() - 1;
-                        }
-                    } else {
-                        self.should_quit = true;
-                    }
-                } else {
-                    let ws = &mut self.workspaces[ws_idx];
-                    if let Some(group) = ws.groups.get_mut(&group_id) {
-                        if let Some(idx) = group.tabs.iter().position(|p| p.id == pane_id) {
-                            group.close_tab(idx);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     fn handle_mouse_down(&mut self, x: u16, y: u16, tui: &Tui) -> anyhow::Result<()> {
         let size = tui.size()?;
-        let bar_h = self.workspace_bar_height();
+        let bar_h = self.state.workspace_bar_height();
 
-        // Check workspace bar clicks first
         if y < bar_h {
-            let names: Vec<String> = self.workspaces.iter().map(|ws| ws.name.clone()).collect();
+            let names: Vec<String> = self
+                .state
+                .workspaces
+                .iter()
+                .map(|ws| ws.name.clone())
+                .collect();
             let bar_area = ratatui::layout::Rect::new(0, 0, size.width, bar_h);
             if let Some(click) = crate::ui::workspace_bar::hit_test(
                 &names,
-                self.active_workspace,
+                self.state.active_workspace,
                 self.hovered_workspace_tab,
                 bar_area,
                 x,
@@ -449,21 +273,23 @@ impl App {
             ) {
                 match click {
                     crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
-                        if i < self.workspaces.len() {
-                            self.active_workspace = i;
+                        if i < self.state.workspaces.len() {
+                            self.state.active_workspace = i;
                         }
                     }
                     crate::ui::workspace_bar::WorkspaceBarClick::CloseTab(i) => {
-                        if self.workspaces.len() > 1 && i < self.workspaces.len() {
-                            self.workspaces.remove(i);
-                            if self.active_workspace >= self.workspaces.len() {
-                                self.active_workspace = self.workspaces.len() - 1;
+                        if self.state.workspaces.len() > 1 && i < self.state.workspaces.len() {
+                            self.state.workspaces.remove(i);
+                            if self.state.active_workspace >= self.state.workspaces.len() {
+                                self.state.active_workspace = self.state.workspaces.len() - 1;
                             }
                             self.hovered_workspace_tab = None;
                         }
                     }
                     crate::ui::workspace_bar::WorkspaceBarClick::NewWorkspace => {
-                        self.new_workspace(tui)?;
+                        let cols = size.width.saturating_sub(2);
+                        let rows = size.height.saturating_sub(3);
+                        self.state.new_workspace(cols, rows)?;
                     }
                 }
             }
@@ -473,12 +299,18 @@ impl App {
         let body_height = size.height.saturating_sub(1 + bar_h);
         let body = ratatui::layout::Rect::new(0, bar_h, size.width, body_height);
 
-        // Check fold bars FIRST — they take priority over split border drag
-        let params = crate::layout::LayoutParams::from(&self.config.behavior);
-        let ws = self.active_workspace();
-        let resolved = ws.layout.resolve_with_fold(body, params, &ws.leaf_min_sizes);
+        let params = crate::layout::LayoutParams::from(&self.state.config.behavior);
+        let ws = self.state.active_workspace();
+        let resolved = ws
+            .layout
+            .resolve_with_fold(body, params, &ws.leaf_min_sizes);
         for rp in &resolved {
-            if let ResolvedPane::Folded { id: group_id, rect, .. } = rp {
+            if let ResolvedPane::Folded {
+                id: group_id,
+                rect,
+                ..
+            } = rp
+            {
                 if rect.width == 0 || rect.height == 0 {
                     continue;
                 }
@@ -488,18 +320,19 @@ impl App {
                     && y < rect.y + rect.height
                 {
                     let group_id = *group_id;
-                    // Clear stale leaf minimums so the new ratio takes full effect
-                    self.active_workspace_mut().leaf_min_sizes.clear();
-                    self.active_workspace_mut().layout.unfold_towards(group_id);
-                    self.active_workspace_mut().active_group = group_id;
-                    self.resize_all_panes(size.width, size.height);
+                    self.state.active_workspace_mut().leaf_min_sizes.clear();
+                    self.state
+                        .active_workspace_mut()
+                        .layout
+                        .unfold_towards(group_id);
+                    self.state.active_workspace_mut().active_group = group_id;
+                    self.state.resize_all_panes(size.width, size.height);
                     return Ok(());
                 }
             }
         }
 
-        // Then check split borders for drag resize
-        let ws = self.active_workspace();
+        let ws = self.state.active_workspace();
         if let Some((pane_id, direction, border_pos, total_size)) =
             ws.layout.find_split_border(x, y, body)
         {
@@ -512,15 +345,17 @@ impl App {
             return Ok(());
         }
 
-        // Finally, check visible panes for focus
         for rp in &resolved {
-            if let ResolvedPane::Visible { id: group_id, rect } = rp {
+            if let ResolvedPane::Visible {
+                id: group_id, rect, ..
+            } = rp
+            {
                 if x >= rect.x
                     && x < rect.x + rect.width
                     && y >= rect.y
                     && y < rect.y + rect.height
                 {
-                    self.active_workspace_mut().active_group = *group_id;
+                    self.state.active_workspace_mut().active_group = *group_id;
                     return Ok(());
                 }
             }
@@ -541,24 +376,31 @@ impl App {
             let delta_ratio = delta_px / drag.total_size as f64;
             let pane_id = drag.pane_id;
 
-            self.active_workspace_mut().layout.resize(pane_id, delta_ratio);
+            self.state
+                .active_workspace_mut()
+                .layout
+                .resize(pane_id, delta_ratio);
 
             if let Some(drag) = &mut self.drag_state {
                 drag.start_pos = current_pos;
             }
 
-            self.update_leaf_mins();
+            self.state.update_leaf_mins();
         }
     }
 
     fn handle_mouse_move(&mut self, x: u16, y: u16) {
         if y == 0 {
-            let names: Vec<String> = self.workspaces.iter().map(|ws| ws.name.clone()).collect();
-            let area = ratatui::layout::Rect::new(0, 0, self.last_size.0, 1);
-            // Find which tab the mouse is over
+            let names: Vec<String> = self
+                .state
+                .workspaces
+                .iter()
+                .map(|ws| ws.name.clone())
+                .collect();
+            let area = ratatui::layout::Rect::new(0, 0, self.state.last_size.0, 1);
             if let Some(click) = crate::ui::workspace_bar::hit_test(
                 &names,
-                self.active_workspace,
+                self.state.active_workspace,
                 self.hovered_workspace_tab,
                 area,
                 x,
@@ -581,80 +423,41 @@ impl App {
         }
     }
 
-    /// Compute proportional leaf sizes and store custom minimums for any pane
-    /// whose size is below the global config default (set by user drag/resize).
-    fn update_leaf_mins(&mut self) {
-        let (w, h) = self.last_size;
-        if w == 0 || h == 0 {
-            return;
-        }
-        let bar_h = 1u16;
-        let body_height = h.saturating_sub(1 + bar_h);
-        let body = ratatui::layout::Rect::new(0, bar_h, w, body_height);
-        let min_pw = self.config.behavior.min_pane_width;
-        let min_ph = self.config.behavior.min_pane_height;
-
-        let ws = &mut self.workspaces[self.active_workspace];
-        let resolved = ws.layout.resolve(body);
-        for (id, rect) in resolved {
-            if rect.width < min_pw || rect.height < min_ph {
-                ws.leaf_min_sizes.insert(id, (rect.width.max(1), rect.height.max(1)));
-            } else {
-                ws.leaf_min_sizes.remove(&id);
-            }
-        }
-    }
-
-    /// Focus a pane group and unfold it if it's currently folded.
     fn focus_group(&mut self, id: PaneGroupId) {
-        let (w, h) = self.last_size;
-        let bar_h = self.workspace_bar_height();
-        let body_height = h.saturating_sub(1 + bar_h);
-        let body = ratatui::layout::Rect::new(0, bar_h, w, body_height);
-        let params = crate::layout::LayoutParams::from(&self.config.behavior);
-
-        let ws = &self.workspaces[self.active_workspace];
-        let resolved = ws.layout.resolve_with_fold(body, params, &ws.leaf_min_sizes);
-        let is_folded = resolved.iter().any(|rp| matches!(rp, ResolvedPane::Folded { id: fid, .. } if *fid == id));
-
-        let ws = &mut self.workspaces[self.active_workspace];
-        ws.active_group = id;
-        if is_folded {
-            ws.leaf_min_sizes.clear();
-            ws.layout.unfold_towards(id);
-            self.resize_all_panes(w, h);
-        }
+        let bar_h = self.state.workspace_bar_height();
+        self.state.focus_group(id, bar_h);
     }
 
     fn handle_key_event(&mut self, key: KeyEvent, tui: &Tui) -> anyhow::Result<()> {
-        // Modal keys: these modes handle their own input
         match &self.mode {
             Mode::SessionPicker => return self.handle_session_picker_key(key, tui),
-            Mode::Help => {
-                if key.code == KeyCode::Esc {
-                    self.mode = Mode::Normal;
-                }
-                return Ok(());
-            }
+            Mode::Help => return self.handle_help_key(key),
             Mode::DevServerInput => return self.handle_dev_server_input_key(key, tui),
             Mode::Scroll => return self.handle_scroll_key(key),
+            Mode::Copy => {
+                return self.handle_copy_mode_key(key);
+            }
+            Mode::CommandPalette => return self.handle_command_palette_key(key, tui),
             Mode::Normal => {}
         }
 
-        // KeyMap dispatch
         let normalized = config::normalize_key(key);
-        if let Some(action) = self.config.keys.lookup(&normalized).cloned() {
+        if let Some(action) = self.state.config.keys.lookup(&normalized).cloned() {
             return self.execute_action(action, tui);
         }
 
-        // Forward to PTY
-        let ws = self.active_workspace_mut();
-        let group = ws.groups.get_mut(&ws.active_group);
-        if let Some(group) = group {
-            let pane = group.active_pane_mut();
-            let bytes = key_to_bytes(key);
-            if !bytes.is_empty() {
-                pane.write_input(&bytes);
+        let bytes = key_to_bytes(key);
+        if !bytes.is_empty() {
+            let ws = self.state.active_workspace_mut();
+            if ws.sync_panes {
+                // Broadcast to all panes in workspace
+                for group in ws.groups.values_mut() {
+                    for pane in &mut group.tabs {
+                        pane.write_input(&bytes);
+                    }
+                }
+            } else if let Some(group) = ws.groups.get_mut(&ws.active_group) {
+                group.active_pane_mut().write_input(&bytes);
             }
         }
 
@@ -662,49 +465,75 @@ impl App {
     }
 
     fn execute_action(&mut self, action: Action, tui: &Tui) -> anyhow::Result<()> {
+        let size = || -> anyhow::Result<(u16, u16)> {
+            let s = tui.size()?;
+            Ok((s.width, s.height))
+        };
+
         match action {
             Action::Quit => {
                 self.should_quit = true;
             }
             Action::NewWorkspace => {
-                self.new_workspace(tui)?;
+                let (w, h) = size()?;
+                let cols = w.saturating_sub(2);
+                let rows = h.saturating_sub(3);
+                self.state.new_workspace(cols, rows)?;
             }
             Action::CloseWorkspace => {
-                self.close_workspace();
+                self.state.close_workspace();
             }
             Action::SwitchWorkspace(n) => {
                 let idx = (n as usize) - 1;
-                if idx < self.workspaces.len() {
-                    self.active_workspace = idx;
+                if idx < self.state.workspaces.len() {
+                    self.state.active_workspace = idx;
                 }
             }
             Action::NewTab => {
-                self.add_tab_to_active_group(PaneKind::Shell, None, tui)?;
+                let (w, h) = size()?;
+                let cols = w.saturating_sub(4);
+                let rows = h.saturating_sub(3);
+                self.state
+                    .add_tab_to_active_group(PaneKind::Shell, None, cols, rows)?;
             }
             Action::DevServerInput => {
                 self.dev_server_input.clear();
                 self.mode = Mode::DevServerInput;
             }
             Action::NextTab => {
-                self.active_workspace_mut().active_group_mut().next_tab();
+                self.state.active_workspace_mut().active_group_mut().next_tab();
             }
             Action::PrevTab => {
-                self.active_workspace_mut().active_group_mut().prev_tab();
+                self.state.active_workspace_mut().active_group_mut().prev_tab();
             }
             Action::CloseTab => {
-                self.close_active_tab();
+                self.state.close_active_tab();
             }
             Action::SplitHorizontal => {
-                self.split_active_group(SplitDirection::Horizontal, PaneKind::Shell, tui)?;
+                let (w, h) = size()?;
+                let cols = w.saturating_sub(4) / 2;
+                let rows = h.saturating_sub(3);
+                self.state
+                    .split_active_group(SplitDirection::Horizontal, PaneKind::Shell, cols, rows)?;
             }
             Action::SplitVertical => {
-                self.split_active_group(SplitDirection::Vertical, PaneKind::Shell, tui)?;
+                let (w, h) = size()?;
+                let cols = w.saturating_sub(4) / 2;
+                let rows = h.saturating_sub(3);
+                self.state
+                    .split_active_group(SplitDirection::Vertical, PaneKind::Shell, cols, rows)?;
             }
             Action::RestartPane => {
-                self.restart_active_pane(tui)?;
+                let (w, h) = size()?;
+                let cols = w.saturating_sub(4);
+                let rows = h.saturating_sub(3);
+                self.state.restart_active_pane(cols, rows)?;
             }
             Action::FocusLeft => {
-                let ws = self.active_workspace();
+                if self.vim_forward_if_active(KeyCode::Char('h'), KeyModifiers::ALT) {
+                    return Ok(());
+                }
+                let ws = self.state.active_workspace();
                 if let Some(id) = ws.layout.find_neighbor(
                     ws.active_group,
                     SplitDirection::Horizontal,
@@ -714,7 +543,10 @@ impl App {
                 }
             }
             Action::FocusDown => {
-                let ws = self.active_workspace();
+                if self.vim_forward_if_active(KeyCode::Char('j'), KeyModifiers::ALT) {
+                    return Ok(());
+                }
+                let ws = self.state.active_workspace();
                 if let Some(id) = ws.layout.find_neighbor(
                     ws.active_group,
                     SplitDirection::Vertical,
@@ -724,7 +556,10 @@ impl App {
                 }
             }
             Action::FocusUp => {
-                let ws = self.active_workspace();
+                if self.vim_forward_if_active(KeyCode::Char('k'), KeyModifiers::ALT) {
+                    return Ok(());
+                }
+                let ws = self.state.active_workspace();
                 if let Some(id) = ws.layout.find_neighbor(
                     ws.active_group,
                     SplitDirection::Vertical,
@@ -734,7 +569,10 @@ impl App {
                 }
             }
             Action::FocusRight => {
-                let ws = self.active_workspace();
+                if self.vim_forward_if_active(KeyCode::Char('l'), KeyModifiers::ALT) {
+                    return Ok(());
+                }
+                let ws = self.state.active_workspace();
                 if let Some(id) = ws.layout.find_neighbor(
                     ws.active_group,
                     SplitDirection::Horizontal,
@@ -745,47 +583,54 @@ impl App {
             }
             Action::FocusGroupN(n) => {
                 let idx = (n as usize) - 1;
-                let ws = self.active_workspace();
+                let ws = self.state.active_workspace();
                 let ids = ws.layout.group_ids();
                 if let Some(&id) = ids.get(idx) {
                     self.focus_group(id);
                 }
             }
             Action::MoveTabLeft => {
-                self.move_tab_to_neighbor(SplitDirection::Horizontal, Side::First);
+                self.state
+                    .move_tab_to_neighbor(SplitDirection::Horizontal, Side::First);
             }
             Action::MoveTabDown => {
-                self.move_tab_to_neighbor(SplitDirection::Vertical, Side::Second);
+                self.state
+                    .move_tab_to_neighbor(SplitDirection::Vertical, Side::Second);
             }
             Action::MoveTabUp => {
-                self.move_tab_to_neighbor(SplitDirection::Vertical, Side::First);
+                self.state
+                    .move_tab_to_neighbor(SplitDirection::Vertical, Side::First);
             }
             Action::MoveTabRight => {
-                self.move_tab_to_neighbor(SplitDirection::Horizontal, Side::Second);
+                self.state
+                    .move_tab_to_neighbor(SplitDirection::Horizontal, Side::Second);
             }
             Action::ResizeShrinkH => {
-                let active = self.active_workspace().active_group;
-                self.active_workspace_mut().layout.resize(active, -0.05);
-                self.update_leaf_mins();
+                let active = self.state.active_workspace().active_group;
+                self.state.active_workspace_mut().layout.resize(active, -0.05);
+                self.state.update_leaf_mins();
             }
             Action::ResizeGrowH => {
-                let active = self.active_workspace().active_group;
-                self.active_workspace_mut().layout.resize(active, 0.05);
-                self.update_leaf_mins();
+                let active = self.state.active_workspace().active_group;
+                self.state.active_workspace_mut().layout.resize(active, 0.05);
+                self.state.update_leaf_mins();
             }
             Action::ResizeGrowV => {
-                let active = self.active_workspace().active_group;
-                self.active_workspace_mut().layout.resize(active, 0.05);
-                self.update_leaf_mins();
+                let active = self.state.active_workspace().active_group;
+                self.state.active_workspace_mut().layout.resize(active, 0.05);
+                self.state.update_leaf_mins();
             }
             Action::ResizeShrinkV => {
-                let active = self.active_workspace().active_group;
-                self.active_workspace_mut().layout.resize(active, -0.05);
-                self.update_leaf_mins();
+                let active = self.state.active_workspace().active_group;
+                self.state
+                    .active_workspace_mut()
+                    .layout
+                    .resize(active, -0.05);
+                self.state.update_leaf_mins();
             }
             Action::Equalize => {
-                self.active_workspace_mut().layout.equalize();
-                self.active_workspace_mut().leaf_min_sizes.clear();
+                self.state.active_workspace_mut().layout.equalize();
+                self.state.active_workspace_mut().leaf_min_sizes.clear();
             }
             Action::SessionPicker => {
                 self.session_list = session::store::list().unwrap_or_default();
@@ -793,15 +638,103 @@ impl App {
                 self.mode = Mode::SessionPicker;
             }
             Action::Help => {
+                self.help_state = HelpState::default();
                 self.mode = Mode::Help;
             }
             Action::ScrollMode => {
-                let rows = self.active_pane_screen_rows();
-                self.scroll_active_pane(|p| p.scroll_up(rows / 2));
-                if self.is_active_pane_scrolled() {
+                let rows = self.state.active_pane_screen_rows();
+                self.state.scroll_active_pane(|p| p.scroll_up(rows / 2));
+                if self.state.is_active_pane_scrolled() {
                     self.mode = Mode::Scroll;
                 }
             }
+            Action::CopyMode => {
+                let ws = self.state.active_workspace();
+                if let Some(group) = ws.groups.get(&ws.active_group) {
+                    let pane = group.active_pane();
+                    let (cursor_row, cursor_col) = pane.screen().cursor_position();
+                    let (rows, cols) = pane.screen().size();
+                    self.copy_mode_state = Some(CopyModeState::new(
+                        rows as usize,
+                        cols as usize,
+                        cursor_row as usize,
+                        cursor_col as usize,
+                    ));
+                    self.mode = Mode::Copy;
+                }
+            }
+            Action::CommandPalette => {
+                self.command_palette_state =
+                    Some(CommandPaletteState::new(&self.state.config.keys));
+                self.mode = Mode::CommandPalette;
+            }
+            Action::PasteClipboard => {
+                if let Ok(text) = clipboard::paste_from_clipboard() {
+                    let bytes = text.into_bytes();
+                    if !bytes.is_empty() {
+                        let ws = self.state.active_workspace_mut();
+                        if let Some(group) = ws.groups.get_mut(&ws.active_group) {
+                            group.active_pane_mut().write_input(&bytes);
+                        }
+                    }
+                }
+            }
+            Action::SelectLayout(name) => {
+                if let Some(preset) = LayoutPreset::from_name(&name) {
+                    let ws = self.state.active_workspace_mut();
+                    let group_ids = ws.layout.group_ids();
+                    if !group_ids.is_empty() {
+                        ws.layout = preset.build(&group_ids);
+                        let (w, h) = self.state.last_size;
+                        self.state.resize_all_panes(w, h);
+                    }
+                }
+            }
+            Action::ToggleSyncPanes => {
+                let ws = self.state.active_workspace_mut();
+                ws.sync_panes = !ws.sync_panes;
+            }
+            Action::RenameWindow => {
+                // TODO: needs an input mode to collect the new name
+            }
+            Action::RenamePane | Action::Detach => {
+                // Will be implemented in later phases
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_copy_mode_key(&mut self, key: KeyEvent) -> anyhow::Result<()> {
+        let screen = {
+            let ws = self.state.active_workspace();
+            ws.groups
+                .get(&ws.active_group)
+                .map(|g| g.active_pane().screen().clone())
+        };
+        let screen = match screen {
+            Some(s) => s,
+            None => {
+                self.mode = Mode::Normal;
+                self.copy_mode_state = None;
+                return Ok(());
+            }
+        };
+
+        if let Some(ref mut cms) = self.copy_mode_state {
+            match cms.handle_key(key, &screen) {
+                CopyModeAction::None => {}
+                CopyModeAction::YankSelection(text) => {
+                    let _ = clipboard::copy_to_clipboard(&text);
+                    self.copy_mode_state = None;
+                    self.mode = Mode::Normal;
+                }
+                CopyModeAction::Exit => {
+                    self.copy_mode_state = None;
+                    self.mode = Mode::Normal;
+                }
+            }
+        } else {
+            self.mode = Mode::Normal;
         }
         Ok(())
     }
@@ -810,32 +743,32 @@ impl App {
         let mods = key.modifiers;
         match key.code {
             KeyCode::Up | KeyCode::Char('k') if mods.is_empty() => {
-                self.scroll_active_pane(|p| p.scroll_up(1));
+                self.state.scroll_active_pane(|p| p.scroll_up(1));
             }
             KeyCode::Down | KeyCode::Char('j') if mods.is_empty() => {
-                self.scroll_active_pane(|p| p.scroll_down(1));
+                self.state.scroll_active_pane(|p| p.scroll_down(1));
             }
             KeyCode::PageUp => {
-                let rows = self.active_pane_screen_rows();
-                self.scroll_active_pane(|p| p.scroll_up(rows / 2));
+                let rows = self.state.active_pane_screen_rows();
+                self.state.scroll_active_pane(|p| p.scroll_up(rows / 2));
             }
             KeyCode::Char('u') if mods.contains(KeyModifiers::CONTROL) => {
-                let rows = self.active_pane_screen_rows();
-                self.scroll_active_pane(|p| p.scroll_up(rows / 2));
+                let rows = self.state.active_pane_screen_rows();
+                self.state.scroll_active_pane(|p| p.scroll_up(rows / 2));
             }
             KeyCode::PageDown => {
-                let rows = self.active_pane_screen_rows();
-                self.scroll_active_pane(|p| p.scroll_down(rows / 2));
+                let rows = self.state.active_pane_screen_rows();
+                self.state.scroll_active_pane(|p| p.scroll_down(rows / 2));
             }
             KeyCode::Char('d') if mods.contains(KeyModifiers::CONTROL) => {
-                let rows = self.active_pane_screen_rows();
-                self.scroll_active_pane(|p| p.scroll_down(rows / 2));
+                let rows = self.state.active_pane_screen_rows();
+                self.state.scroll_active_pane(|p| p.scroll_down(rows / 2));
             }
             KeyCode::Char('g') if mods.is_empty() => {
-                self.scroll_active_pane(|p| p.scroll_to_top());
+                self.state.scroll_active_pane(|p| p.scroll_to_top());
             }
             KeyCode::Home => {
-                self.scroll_active_pane(|p| p.scroll_to_top());
+                self.state.scroll_active_pane(|p| p.scroll_to_top());
             }
             KeyCode::Char('G') | KeyCode::End => {
                 self.exit_scroll_mode();
@@ -845,7 +778,7 @@ impl App {
             }
             _ => {
                 self.exit_scroll_mode();
-                let ws = self.active_workspace_mut();
+                let ws = self.state.active_workspace_mut();
                 let group = ws.groups.get_mut(&ws.active_group);
                 if let Some(group) = group {
                     let pane = group.active_pane_mut();
@@ -857,44 +790,135 @@ impl App {
                 return Ok(());
             }
         }
-        if !self.is_active_pane_scrolled() {
+        if !self.state.is_active_pane_scrolled() {
             self.mode = Mode::Normal;
         }
         Ok(())
     }
 
-    fn scroll_active_pane(&mut self, f: impl FnOnce(&mut Pane)) {
-        let ws = self.active_workspace_mut();
-        if let Some(group) = ws.groups.get_mut(&ws.active_group) {
-            f(group.active_pane_mut());
-        }
-    }
-
-    fn is_active_pane_scrolled(&self) -> bool {
-        let ws = self.active_workspace();
-        ws.groups
-            .get(&ws.active_group)
-            .map(|g| g.active_pane().is_scrolled())
-            .unwrap_or(false)
-    }
-
-    fn active_pane_screen_rows(&self) -> usize {
-        let ws = self.active_workspace();
-        ws.groups
-            .get(&ws.active_group)
-            .map(|g| g.active_pane().screen().size().0 as usize)
-            .unwrap_or(24)
-    }
-
     fn exit_scroll_mode(&mut self) {
-        self.scroll_active_pane(|p| p.scroll_to_bottom());
+        self.state.scroll_active_pane(|p| p.scroll_to_bottom());
         self.mode = Mode::Normal;
+    }
+
+    fn handle_help_key(&mut self, key: KeyEvent) -> anyhow::Result<()> {
+        if let Some(ref mut search) = self.help_state.search_input {
+            // In search mode within help
+            match key.code {
+                KeyCode::Esc => {
+                    self.help_state.search_input = None;
+                }
+                KeyCode::Backspace => {
+                    search.pop();
+                    if search.is_empty() {
+                        self.help_state.search_input = None;
+                    }
+                }
+                KeyCode::Char(c) => {
+                    search.push(c);
+                }
+                KeyCode::Enter => {
+                    // Stay in search mode, just close the search input
+                    // (results remain filtered)
+                }
+                _ => {}
+            }
+        } else {
+            match key.code {
+                KeyCode::Esc => {
+                    self.mode = Mode::Normal;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.help_state.scroll_offset += 1;
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.help_state.scroll_offset =
+                        self.help_state.scroll_offset.saturating_sub(1);
+                }
+                KeyCode::Char('/') => {
+                    self.help_state.search_input = Some(String::new());
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_command_palette_key(
+        &mut self,
+        key: KeyEvent,
+        tui: &Tui,
+    ) -> anyhow::Result<()> {
+        if let Some(ref mut cp) = self.command_palette_state {
+            match key.code {
+                KeyCode::Esc => {
+                    self.command_palette_state = None;
+                    self.mode = Mode::Normal;
+                }
+                KeyCode::Enter => {
+                    if let Some(action) = cp.selected_action() {
+                        self.command_palette_state = None;
+                        self.mode = Mode::Normal;
+                        return self.execute_action(action, tui);
+                    }
+                }
+                KeyCode::Up => {
+                    cp.move_up();
+                }
+                KeyCode::Down => {
+                    cp.move_down();
+                }
+                KeyCode::Backspace => {
+                    cp.input.pop();
+                    cp.update_filter();
+                }
+                KeyCode::Char(c) => {
+                    cp.input.push(c);
+                    cp.update_filter();
+                }
+                _ => {}
+            }
+        } else {
+            // No command palette state, cancel
+            self.mode = Mode::Normal;
+        }
+        Ok(())
+    }
+
+    /// If vim_navigator is enabled and the active pane is running vim/nvim,
+    /// forward the key press to the PTY and return true.
+    fn vim_forward_if_active(&mut self, code: KeyCode, mods: KeyModifiers) -> bool {
+        if !self.state.config.behavior.vim_navigator {
+            return false;
+        }
+        let ws = self.state.active_workspace();
+        let title = ws
+            .groups
+            .get(&ws.active_group)
+            .map(|g| g.active_pane().title.to_lowercase())
+            .unwrap_or_default();
+
+        if !title.contains("vim") && !title.contains("nvim") {
+            return false;
+        }
+
+        let key = KeyEvent::new(code, mods);
+        let bytes = key_to_bytes(key);
+        if bytes.is_empty() {
+            return false;
+        }
+
+        let ws = self.state.active_workspace_mut();
+        if let Some(group) = ws.groups.get_mut(&ws.active_group) {
+            group.active_pane_mut().write_input(&bytes);
+        }
+        true
     }
 
     fn handle_session_picker_key(&mut self, key: KeyEvent, tui: &Tui) -> anyhow::Result<()> {
         match key.code {
             KeyCode::Esc => {
-                let has_real_panes = self.workspaces.iter().any(|ws| {
+                let has_real_panes = self.state.workspaces.iter().any(|ws| {
                     ws.groups
                         .values()
                         .any(|g| g.tabs.iter().any(|p| !p.exited))
@@ -925,29 +949,19 @@ impl App {
             KeyCode::Enter => {
                 if let Some(summary) = self.session_list.get(self.session_selected) {
                     if let Ok(session) = session::store::load(&summary.id) {
-                        let config = self.config.clone();
+                        let config = self.state.config.clone();
                         let restored =
-                            App::restore_session(session, self.event_tx.clone(), tui, config)?;
-                        self.workspaces = restored.workspaces;
-                        self.active_workspace = restored.active_workspace;
-                        self.session_name = restored.session_name;
-                        self.session_id = restored.session_id;
-                        self.session_created_at = restored.session_created_at;
-                        self.last_size = restored.last_size;
+                            App::restore_session(session, self.state.event_tx.clone(), tui, config)?;
+                        self.state = restored.state;
                         self.mode = Mode::Normal;
                     }
                 }
             }
             KeyCode::Char('n') => {
                 let name = format!("session-{}", self.session_list.len() + 1);
-                let config = self.config.clone();
-                let new = App::new_session(name, &self.event_tx, tui, config)?;
-                self.workspaces = new.workspaces;
-                self.active_workspace = new.active_workspace;
-                self.session_name = new.session_name;
-                self.session_id = new.session_id;
-                self.session_created_at = new.session_created_at;
-                self.last_size = new.last_size;
+                let config = self.state.config.clone();
+                let new = App::new_session(name, &self.state.event_tx, tui, config)?;
+                self.state = new.state;
                 self.mode = Mode::Normal;
             }
             KeyCode::Char('d') => {
@@ -974,7 +988,11 @@ impl App {
             KeyCode::Enter => {
                 let cmd = self.dev_server_input.clone();
                 if !cmd.is_empty() {
-                    self.add_tab_to_active_group(PaneKind::DevServer, Some(cmd), tui)?;
+                    let size = tui.size()?;
+                    let cols = size.width.saturating_sub(4);
+                    let rows = size.height.saturating_sub(3);
+                    self.state
+                        .add_tab_to_active_group(PaneKind::DevServer, Some(cmd), cols, rows)?;
                 }
                 self.mode = Mode::Normal;
             }
@@ -988,233 +1006,12 @@ impl App {
         }
         Ok(())
     }
-
-    fn add_tab_to_active_group(
-        &mut self,
-        kind: PaneKind,
-        command: Option<String>,
-        tui: &Tui,
-    ) -> anyhow::Result<()> {
-        let pane_id = PaneId::new_v4();
-        let size = tui.size()?;
-        let cols = size.width.saturating_sub(4);
-        let rows = size.height.saturating_sub(3);
-
-        let pane = match Pane::spawn(pane_id, kind.clone(), cols, rows, self.event_tx.clone(), command)
-        {
-            Ok(p) => p,
-            Err(e) => Pane::spawn_error(pane_id, kind, &e.to_string()),
-        };
-
-        let ws = self.active_workspace_mut();
-        if let Some(group) = ws.groups.get_mut(&ws.active_group) {
-            group.add_tab(pane);
-        }
-        Ok(())
-    }
-
-    fn split_active_group(
-        &mut self,
-        direction: SplitDirection,
-        kind: PaneKind,
-        tui: &Tui,
-    ) -> anyhow::Result<()> {
-        let new_group_id = PaneGroupId::new_v4();
-        let pane_id = PaneId::new_v4();
-        let size = tui.size()?;
-        let cols = size.width.saturating_sub(4) / 2;
-        let rows = size.height.saturating_sub(3);
-
-        let pane = match Pane::spawn(pane_id, kind.clone(), cols, rows, self.event_tx.clone(), None)
-        {
-            Ok(p) => p,
-            Err(e) => Pane::spawn_error(pane_id, kind, &e.to_string()),
-        };
-
-        let group = PaneGroup::new(new_group_id, pane);
-        let ws = self.active_workspace_mut();
-        ws.layout
-            .split_pane(ws.active_group, direction, new_group_id);
-        ws.groups.insert(new_group_id, group);
-        ws.active_group = new_group_id;
-
-        self.resize_all_panes(size.width, size.height);
-        Ok(())
-    }
-
-    fn close_active_tab(&mut self) {
-        let ws = self.active_workspace_mut();
-        let active_group_id = ws.active_group;
-
-        if let Some(group) = ws.groups.get_mut(&active_group_id) {
-            if group.tab_count() > 1 {
-                group.close_tab(group.active_tab);
-                return;
-            }
-        }
-
-        let group_ids = ws.layout.group_ids();
-        if group_ids.len() <= 1 {
-            return;
-        }
-
-        if let Some(new_focus) = ws.layout.close_pane(active_group_id) {
-            ws.groups.remove(&active_group_id);
-            ws.active_group = new_focus;
-        }
-    }
-
-    fn move_tab_to_neighbor(&mut self, direction: SplitDirection, side: Side) {
-        let ws = self.active_workspace();
-        let source_group_id = ws.active_group;
-
-        let neighbor_id = match ws.layout.find_neighbor(source_group_id, direction, side) {
-            Some(id) => id,
-            None => return,
-        };
-
-        let ws = self.active_workspace();
-        if ws
-            .groups
-            .get(&source_group_id)
-            .map_or(true, |g| g.tabs.len() <= 1)
-        {
-            return;
-        }
-
-        let ws = self.active_workspace_mut();
-        let tab_idx = ws.groups.get(&source_group_id).unwrap().active_tab;
-        let pane = ws
-            .groups
-            .get_mut(&source_group_id)
-            .unwrap()
-            .remove_tab(tab_idx)
-            .unwrap();
-        ws.groups.get_mut(&neighbor_id).unwrap().add_tab(pane);
-        ws.active_group = neighbor_id;
-    }
-
-    fn new_workspace(&mut self, tui: &Tui) -> anyhow::Result<()> {
-        let pane_id = PaneId::new_v4();
-        let group_id = PaneGroupId::new_v4();
-        let size = tui.size()?;
-        let cols = size.width.saturating_sub(2);
-        let rows = size.height.saturating_sub(3);
-
-        let pane = match Pane::spawn(pane_id, PaneKind::Shell, cols, rows, self.event_tx.clone(), None)
-        {
-            Ok(p) => p,
-            Err(e) => Pane::spawn_error(pane_id, PaneKind::Shell, &e.to_string()),
-        };
-
-        let group = PaneGroup::new(group_id, pane);
-        let workspace = Workspace::new(auto_workspace_name(), group_id, group);
-        self.workspaces.push(workspace);
-        self.active_workspace = self.workspaces.len() - 1;
-        Ok(())
-    }
-
-    fn close_workspace(&mut self) {
-        if self.workspaces.len() <= 1 {
-            return;
-        }
-        self.workspaces.remove(self.active_workspace);
-        if self.active_workspace >= self.workspaces.len() {
-            self.active_workspace = self.workspaces.len() - 1;
-        }
-    }
-
-    fn restart_active_pane(&mut self, tui: &Tui) -> anyhow::Result<()> {
-        let active_group_id = self.active_workspace().active_group;
-        let (exited, kind, command, id) = {
-            let ws = self.active_workspace();
-            if let Some(group) = ws.groups.get(&active_group_id) {
-                let pane = group.active_pane();
-                (pane.exited, pane.kind.clone(), pane.command.clone(), pane.id)
-            } else {
-                return Ok(());
-            }
-        };
-
-        if !exited {
-            return Ok(());
-        }
-
-        let size = tui.size()?;
-        let cols = size.width.saturating_sub(4);
-        let rows = size.height.saturating_sub(3);
-
-        let new_pane =
-            match Pane::spawn(id, kind.clone(), cols, rows, self.event_tx.clone(), command) {
-                Ok(p) => p,
-                Err(e) => Pane::spawn_error(id, kind, &e.to_string()),
-            };
-
-        let ws = self.active_workspace_mut();
-        if let Some(group) = ws.groups.get_mut(&active_group_id) {
-            *group.active_pane_mut() = new_pane;
-        }
-        Ok(())
-    }
-
-    fn workspace_bar_height(&self) -> u16 {
-        1
-    }
-
-    fn resize_all_panes(&mut self, w: u16, h: u16) {
-        let overhead = 1 + self.workspace_bar_height(); // status bar + optional workspace bar
-        let body_height = h.saturating_sub(overhead);
-        let size = ratatui::layout::Rect::new(0, 0, w, body_height);
-
-        let params = crate::layout::LayoutParams::from(&self.config.behavior);
-        for ws in &mut self.workspaces {
-            let resolved = ws.layout.resolve_with_fold(size, params, &ws.leaf_min_sizes);
-            for rp in resolved {
-                match rp {
-                    ResolvedPane::Visible { id: group_id, rect } => {
-                        if let Some(group) = ws.groups.get_mut(&group_id) {
-                            let has_tab_bar = group.tab_count() > 1;
-                            let tab_bar_offset: u16 = if has_tab_bar { 1 } else { 0 };
-                            let cols = rect.width.saturating_sub(4);
-                            let rows = rect.height.saturating_sub(2 + tab_bar_offset);
-                            if cols > 0 && rows > 0 {
-                                for pane in &mut group.tabs {
-                                    pane.resize_pty(cols, rows);
-                                }
-                            }
-                        }
-                    }
-                    ResolvedPane::Folded { .. } => {}
-                }
-            }
-        }
-    }
 }
 
 pub enum CliArgs {
     Default,
     New(String),
     Attach(String),
-}
-
-impl CliArgs {
-    pub fn parse() -> Self {
-        let args: Vec<String> = std::env::args().collect();
-        match args.get(1).map(|s| s.as_str()) {
-            Some("new") => {
-                let name = args
-                    .get(2)
-                    .cloned()
-                    .unwrap_or_else(|| format!("session-{}", chrono::Utc::now().timestamp()));
-                CliArgs::New(name)
-            }
-            Some("attach") => {
-                let name = args.get(2).cloned().unwrap_or_else(|| "default".to_string());
-                CliArgs::Attach(name)
-            }
-            _ => CliArgs::Default,
-        }
-    }
 }
 
 /// Convert a crossterm KeyEvent to bytes suitable for writing to a PTY.
@@ -1276,6 +1073,7 @@ pub(crate) fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pane::Pane;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     fn make_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
@@ -1442,6 +1240,13 @@ mod tests {
     }
 
     #[test]
+    fn test_new_modes_exist() {
+        assert_ne!(Mode::Copy, Mode::Normal);
+        assert_ne!(Mode::CommandPalette, Mode::Normal);
+        assert_ne!(Mode::Copy, Mode::CommandPalette);
+    }
+
+    #[test]
     fn test_pane_kind_labels() {
         use crate::pane::PaneKind;
         assert_eq!(PaneKind::Shell.label(), "shell");
@@ -1457,7 +1262,7 @@ mod tests {
         let gid = PaneGroupId::new_v4();
         let pid = PaneId::new_v4();
         let pane = Pane::spawn_error(pid, PaneKind::Shell, "test");
-        let group = PaneGroup::new(gid, pane);
+        let group = crate::pane::PaneGroup::new(gid, pane);
         assert_eq!(group.tab_count(), 1);
         assert_eq!(group.active_tab, 0);
         assert_eq!(group.active_pane().id, pid);
@@ -1469,7 +1274,7 @@ mod tests {
         let p1 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "t1");
         let p2_id = PaneId::new_v4();
         let p2 = Pane::spawn_error(p2_id, PaneKind::Shell, "t2");
-        let mut group = PaneGroup::new(gid, p1);
+        let mut group = crate::pane::PaneGroup::new(gid, p1);
         group.add_tab(p2);
         assert_eq!(group.tab_count(), 2);
         assert_eq!(group.active_tab, 1);
@@ -1481,7 +1286,7 @@ mod tests {
         let gid = PaneGroupId::new_v4();
         let p1 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "t1");
         let p2 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "t2");
-        let mut group = PaneGroup::new(gid, p1);
+        let mut group = crate::pane::PaneGroup::new(gid, p1);
         group.add_tab(p2);
         assert!(group.close_tab(1));
         assert_eq!(group.tab_count(), 1);
@@ -1492,7 +1297,7 @@ mod tests {
     fn test_pane_group_close_last_tab_fails() {
         let gid = PaneGroupId::new_v4();
         let p1 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "t1");
-        let mut group = PaneGroup::new(gid, p1);
+        let mut group = crate::pane::PaneGroup::new(gid, p1);
         assert!(!group.close_tab(0));
         assert_eq!(group.tab_count(), 1);
     }
@@ -1506,7 +1311,7 @@ mod tests {
         let p1 = Pane::spawn_error(p1_id, PaneKind::Shell, "t1");
         let p2 = Pane::spawn_error(p2_id, PaneKind::Shell, "t2");
         let p3 = Pane::spawn_error(p3_id, PaneKind::Shell, "t3");
-        let mut group = PaneGroup::new(gid, p1);
+        let mut group = crate::pane::PaneGroup::new(gid, p1);
         group.add_tab(p2);
         group.add_tab(p3);
         assert_eq!(group.active_pane().id, p3_id);

@@ -26,6 +26,8 @@ pub fn spawn_pty(
     if let Some(dir) = cwd {
         cmd_builder.cwd(dir);
     }
+    cmd_builder.env("PANE", "1");
+    cmd_builder.env("PANE_PANE", pane_id.to_string());
 
     let child = pair.slave.spawn_command(cmd_builder)?;
     drop(pair.slave);
