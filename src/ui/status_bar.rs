@@ -76,10 +76,13 @@ fn pane_title(app: &App) -> String {
         return String::new();
     }
     let ws = app.active_workspace();
-    ws.groups
+    let title = ws
+        .groups
         .get(&ws.active_group)
         .map(|g| g.active_pane().title.clone())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // Only use the first line to avoid multi-line bleed in the status bar
+    title.lines().next().unwrap_or("").to_string()
 }
 
 /// Build the template variables HashMap from app state.

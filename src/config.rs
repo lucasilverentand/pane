@@ -106,8 +106,8 @@ pub struct Behavior {
 impl Default for Behavior {
     fn default() -> Self {
         Self {
-            min_pane_width: 100,
-            min_pane_height: 4,
+            min_pane_width: 80,
+            min_pane_height: 20,
             fold_bar_size: 1,
             vim_navigator: false,
             mouse: true,
@@ -139,7 +139,7 @@ impl Default for StatusBarConfig {
             show_load: true,
             show_disk: false,
             update_interval_secs: 3,
-            left: " #{pane_title} ".to_string(),
+            left: "".to_string(),
             right: "#{cpu} #{mem} #{load}  ctrl+h help ".to_string(),
         }
     }
@@ -774,7 +774,7 @@ mod tests {
         let config = Config::from_raw(raw);
         // Should be identical to default
         assert_eq!(config.theme.accent, Color::Cyan);
-        assert_eq!(config.behavior.min_pane_width, 100);
+        assert_eq!(config.behavior.min_pane_width, 80);
         assert!(config.status_bar.show_cpu);
     }
 
@@ -793,6 +793,6 @@ min_pane_width = 80
         assert_eq!(config.behavior.min_pane_width, 80);
         // Unchanged defaults
         assert_eq!(config.theme.border_active, Color::Cyan);
-        assert_eq!(config.behavior.min_pane_height, 4);
+        assert_eq!(config.behavior.min_pane_height, 20);
     }
 }

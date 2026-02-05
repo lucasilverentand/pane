@@ -11,8 +11,6 @@ use crate::pane::{Pane, PaneGroup, PaneGroupId, PaneKind};
 use crate::system_stats::SystemStats;
 use crate::workspace::Workspace;
 
-use std::path::Path;
-use std::process::Command;
 
 pub struct ServerState {
     pub workspaces: Vec<Workspace>,
@@ -28,24 +26,28 @@ pub struct ServerState {
     pub next_pane_number: u32,
 }
 
-fn auto_workspace_name() -> String {
-    if let Ok(output) = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-    {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if let Some(name) = Path::new(&path).file_name() {
-                return name.to_string_lossy().into_owned();
+fn next_workspace_name(existing: &[Workspace]) -> String {
+    let base = "workspace";
+    // "workspace" is equivalent to number 1
+    let mut used: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for ws in existing {
+        if ws.name == base {
+            used.insert(1);
+        } else if let Some(suffix) = ws.name.strip_prefix("workspace ") {
+            if let Ok(n) = suffix.parse::<u32>() {
+                used.insert(n);
             }
         }
     }
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Some(name) = cwd.file_name() {
-            return name.to_string_lossy().into_owned();
-        }
+    let mut n = 1u32;
+    while used.contains(&n) {
+        n += 1;
     }
-    "1".to_string()
+    if n == 1 {
+        base.to_string()
+    } else {
+        format!("workspace {}", n)
+    }
 }
 
 impl ServerState {
@@ -125,7 +127,7 @@ impl ServerState {
         };
 
         let group = PaneGroup::new(group_id, pane);
-        let workspace = Workspace::new(auto_workspace_name(), group_id, group);
+        let workspace = Workspace::new(next_workspace_name(&[]), group_id, group);
 
         Ok(Self {
             workspaces: vec![workspace],
@@ -463,7 +465,7 @@ impl ServerState {
         };
 
         let group = PaneGroup::new(group_id, pane);
-        let workspace = Workspace::new(auto_workspace_name(), group_id, group);
+        let workspace = Workspace::new(next_workspace_name(&self.workspaces), group_id, group);
         self.workspaces.push(workspace);
         self.active_workspace = self.workspaces.len() - 1;
         Ok(())

@@ -42,7 +42,6 @@ pub struct App {
     pub session_list: Vec<SessionSummary>,
     pub session_selected: usize,
     pub dev_server_input: String,
-    pub hovered_workspace_tab: Option<usize>,
     pub command_palette_state: Option<CommandPaletteState>,
     pub help_state: HelpState,
     pub copy_mode_state: Option<CopyModeState>,
@@ -131,7 +130,6 @@ impl App {
             session_list: Vec::new(),
             session_selected: 0,
             dev_server_input: String::new(),
-            hovered_workspace_tab: None,
             command_palette_state: None,
             help_state: HelpState::default(),
             copy_mode_state: None,
@@ -162,7 +160,6 @@ impl App {
             session_list: sessions,
             session_selected: 0,
             dev_server_input: String::new(),
-            hovered_workspace_tab: None,
             command_palette_state: None,
             help_state: HelpState::default(),
             copy_mode_state: None,
@@ -187,7 +184,6 @@ impl App {
             session_list: Vec::new(),
             session_selected: 0,
             dev_server_input: String::new(),
-            hovered_workspace_tab: None,
             command_palette_state: None,
             copy_mode_state: None,
             help_state: HelpState::default(),
@@ -235,6 +231,11 @@ impl App {
                     self.handle_mouse_down(x, y, tui)?;
                 }
             }
+            AppEvent::MouseRightDown { x, y } => {
+                if self.mode == Mode::Normal {
+                    self.handle_mouse_right_down(x, y, tui)?;
+                }
+            }
             AppEvent::MouseDrag { x, y } => {
                 self.handle_mouse_drag(x, y);
             }
@@ -267,7 +268,6 @@ impl App {
             if let Some(click) = crate::ui::workspace_bar::hit_test(
                 &names,
                 self.state.active_workspace,
-                self.hovered_workspace_tab,
                 bar_area,
                 x,
                 y,
@@ -276,15 +276,6 @@ impl App {
                     crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
                         if i < self.state.workspaces.len() {
                             self.state.active_workspace = i;
-                        }
-                    }
-                    crate::ui::workspace_bar::WorkspaceBarClick::CloseTab(i) => {
-                        if self.state.workspaces.len() > 1 && i < self.state.workspaces.len() {
-                            self.state.workspaces.remove(i);
-                            if self.state.active_workspace >= self.state.workspaces.len() {
-                                self.state.active_workspace = self.state.workspaces.len() - 1;
-                            }
-                            self.hovered_workspace_tab = None;
                         }
                     }
                     crate::ui::workspace_bar::WorkspaceBarClick::NewWorkspace => {
@@ -356,6 +347,44 @@ impl App {
                     && y >= rect.y
                     && y < rect.y + rect.height
                 {
+                    // Check tab bar click before focusing the group
+                    let ws = self.state.active_workspace();
+                    if let Some(group) = ws.groups.get(group_id) {
+                        if let Some(tab_area) =
+                            crate::ui::pane_view::tab_bar_area(group, *rect)
+                        {
+                            let layout = crate::ui::pane_view::tab_bar_layout(
+                                group,
+                                &self.state.config.theme,
+                                tab_area,
+                            );
+                            if let Some(click) =
+                                crate::ui::pane_view::tab_bar_hit_test(&layout, x, y)
+                            {
+                                self.state.active_workspace_mut().active_group = *group_id;
+                                match click {
+                                    crate::ui::pane_view::TabBarClick::Tab(i) => {
+                                        self.state
+                                            .active_workspace_mut()
+                                            .active_group_mut()
+                                            .active_tab = i;
+                                    }
+                                    crate::ui::pane_view::TabBarClick::NewTab => {
+                                        let (w, h) = (size.width, size.height);
+                                        let cols = w.saturating_sub(4);
+                                        let rows = h.saturating_sub(3);
+                                        self.state.add_tab_to_active_group(
+                                            PaneKind::Shell,
+                                            None,
+                                            cols,
+                                            rows,
+                                        )?;
+                                    }
+                                }
+                                return Ok(());
+                            }
+                        }
+                    }
                     self.state.active_workspace_mut().active_group = *group_id;
                     return Ok(());
                 }
@@ -390,38 +419,38 @@ impl App {
         }
     }
 
-    fn handle_mouse_move(&mut self, x: u16, y: u16) {
-        if y == 0 {
+    fn handle_mouse_move(&mut self, _x: u16, _y: u16) {}
+
+    fn handle_mouse_right_down(&mut self, x: u16, y: u16, tui: &Tui) -> anyhow::Result<()> {
+        let size = tui.size()?;
+        let bar_h = self.state.workspace_bar_height();
+
+        if y < bar_h {
             let names: Vec<String> = self
                 .state
                 .workspaces
                 .iter()
                 .map(|ws| ws.name.clone())
                 .collect();
-            let area = ratatui::layout::Rect::new(0, 0, self.state.last_size.0, 1);
-            if let Some(click) = crate::ui::workspace_bar::hit_test(
-                &names,
-                self.state.active_workspace,
-                self.hovered_workspace_tab,
-                area,
-                x,
-                y,
-            ) {
-                match click {
-                    crate::ui::workspace_bar::WorkspaceBarClick::Tab(i)
-                    | crate::ui::workspace_bar::WorkspaceBarClick::CloseTab(i) => {
-                        self.hovered_workspace_tab = Some(i);
-                    }
-                    _ => {
-                        self.hovered_workspace_tab = None;
+            let bar_area = ratatui::layout::Rect::new(0, 0, size.width, bar_h);
+            if let Some(crate::ui::workspace_bar::WorkspaceBarClick::Tab(i)) =
+                crate::ui::workspace_bar::hit_test(
+                    &names,
+                    self.state.active_workspace,
+                    bar_area,
+                    x,
+                    y,
+                )
+            {
+                if self.state.workspaces.len() > 1 && i < self.state.workspaces.len() {
+                    self.state.workspaces.remove(i);
+                    if self.state.active_workspace >= self.state.workspaces.len() {
+                        self.state.active_workspace = self.state.workspaces.len() - 1;
                     }
                 }
-            } else {
-                self.hovered_workspace_tab = None;
             }
-        } else {
-            self.hovered_workspace_tab = None;
         }
+        Ok(())
     }
 
     fn focus_group(&mut self, id: PaneGroupId) {

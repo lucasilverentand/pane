@@ -17,7 +17,7 @@ pub fn render(app: &App, frame: &mut Frame) {
     let theme = &app.state.config.theme;
 
     let [header, body, footer] = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(2),
         Constraint::Fill(1),
         Constraint::Length(1),
     ])
@@ -28,7 +28,6 @@ pub fn render(app: &App, frame: &mut Frame) {
         workspace_bar::render(
             &names,
             app.state.active_workspace,
-            app.hovered_workspace_tab,
             theme,
             frame,
             header,
@@ -51,8 +50,7 @@ pub fn render(app: &App, frame: &mut Frame) {
                 if let crate::layout::ResolvedPane::Visible { id, rect } = rp {
                     if *id == ws.active_group {
                         let (vt_row, vt_col) = pane.screen().cursor_position();
-                        let tab_bar_offset: u16 =
-                            if group.tab_count() > 1 { 1 } else { 0 };
+                        let tab_bar_offset: u16 = 1;
                         let cursor_x = rect.x + 2 + vt_col;
                         let cursor_y = rect.y + 1 + tab_bar_offset + vt_row;
                         if cursor_x < rect.x + rect.width

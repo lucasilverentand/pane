@@ -262,6 +262,7 @@ async fn process_events(
             // These events come from clients, not the internal event loop
             AppEvent::Key(_)
             | AppEvent::MouseDown { .. }
+            | AppEvent::MouseRightDown { .. }
             | AppEvent::MouseDrag { .. }
             | AppEvent::MouseMove { .. }
             | AppEvent::MouseUp
@@ -510,13 +511,49 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
         }
     }
 
-    // Check visible pane clicks for focus
+    // Check visible pane clicks for focus (with tab bar hit testing)
     for rp in &resolved {
         if let crate::layout::ResolvedPane::Visible {
             id: group_id, rect, ..
         } = rp
         {
             if x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height {
+                // Check tab bar click before focusing the group
+                if let Some(group) = state.active_workspace().groups.get(group_id) {
+                    if let Some(tab_area) =
+                        crate::ui::pane_view::tab_bar_area(group, *rect)
+                    {
+                        let layout = crate::ui::pane_view::tab_bar_layout(
+                            group,
+                            &state.config.theme,
+                            tab_area,
+                        );
+                        if let Some(click) =
+                            crate::ui::pane_view::tab_bar_hit_test(&layout, x, y)
+                        {
+                            state.active_workspace_mut().active_group = *group_id;
+                            match click {
+                                crate::ui::pane_view::TabBarClick::Tab(i) => {
+                                    state
+                                        .active_workspace_mut()
+                                        .active_group_mut()
+                                        .active_tab = i;
+                                }
+                                crate::ui::pane_view::TabBarClick::NewTab => {
+                                    let cols = w.saturating_sub(4);
+                                    let rows = h.saturating_sub(3);
+                                    let _ = state.add_tab_to_active_group(
+                                        crate::pane::PaneKind::Shell,
+                                        None,
+                                        cols,
+                                        rows,
+                                    );
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
                 state.active_workspace_mut().active_group = *group_id;
                 return;
             }

@@ -11,15 +11,12 @@ use crate::config::Theme;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceBarClick {
     Tab(usize),
-    CloseTab(usize),
     NewWorkspace,
 }
 
 struct TabLayout {
     /// (start_x, end_x) for each tab's full span (inclusive of padding)
     tab_ranges: Vec<(u16, u16)>,
-    /// (start_x, end_x) for each tab's × close button (if shown)
-    close_ranges: Vec<Option<(u16, u16)>>,
     /// (start_x, end_x) for the + button
     plus_range: Option<(u16, u16)>,
 }
@@ -35,16 +32,13 @@ fn truncate_name(name: &str, max: usize) -> String {
 fn compute_layout(
     names: &[String],
     active_idx: usize,
-    hovered_tab: Option<usize>,
     area: Rect,
 ) -> (Vec<Span<'static>>, TabLayout) {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut tab_ranges: Vec<(u16, u16)> = Vec::new();
-    let mut close_ranges: Vec<Option<(u16, u16)>> = Vec::new();
     let max_x = area.x + area.width;
     let plus_reserve = 3u16; // " + "
     let mut cursor_x = area.x;
-    let only_one = names.len() <= 1;
 
     // Leading space
     spans.push(Span::raw(" "));
@@ -52,41 +46,21 @@ fn compute_layout(
 
     for (i, name) in names.iter().enumerate() {
         let display_name = truncate_name(name, 20);
-        let is_active = i == active_idx;
-        let is_hovered = hovered_tab == Some(i);
-        let show_close = !only_one && (is_active || is_hovered);
 
-        // Tab content: " name × " or " name "
-        let tab_text = if show_close {
-            format!(" {} × ", display_name)
-        } else {
-            format!(" {} ", display_name)
-        };
-
+        let tab_text = format!(" {} ", display_name);
         let tab_width = tab_text.len() as u16;
 
         // Check if this tab fits (reserve space for +)
         if cursor_x + tab_width + plus_reserve > max_x && i != active_idx {
             // Skip tabs that don't fit (but always show active)
             tab_ranges.push((0, 0));
-            close_ranges.push(None);
             continue;
         }
 
         let tab_start = cursor_x;
         let tab_end = cursor_x + tab_width;
 
-        // Close button range: the "× " part is at the end, 2 chars before trailing space
-        let close_range = if show_close {
-            // The × is at tab_end - 3 (the × char), tab_end - 2 (the space after ×)
-            Some((tab_end - 3, tab_end - 1))
-        } else {
-            None
-        };
-
         tab_ranges.push((tab_start, tab_end));
-        close_ranges.push(close_range);
-
         spans.push(Span::styled(tab_text, Style::default()));
 
         cursor_x = tab_end;
@@ -111,7 +85,6 @@ fn compute_layout(
         spans,
         TabLayout {
             tab_ranges,
-            close_ranges,
             plus_range,
         },
     )
@@ -120,19 +93,17 @@ fn compute_layout(
 pub fn render(
     workspace_names: &[String],
     active_idx: usize,
-    hovered_tab: Option<usize>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let (raw_spans, layout) = compute_layout(workspace_names, active_idx, hovered_tab, area);
-    let only_one = workspace_names.len() <= 1;
+    let (raw_spans, layout) = compute_layout(workspace_names, active_idx, area);
 
-    // Re-style each span based on tab index
+    // Re-style each span based on tab index, with rounded end caps
     let mut styled_spans: Vec<Span<'static>> = Vec::new();
     let mut span_idx = 0;
 
-    // Leading space - style with reset bg
+    // Leading space
     if !raw_spans.is_empty() {
         styled_spans.push(Span::styled(" ", Style::default()));
         span_idx += 1;
@@ -144,36 +115,44 @@ pub fn render(
         }
         let (start, end) = layout.tab_ranges[i];
         if start == 0 && end == 0 {
-            // Skipped tab (didn't fit)
             continue;
         }
 
         let is_active = i == active_idx;
-        let is_hovered = hovered_tab == Some(i);
-        let show_close = !only_one && (is_active || is_hovered);
-
         let display_name = truncate_name(&workspace_names[i], 20);
 
-        if is_active {
-            let style = Style::default()
-                .fg(Color::Black)
-                .bg(theme.workspace_tab_active_bg)
-                .add_modifier(Modifier::BOLD);
-            if show_close {
-                styled_spans.push(Span::styled(format!(" {} × ", display_name), style));
-            } else {
-                styled_spans.push(Span::styled(format!(" {} ", display_name), style));
-            }
+        let bg_color = if is_active {
+            theme.workspace_tab_active_bg
         } else {
-            let style = Style::default()
+            theme.workspace_tab_inactive_bg
+        };
+
+        // Left rounded cap: fg=tab_bg on transparent bg
+        styled_spans.push(Span::styled(
+            "\u{E0B6}",
+            Style::default().fg(bg_color),
+        ));
+
+        // Tab content
+        let content_style = if is_active {
+            Style::default()
+                .fg(Color::Black)
+                .bg(bg_color)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
                 .fg(theme.dim)
-                .bg(theme.workspace_tab_inactive_bg);
-            if show_close {
-                styled_spans.push(Span::styled(format!(" {} × ", display_name), style));
-            } else {
-                styled_spans.push(Span::styled(format!(" {} ", display_name), style));
-            }
-        }
+                .bg(bg_color)
+        };
+
+        styled_spans.push(Span::styled(display_name, content_style));
+
+        // Right rounded cap: fg=tab_bg on transparent bg
+        styled_spans.push(Span::styled(
+            "\u{E0B4}",
+            Style::default().fg(bg_color),
+        ));
+
         span_idx += 1;
 
         // Gap span
@@ -198,7 +177,6 @@ pub fn render(
 pub fn hit_test(
     workspace_names: &[String],
     active_idx: usize,
-    hovered_tab: Option<usize>,
     area: Rect,
     x: u16,
     y: u16,
@@ -207,21 +185,12 @@ pub fn hit_test(
         return None;
     }
 
-    let (_spans, layout) = compute_layout(workspace_names, active_idx, hovered_tab, area);
+    let (_spans, layout) = compute_layout(workspace_names, active_idx, area);
 
     // Check + button first
     if let Some((start, end)) = layout.plus_range {
         if x >= start && x < end {
             return Some(WorkspaceBarClick::NewWorkspace);
-        }
-    }
-
-    // Check close buttons (priority over tab click)
-    for (i, close_range) in layout.close_ranges.iter().enumerate() {
-        if let Some((start, end)) = close_range {
-            if x >= *start && x < *end {
-                return Some(WorkspaceBarClick::CloseTab(i));
-            }
         }
     }
 
@@ -250,20 +219,8 @@ mod tests {
     fn test_hit_test_tab_click() {
         let ws = names(&["alpha", "beta"]);
         let area = Rect::new(0, 0, 80, 1);
-        // Tab 0 starts at x=1 (" " prefix), content " alpha × " = 9 chars → range [1, 10)
-        let click = hit_test(&ws, 0, None, area, 2, 0);
+        let click = hit_test(&ws, 0, area, 2, 0);
         assert_eq!(click, Some(WorkspaceBarClick::Tab(0)));
-    }
-
-    #[test]
-    fn test_hit_test_close_active() {
-        let ws = names(&["alpha", "beta"]);
-        let area = Rect::new(0, 0, 80, 1);
-        // Active tab 0: " alpha × " → close at positions 7,8 from tab start
-        // Tab starts at x=1, × at x=8 (1 + 7), range [8, 10)
-        // Actually: " alpha × " is 10 chars. tab_end = 1+10=11. close = (11-3, 11-1) = (8, 10)
-        let click = hit_test(&ws, 0, None, area, 8, 0);
-        assert_eq!(click, Some(WorkspaceBarClick::CloseTab(0)));
     }
 
     #[test]
@@ -271,7 +228,7 @@ mod tests {
         let ws = names(&["a"]);
         let area = Rect::new(0, 0, 80, 1);
         // " " + " a " (4 chars) → cursor at 5, then + at [5, 8)
-        let click = hit_test(&ws, 0, None, area, 5, 0);
+        let click = hit_test(&ws, 0, area, 5, 0);
         assert_eq!(click, Some(WorkspaceBarClick::NewWorkspace));
     }
 
@@ -279,7 +236,7 @@ mod tests {
     fn test_hit_test_outside() {
         let ws = names(&["a"]);
         let area = Rect::new(0, 0, 80, 1);
-        let click = hit_test(&ws, 0, None, area, 70, 0);
+        let click = hit_test(&ws, 0, area, 70, 0);
         assert_eq!(click, None);
     }
 
@@ -287,7 +244,7 @@ mod tests {
     fn test_hit_test_wrong_row() {
         let ws = names(&["a"]);
         let area = Rect::new(0, 0, 80, 1);
-        let click = hit_test(&ws, 0, None, area, 2, 1);
+        let click = hit_test(&ws, 0, area, 2, 1);
         assert_eq!(click, None);
     }
 
@@ -305,39 +262,10 @@ mod tests {
     }
 
     #[test]
-    fn test_no_close_on_single_workspace() {
-        let ws = names(&["only"]);
-        let area = Rect::new(0, 0, 80, 1);
-        let (_spans, layout) = compute_layout(&ws, 0, None, area);
-        // Single workspace: no close button
-        assert_eq!(layout.close_ranges[0], None);
-    }
-
-    #[test]
-    fn test_close_shown_on_active_with_multiple() {
-        let ws = names(&["one", "two"]);
-        let area = Rect::new(0, 0, 80, 1);
-        let (_spans, layout) = compute_layout(&ws, 0, None, area);
-        // Active tab should have close
-        assert!(layout.close_ranges[0].is_some());
-        // Inactive (not hovered) should not
-        assert!(layout.close_ranges[1].is_none());
-    }
-
-    #[test]
-    fn test_close_shown_on_hovered_inactive() {
-        let ws = names(&["one", "two"]);
-        let area = Rect::new(0, 0, 80, 1);
-        let (_spans, layout) = compute_layout(&ws, 0, Some(1), area);
-        // Hovered inactive tab should have close
-        assert!(layout.close_ranges[1].is_some());
-    }
-
-    #[test]
     fn test_plus_button_present() {
         let ws = names(&["a"]);
         let area = Rect::new(0, 0, 80, 1);
-        let (_spans, layout) = compute_layout(&ws, 0, None, area);
+        let (_spans, layout) = compute_layout(&ws, 0, area);
         assert!(layout.plus_range.is_some());
     }
 }

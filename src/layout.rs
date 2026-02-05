@@ -11,14 +11,15 @@ pub type PaneId = uuid::Uuid;
 pub struct LayoutParams {
     pub min_pane_width: u16,
     pub min_pane_height: u16,
+    #[allow(dead_code)]
     pub fold_bar_size: u16,
 }
 
 impl Default for LayoutParams {
     fn default() -> Self {
         Self {
-            min_pane_width: 100,
-            min_pane_height: 4,
+            min_pane_width: 80,
+            min_pane_height: 20,
             fold_bar_size: 1,
         }
     }
@@ -190,10 +191,11 @@ impl LayoutNode {
                 }
                 // Case 3: Not enough space for both — must fold one
                 else {
-                    let fold_bar = params.fold_bar_size;
-                    let expanded_alone = total.saturating_sub(fold_bar);
-                    let first_fits_alone = expanded_alone >= first_min;
-                    let second_fits_alone = expanded_alone >= second_min;
+                    let fl = first.leaf_count();
+                    let sl = second.leaf_count();
+                    // Folding a subtree costs leaf_count cells (one per pane)
+                    let first_fits_alone = total >= first_min + sl;
+                    let second_fits_alone = total >= second_min + fl;
 
                     match (first_fits_alone, second_fits_alone) {
                         (true, true) => {
@@ -202,12 +204,12 @@ impl LayoutNode {
                             // ratio >= 0.5 → second intended small → fold second (right/bottom)
                             if *ratio < 0.5 {
                                 let (bar, expanded) =
-                                    Self::fold_redistribute(direction, area, false, params);
+                                    Self::fold_redistribute(direction, area, false, fl);
                                 Self::fold_subtree(first, bar, *direction, result);
                                 second.resolve_fold_inner(expanded, params, leaf_mins, result);
                             } else {
                                 let (expanded, bar) =
-                                    Self::fold_redistribute(direction, area, true, params);
+                                    Self::fold_redistribute(direction, area, true, sl);
                                 first.resolve_fold_inner(expanded, params, leaf_mins, result);
                                 Self::fold_subtree(second, bar, *direction, result);
                             }
@@ -215,21 +217,21 @@ impl LayoutNode {
                         (true, false) => {
                             // Only first fits alone — fold second
                             let (expanded, bar) =
-                                Self::fold_redistribute(direction, area, true, params);
+                                Self::fold_redistribute(direction, area, true, sl);
                             first.resolve_fold_inner(expanded, params, leaf_mins, result);
                             Self::fold_subtree(second, bar, *direction, result);
                         }
                         (false, true) => {
                             // Only second fits alone — fold first
                             let (bar, expanded) =
-                                Self::fold_redistribute(direction, area, false, params);
+                                Self::fold_redistribute(direction, area, false, fl);
                             Self::fold_subtree(first, bar, *direction, result);
                             second.resolve_fold_inner(expanded, params, leaf_mins, result);
                         }
                         (false, false) => {
                             // Neither fits alone — keep first (left/top), fold second
                             let (expanded, bar) =
-                                Self::fold_redistribute(direction, area, true, params);
+                                Self::fold_redistribute(direction, area, true, sl);
                             Self::fold_subtree(second, bar, *direction, result);
                             first.resolve_fold_inner(expanded, params, leaf_mins, result);
                         }
@@ -258,15 +260,23 @@ impl LayoutNode {
             } => {
                 let (fw, fh) = first.subtree_min_size(params, leaf_mins);
                 let (sw, sh) = second.subtree_min_size(params, leaf_mins);
+                let fl = first.leaf_count();
+                let sl = second.leaf_count();
+                // When one child folds, each of its leaves takes 1 cell.
+                // Option A: show first, fold second → first_min + second_leaf_count
+                // Option B: show second, fold first → second_min + first_leaf_count
+                // Min = whichever option is smaller.
                 match direction {
-                    SplitDirection::Horizontal => (
-                        fw.min(sw) + params.fold_bar_size,
-                        fh.max(sh),
-                    ),
-                    SplitDirection::Vertical => (
-                        fw.max(sw),
-                        fh.min(sh) + params.fold_bar_size,
-                    ),
+                    SplitDirection::Horizontal => {
+                        let a = fw + sl;
+                        let b = sw + fl;
+                        (a.min(b), fh.max(sh))
+                    }
+                    SplitDirection::Vertical => {
+                        let a = fh + sl;
+                        let b = sh + fl;
+                        (fw.max(sw), a.min(b))
+                    }
                 }
             }
         }
@@ -295,12 +305,12 @@ impl LayoutNode {
         direction: &SplitDirection,
         area: Rect,
         fold_second: bool,
-        params: LayoutParams,
+        fold_leaf_count: u16,
     ) -> (Rect, Rect) {
-        let fold_bar_size = params.fold_bar_size;
+        // Each folded leaf gets 1 cell. The expanded pane gets the rest.
         match direction {
             SplitDirection::Horizontal => {
-                let bar_w = fold_bar_size.min(area.width);
+                let bar_w = fold_leaf_count.min(area.width);
                 let main_w = area.width.saturating_sub(bar_w);
                 if fold_second {
                     (
@@ -315,7 +325,7 @@ impl LayoutNode {
                 }
             }
             SplitDirection::Vertical => {
-                let bar_h = fold_bar_size.min(area.height);
+                let bar_h = fold_leaf_count.min(area.height);
                 let main_h = area.height.saturating_sub(bar_h);
                 if fold_second {
                     (
@@ -332,8 +342,7 @@ impl LayoutNode {
         }
     }
 
-    /// Fold an entire subtree: the first leaf gets the visible fold bar rect,
-    /// all other leaves get zero-size rects (hidden).
+    /// Fold an entire subtree: each leaf gets its own 1-cell fold bar rect.
     fn fold_subtree(
         node: &LayoutNode,
         bar_rect: Rect,
@@ -342,19 +351,25 @@ impl LayoutNode {
     ) {
         let ids = node.pane_ids();
         for (i, id) in ids.into_iter().enumerate() {
-            if i == 0 {
-                result.push(ResolvedPane::Folded {
-                    id,
-                    rect: bar_rect,
-                    direction,
-                });
-            } else {
-                result.push(ResolvedPane::Folded {
-                    id,
-                    rect: Rect::new(0, 0, 0, 0),
-                    direction,
-                });
-            }
+            let rect = match direction {
+                SplitDirection::Horizontal => {
+                    // Each leaf gets 1 column within bar_rect
+                    let x = bar_rect.x + (i as u16).min(bar_rect.width.saturating_sub(1));
+                    let w = if (i as u16) < bar_rect.width { 1 } else { 0 };
+                    Rect::new(x, bar_rect.y, w, bar_rect.height)
+                }
+                SplitDirection::Vertical => {
+                    // Each leaf gets 1 row within bar_rect
+                    let y = bar_rect.y + (i as u16).min(bar_rect.height.saturating_sub(1));
+                    let h = if (i as u16) < bar_rect.height { 1 } else { 0 };
+                    Rect::new(bar_rect.x, y, bar_rect.width, h)
+                }
+            };
+            result.push(ResolvedPane::Folded {
+                id,
+                rect,
+                direction,
+            });
         }
     }
 
@@ -625,6 +640,16 @@ impl LayoutNode {
                 Side::First => first.edge_leaf(Side::First),
                 Side::Second => second.edge_leaf(Side::Second),
             },
+        }
+    }
+
+    /// Count the number of leaves in this subtree.
+    pub fn leaf_count(&self) -> u16 {
+        match self {
+            LayoutNode::Leaf(_) => 1,
+            LayoutNode::Split { first, second, .. } => {
+                first.leaf_count() + second.leaf_count()
+            }
         }
     }
 
@@ -1240,8 +1265,8 @@ mod tests {
     fn test_fold_both_too_small_keeps_one_visible() {
         let id1 = PaneId::new_v4();
         let id2 = PaneId::new_v4();
-        // Total width 80 with 50/50 split → each gets ~40, both < MIN_PANE_WIDTH(100)
-        // Second folds, first stays visible (cramped but never folded)
+        // Total width 80 with 50/50 split → each gets ~40, both < MIN_PANE_WIDTH(80)
+        // Neither fits alone with fold bar (80 < 81). Fallback: fold second, keep first.
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -1251,9 +1276,11 @@ mod tests {
         let area = Rect::new(0, 0, 80, 10);
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
         assert_eq!(resolved.len(), 2);
-        // First stays visible, second folds
-        assert!(matches!(resolved[0], ResolvedPane::Folded { id, .. } if id == id2));
-        assert!(matches!(resolved[1], ResolvedPane::Visible { id, .. } if id == id1));
+        // (false,false) case: fold_subtree pushes second first, then first resolves
+        let second_folded = resolved.iter().any(|rp| matches!(rp, ResolvedPane::Folded { id, .. } if *id == id2));
+        let first_visible = resolved.iter().any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id1));
+        assert!(first_visible, "first (left) should be visible");
+        assert!(second_folded, "second (right) should be folded");
     }
 
     #[test]
@@ -1262,7 +1289,7 @@ mod tests {
         let id2 = PaneId::new_v4();
         let id3 = PaneId::new_v4();
         // Right subtree is a split of id2/id3. With ratio 0.9 on 150 wide,
-        // right gets ~15 cols which is < MIN_PANE_WIDTH(100), so entire subtree folds.
+        // right gets ~15 cols which is < MIN_PANE_WIDTH(80), so entire subtree folds.
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.9,
@@ -1277,14 +1304,14 @@ mod tests {
         let area = Rect::new(0, 0, 150, 10);
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
         assert_eq!(resolved.len(), 3);
-        // First visible (gets 148 cols after fold bar = 2)
+        // First visible (gets 148 cols, 2 taken by fold bars)
         assert!(matches!(resolved[0], ResolvedPane::Visible { id, .. } if id == id1));
-        // Second subtree folded: id2 has the bar rect, id3 has zero-size
+        // Each folded leaf gets its own 1-cell bar
         assert!(
-            matches!(resolved[1], ResolvedPane::Folded { id, rect, .. } if id == id2 && rect.width > 0)
+            matches!(resolved[1], ResolvedPane::Folded { id, rect, .. } if id == id2 && rect.width == 1)
         );
         assert!(
-            matches!(resolved[2], ResolvedPane::Folded { id, rect, .. } if id == id3 && rect.width == 0)
+            matches!(resolved[2], ResolvedPane::Folded { id, rect, .. } if id == id3 && rect.width == 1)
         );
     }
 
@@ -1402,7 +1429,9 @@ mod tests {
     fn test_fold_vertical_split() {
         let id1 = PaneId::new_v4();
         let id2 = PaneId::new_v4();
-        // Ratio 0.9 vertical on 6 rows: total 6 < 4+4=8, so fold triggers.
+        // Ratio 0.9 vertical on 30 rows: first=27, second=3.
+        // 3 < min_pane_height(20), total 30 < 20+21=41 → case 3.
+        // first_fits_alone: 30 >= 20+1 → true. second_fits_alone: 30 >= 20+1 → true.
         // ratio 0.9 >= 0.5 → fold second.
         let node = LayoutNode::Split {
             direction: SplitDirection::Vertical,
@@ -1410,7 +1439,7 @@ mod tests {
             first: Box::new(LayoutNode::Leaf(id1)),
             second: Box::new(LayoutNode::Leaf(id2)),
         };
-        let area = Rect::new(0, 0, 200, 6);
+        let area = Rect::new(0, 0, 200, 30);
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
         assert_eq!(resolved.len(), 2);
         assert!(matches!(resolved[0], ResolvedPane::Visible { id, .. } if id == id1));
@@ -1425,16 +1454,16 @@ mod tests {
     fn test_leaf_min_prevents_fold() {
         let id1 = PaneId::new_v4();
         let id2 = PaneId::new_v4();
-        // 180 wide, ratio 0.7: first=126, second=54
-        // Without leaf_mins: total 180 < 100+100=200 → fold. ratio 0.7 → fold second.
-        // With leaf_min(id2)=(50,4): total 180 >= 100+50=150 → clamp. Both visible!
+        // 140 wide, ratio 0.7: first=98, second=42
+        // Without leaf_mins: total 140 < 80+80=160 → fold. ratio 0.7 → fold second.
+        // With leaf_min(id2)=(50,4): total 140 >= 80+50=130 → clamp. Both visible!
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.7,
             first: Box::new(LayoutNode::Leaf(id1)),
             second: Box::new(LayoutNode::Leaf(id2)),
         };
-        let area = Rect::new(0, 0, 180, 10);
+        let area = Rect::new(0, 0, 140, 10);
 
         // Without leaf_mins: second folds
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
@@ -1455,7 +1484,7 @@ mod tests {
         let id1 = PaneId::new_v4();
         let id2 = PaneId::new_v4();
         // 200 wide, ratio 0.8 → first=160, second=40
-        // leaf_min for id2=60: total 200 >= 100+60=160, case 2 (clamp)
+        // leaf_min for id2=60: total 200 >= 80+60=140, case 2 (clamp)
         // second should get at least 60
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
@@ -1476,8 +1505,8 @@ mod tests {
     fn test_fold_prefers_second_at_equal_ratio() {
         let id1 = PaneId::new_v4();
         let id2 = PaneId::new_v4();
-        // 120 wide, ratio 0.5 → each gets 60, both < 100
-        // Both could fit alone (119 >= 100). ratio == 0.5 → fold second (right)
+        // 120 wide, ratio 0.5 → each gets 60, both < 80
+        // Both could fit alone (119 >= 80). ratio == 0.5 → fold second (right)
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -1494,6 +1523,55 @@ mod tests {
     }
 
     #[test]
+    fn test_fold_subtree_each_leaf_gets_bar() {
+        // Layout: horizontal split, right child is a vertical split with 2 leaves.
+        // When the right subtree folds, each leaf gets its own 1-cell fold bar.
+        let id_left = PaneId::new_v4();
+        let id_top_right = PaneId::new_v4();
+        let id_bot_right = PaneId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id_left)),
+            second: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(id_top_right)),
+                second: Box::new(LayoutNode::Leaf(id_bot_right)),
+            }),
+        };
+        // 120 wide, right subtree needs 80+2=82 → fold at 60 per side
+        let area = Rect::new(0, 0, 120, 40);
+        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
+
+        // Left should be visible
+        let left_visible = resolved.iter().any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id_left));
+        assert!(left_visible, "left pane should be visible");
+
+        // Both right panes should be folded with non-zero rects
+        let right_folded: Vec<_> = resolved.iter().filter(|rp| matches!(rp, ResolvedPane::Folded { .. })).collect();
+        assert_eq!(right_folded.len(), 2, "both right panes should be folded");
+
+        // Each fold bar should be 1 cell wide, full height
+        for bar in &right_folded {
+            if let ResolvedPane::Folded { rect, direction, .. } = bar {
+                assert_eq!(rect.width, 1, "fold bar should be 1 cell wide");
+                assert_eq!(rect.height, 40, "fold bar should span full height");
+                assert_eq!(*direction, SplitDirection::Horizontal);
+            }
+        }
+
+        // Bars should be adjacent (side by side)
+        if let (
+            ResolvedPane::Folded { rect: r1, .. },
+            ResolvedPane::Folded { rect: r2, .. },
+        ) = (right_folded[0], right_folded[1])
+        {
+            assert_eq!(r2.x, r1.x + 1, "bars should be adjacent");
+        }
+    }
+
+    #[test]
     fn test_subtree_min_size_leaf() {
         let id = PaneId::new_v4();
         let node = LayoutNode::Leaf(id);
@@ -1501,8 +1579,8 @@ mod tests {
 
         // Without overrides: use global defaults
         let (w, h) = node.subtree_min_size(params, &HashMap::new());
-        assert_eq!(w, 100);
-        assert_eq!(h, 4);
+        assert_eq!(w, 80);
+        assert_eq!(h, 20);
 
         // With override
         let mut leaf_mins = HashMap::new();
@@ -1524,8 +1602,9 @@ mod tests {
         };
         let params = LayoutParams::default();
         let (w, h) = node.subtree_min_size(params, &HashMap::new());
-        // Horizontal split: width = min(100, 100) + 1 = 101, height = max(4, 4) = 4
-        assert_eq!(w, 101);
-        assert_eq!(h, 4);
+        // Horizontal split: min(80+1, 80+1) = 81, height = max(50, 50) = 50
+        // (each folded leaf takes 1 cell)
+        assert_eq!(w, 81);
+        assert_eq!(h, 20);
     }
 }

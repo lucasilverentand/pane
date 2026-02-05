@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 pub enum AppEvent {
     Key(KeyEvent),
     MouseDown { x: u16, y: u16 },
+    MouseRightDown { x: u16, y: u16 },
     MouseDrag { x: u16, y: u16 },
     MouseMove { x: u16, y: u16 },
     MouseUp,
@@ -31,8 +32,11 @@ pub fn start_event_loop(event_tx: mpsc::UnboundedSender<AppEvent>) {
                     let app_event = match event {
                         Event::Key(key) => AppEvent::Key(key),
                         Event::Mouse(m) => match m.kind {
-                            MouseEventKind::Down(_) => {
+                            MouseEventKind::Down(MouseButton::Left) => {
                                 AppEvent::MouseDown { x: m.column, y: m.row }
+                            }
+                            MouseEventKind::Down(MouseButton::Right) => {
+                                AppEvent::MouseRightDown { x: m.column, y: m.row }
                             }
                             MouseEventKind::Drag(MouseButton::Left) => {
                                 AppEvent::MouseDrag { x: m.column, y: m.row }
