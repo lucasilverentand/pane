@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::{Alignment, Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph},
@@ -22,11 +22,6 @@ pub fn render_group(
     area: Rect,
 ) {
     let pane = group.active_pane();
-    let title = if pane.is_scrolled() {
-        format!(" {} [+{}] ", pane.title, pane.scroll_offset)
-    } else {
-        format!(" {} ", pane.title)
-    };
 
     let border_style = if is_active {
         Style::default().fg(theme.border_active)
@@ -37,13 +32,13 @@ pub fn render_group(
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(border_style)
-        .title(Line::from(title).alignment(Alignment::Center));
+        .border_style(border_style);
 
     if is_active {
         let indicator = match mode {
             Mode::Copy => " COPY ",
             Mode::Scroll => " SCROLL ",
+            Mode::Select => " SELECT ",
             _ => " ACTIVE ",
         };
         block = block.title_bottom(Line::styled(
@@ -149,9 +144,10 @@ fn build_tab_bar<'a>(
     let mut tab_ranges: Vec<(u16, u16)> = Vec::new();
     let mut cursor_x = area.x;
     let max_x = area.x + area.width;
-    let sep = " \u{2502} "; // " │ " — 3 chars
+    let sep = " \u{B7} "; // " · "
+    let sep_width = 3u16; // 3 display columns
     let plus_text = " + ";
-    let plus_reserve = plus_text.len() as u16;
+    let plus_reserve = 3u16;
 
     for (i, tab) in group.tabs.iter().enumerate() {
         let is_active_tab = i == group.active_tab;
@@ -168,7 +164,7 @@ fn build_tab_bar<'a>(
         if i > 0 {
             let sep_style = Style::default().fg(theme.dim);
             spans.push(Span::styled(sep, sep_style));
-            cursor_x += sep.len() as u16;
+            cursor_x += sep_width;
         }
 
         let tab_start = cursor_x;
@@ -176,7 +172,7 @@ fn build_tab_bar<'a>(
         let style = if is_active_tab {
             Style::default()
                 .fg(theme.tab_active)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.tab_inactive)
         };
@@ -188,10 +184,9 @@ fn build_tab_bar<'a>(
     }
 
     // + button
-    let plus_range = if cursor_x + plus_reserve + 3 <= max_x {
-        // separator before +
+    let plus_range = if cursor_x + sep_width + plus_reserve <= max_x {
         spans.push(Span::styled(sep, Style::default().fg(theme.dim)));
-        cursor_x += sep.len() as u16;
+        cursor_x += sep_width;
         let start = cursor_x;
         spans.push(Span::styled(plus_text, Style::default().fg(theme.accent)));
         cursor_x += plus_reserve;

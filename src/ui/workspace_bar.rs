@@ -1,6 +1,6 @@
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -33,61 +33,48 @@ fn compute_layout(
     names: &[String],
     active_idx: usize,
     area: Rect,
-) -> (Vec<Span<'static>>, TabLayout) {
-    let mut spans: Vec<Span<'static>> = Vec::new();
+) -> TabLayout {
     let mut tab_ranges: Vec<(u16, u16)> = Vec::new();
     let max_x = area.x + area.width;
     let plus_reserve = 3u16; // " + "
+    let sep_width = 3u16; // " · " — 3 display columns
     let mut cursor_x = area.x;
-
-    // Leading space
-    spans.push(Span::raw(" "));
-    cursor_x += 1;
 
     for (i, name) in names.iter().enumerate() {
         let display_name = truncate_name(name, 20);
+        let label = format!(" {} ", display_name);
+        let label_width = label.len() as u16;
 
-        let tab_text = format!(" {} ", display_name);
-        let tab_width = tab_text.len() as u16;
-
-        // Check if this tab fits (reserve space for +)
-        if cursor_x + tab_width + plus_reserve > max_x && i != active_idx {
-            // Skip tabs that don't fit (but always show active)
+        // Check if this tab fits (reserve space for + button)
+        if cursor_x + label_width + plus_reserve > max_x && i != active_idx {
             tab_ranges.push((0, 0));
             continue;
         }
 
-        let tab_start = cursor_x;
-        let tab_end = cursor_x + tab_width;
-
-        tab_ranges.push((tab_start, tab_end));
-        spans.push(Span::styled(tab_text, Style::default()));
-
-        cursor_x = tab_end;
-
-        // 1-char gap between tabs
-        if i + 1 < names.len() {
-            spans.push(Span::raw(" "));
-            cursor_x += 1;
+        // Separator before non-first tabs
+        if i > 0 {
+            cursor_x += sep_width;
         }
+
+        let tab_start = cursor_x;
+        cursor_x += label_width;
+        tab_ranges.push((tab_start, cursor_x));
     }
 
     // + button
-    let plus_range = if cursor_x + plus_reserve <= max_x {
+    let plus_range = if cursor_x + sep_width + plus_reserve <= max_x {
+        cursor_x += sep_width;
         let start = cursor_x;
-        spans.push(Span::styled(" + ", Style::default()));
-        Some((start, start + plus_reserve))
+        cursor_x += plus_reserve;
+        Some((start, cursor_x))
     } else {
         None
     };
 
-    (
-        spans,
-        TabLayout {
-            tab_ranges,
-            plus_range,
-        },
-    )
+    TabLayout {
+        tab_ranges,
+        plus_range,
+    }
 }
 
 pub fn render(
@@ -97,19 +84,13 @@ pub fn render(
     frame: &mut Frame,
     area: Rect,
 ) {
-    let (raw_spans, layout) = compute_layout(workspace_names, active_idx, area);
+    let layout = compute_layout(workspace_names, active_idx, area);
+    let sep = " \u{B7} "; // " · "
 
-    // Re-style each span based on tab index, with rounded end caps
-    let mut styled_spans: Vec<Span<'static>> = Vec::new();
-    let mut span_idx = 0;
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut first = true;
 
-    // Leading space
-    if !raw_spans.is_empty() {
-        styled_spans.push(Span::styled(" ", Style::default()));
-        span_idx += 1;
-    }
-
-    for (i, _name) in workspace_names.iter().enumerate() {
+    for (i, name) in workspace_names.iter().enumerate() {
         if i >= layout.tab_ranges.len() {
             break;
         }
@@ -118,59 +99,34 @@ pub fn render(
             continue;
         }
 
+        // Separator before non-first visible tabs
+        if !first {
+            spans.push(Span::styled(sep, Style::default().fg(theme.dim)));
+        }
+        first = false;
+
         let is_active = i == active_idx;
-        let display_name = truncate_name(&workspace_names[i], 20);
+        let display_name = truncate_name(name, 20);
+        let label = format!(" {} ", display_name);
 
-        let bg_color = if is_active {
-            theme.workspace_tab_active_bg
-        } else {
-            theme.workspace_tab_inactive_bg
-        };
-
-        // Left rounded cap: fg=tab_bg on transparent bg
-        styled_spans.push(Span::styled(
-            "\u{E0B6}",
-            Style::default().fg(bg_color),
-        ));
-
-        // Tab content
-        let content_style = if is_active {
+        let style = if is_active {
             Style::default()
-                .fg(Color::Black)
-                .bg(bg_color)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default()
-                .fg(theme.dim)
-                .bg(bg_color)
+            Style::default().fg(theme.dim)
         };
 
-        styled_spans.push(Span::styled(display_name, content_style));
-
-        // Right rounded cap: fg=tab_bg on transparent bg
-        styled_spans.push(Span::styled(
-            "\u{E0B4}",
-            Style::default().fg(bg_color),
-        ));
-
-        span_idx += 1;
-
-        // Gap span
-        if i + 1 < workspace_names.len() && span_idx < raw_spans.len() {
-            styled_spans.push(Span::styled(" ", Style::default()));
-            span_idx += 1;
-        }
+        spans.push(Span::styled(label, style));
     }
 
     // + button
     if layout.plus_range.is_some() {
-        styled_spans.push(Span::styled(
-            " + ",
-            Style::default().fg(theme.accent),
-        ));
+        spans.push(Span::styled(sep, Style::default().fg(theme.dim)));
+        spans.push(Span::styled(" + ", Style::default().fg(theme.accent)));
     }
 
-    let line = Line::from(styled_spans);
+    let line = Line::from(spans);
     frame.render_widget(Paragraph::new(line), area);
 }
 
@@ -185,7 +141,7 @@ pub fn hit_test(
         return None;
     }
 
-    let (_spans, layout) = compute_layout(workspace_names, active_idx, area);
+    let layout = compute_layout(workspace_names, active_idx, area);
 
     // Check + button first
     if let Some((start, end)) = layout.plus_range {
@@ -219,7 +175,8 @@ mod tests {
     fn test_hit_test_tab_click() {
         let ws = names(&["alpha", "beta"]);
         let area = Rect::new(0, 0, 80, 1);
-        let click = hit_test(&ws, 0, area, 2, 0);
+        // First tab: " alpha " starts at x=0, 7 chars wide → [0, 7)
+        let click = hit_test(&ws, 0, area, 1, 0);
         assert_eq!(click, Some(WorkspaceBarClick::Tab(0)));
     }
 
@@ -227,8 +184,8 @@ mod tests {
     fn test_hit_test_plus_button() {
         let ws = names(&["a"]);
         let area = Rect::new(0, 0, 80, 1);
-        // " " + " a " (4 chars) → cursor at 5, then + at [5, 8)
-        let click = hit_test(&ws, 0, area, 5, 0);
+        // " a " (3 chars) + " · " (3 chars) + " + " starts at x=6
+        let click = hit_test(&ws, 0, area, 6, 0);
         assert_eq!(click, Some(WorkspaceBarClick::NewWorkspace));
     }
 
@@ -265,7 +222,7 @@ mod tests {
     fn test_plus_button_present() {
         let ws = names(&["a"]);
         let area = Rect::new(0, 0, 80, 1);
-        let (_spans, layout) = compute_layout(&ws, 0, area);
+        let layout = compute_layout(&ws, 0, area);
         assert!(layout.plus_range.is_some());
     }
 }
