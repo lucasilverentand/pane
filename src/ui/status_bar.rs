@@ -34,6 +34,13 @@ pub fn render(app: &App, theme: &Theme, frame: &mut Frame, area: Rect) {
             String::new(),
             "type command, enter to confirm, esc to cancel ".to_string(),
         ),
+        Mode::Select => {
+            let mode_left = build_mode_left(app, "[SELECT] ");
+            (
+                mode_left,
+                "hjkl nav  n tab  d split  w close  1-9 pane  esc back ".to_string(),
+            )
+        }
         Mode::Copy => {
             let mode_left = build_mode_left(app, "[COPY] ");
             (

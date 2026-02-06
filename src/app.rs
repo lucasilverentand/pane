@@ -20,6 +20,7 @@ use crate::ui::help::HelpState;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Mode {
     Normal,
+    Select,
     Scroll,
     SessionPicker,
     Help,
@@ -205,7 +206,7 @@ impl App {
                 }
             }
             AppEvent::MouseScroll { up } => {
-                if self.mode == Mode::Normal || self.mode == Mode::Scroll {
+                if self.mode == Mode::Normal || self.mode == Mode::Select || self.mode == Mode::Scroll {
                     if up {
                         self.state.scroll_active_pane(|p| p.scroll_up(3));
                         if self.state.is_active_pane_scrolled() {
@@ -227,12 +228,12 @@ impl App {
                 }
             }
             AppEvent::MouseDown { x, y } => {
-                if self.mode == Mode::Normal {
+                if self.mode == Mode::Normal || self.mode == Mode::Select {
                     self.handle_mouse_down(x, y, tui)?;
                 }
             }
             AppEvent::MouseRightDown { x, y } => {
-                if self.mode == Mode::Normal {
+                if self.mode == Mode::Normal || self.mode == Mode::Select {
                     self.handle_mouse_right_down(x, y, tui)?;
                 }
             }
@@ -468,6 +469,7 @@ impl App {
                 return self.handle_copy_mode_key(key);
             }
             Mode::CommandPalette => return self.handle_command_palette_key(key, tui),
+            Mode::Select => return self.handle_select_key(key, tui),
             Mode::Normal => {}
         }
 
@@ -560,7 +562,7 @@ impl App {
                 self.state.restart_active_pane(cols, rows)?;
             }
             Action::FocusLeft => {
-                if self.vim_forward_if_active(KeyCode::Char('h'), KeyModifiers::ALT) {
+                if self.mode != Mode::Select && self.vim_forward_if_active(KeyCode::Char('h'), KeyModifiers::ALT) {
                     return Ok(());
                 }
                 let ws = self.state.active_workspace();
@@ -573,7 +575,7 @@ impl App {
                 }
             }
             Action::FocusDown => {
-                if self.vim_forward_if_active(KeyCode::Char('j'), KeyModifiers::ALT) {
+                if self.mode != Mode::Select && self.vim_forward_if_active(KeyCode::Char('j'), KeyModifiers::ALT) {
                     return Ok(());
                 }
                 let ws = self.state.active_workspace();
@@ -586,7 +588,7 @@ impl App {
                 }
             }
             Action::FocusUp => {
-                if self.vim_forward_if_active(KeyCode::Char('k'), KeyModifiers::ALT) {
+                if self.mode != Mode::Select && self.vim_forward_if_active(KeyCode::Char('k'), KeyModifiers::ALT) {
                     return Ok(());
                 }
                 let ws = self.state.active_workspace();
@@ -599,7 +601,7 @@ impl App {
                 }
             }
             Action::FocusRight => {
-                if self.vim_forward_if_active(KeyCode::Char('l'), KeyModifiers::ALT) {
+                if self.mode != Mode::Select && self.vim_forward_if_active(KeyCode::Char('l'), KeyModifiers::ALT) {
                     return Ok(());
                 }
                 let ws = self.state.active_workspace();
@@ -726,6 +728,13 @@ impl App {
             }
             Action::RenameWindow => {
                 // TODO: needs an input mode to collect the new name
+            }
+            Action::SelectMode => {
+                self.mode = if self.mode == Mode::Select {
+                    Mode::Normal
+                } else {
+                    Mode::Select
+                };
             }
             Action::RenamePane | Action::Detach => {
                 // Will be implemented in later phases
@@ -912,6 +921,26 @@ impl App {
             // No command palette state, cancel
             self.mode = Mode::Normal;
         }
+        Ok(())
+    }
+
+    fn handle_select_key(&mut self, key: KeyEvent, tui: &Tui) -> anyhow::Result<()> {
+        let normalized = config::normalize_key(key);
+
+        // Check normal keymap first (for Ctrl+Space toggle back)
+        if let Some(action) = self.state.config.keys.lookup(&normalized).cloned() {
+            if action == Action::SelectMode {
+                self.mode = Mode::Normal;
+                return Ok(());
+            }
+        }
+
+        // Check select keymap
+        if let Some(action) = self.state.config.select_keys.lookup(&normalized).cloned() {
+            return self.execute_action(action, tui);
+        }
+
+        // Unbound keys silently ignored
         Ok(())
     }
 

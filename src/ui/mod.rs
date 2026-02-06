@@ -17,7 +17,7 @@ pub fn render(app: &App, frame: &mut Frame) {
     let theme = &app.state.config.theme;
 
     let [header, body, footer] = Layout::vertical([
-        Constraint::Length(2),
+        Constraint::Length(1),
         Constraint::Fill(1),
         Constraint::Length(1),
     ])
@@ -96,7 +96,7 @@ pub fn render(app: &App, frame: &mut Frame) {
                 command_palette::render(cp_state, theme, frame, frame.area());
             }
         }
-        Mode::Normal | Mode::Scroll | Mode::Copy => {}
+        Mode::Normal | Mode::Select | Mode::Scroll | Mode::Copy => {}
     }
 }
 

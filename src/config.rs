@@ -48,6 +48,7 @@ pub enum Action {
     RenameWindow,
     RenamePane,
     Detach,
+    SelectMode,
 }
 
 // ---------------------------------------------------------------------------
@@ -66,8 +67,6 @@ pub struct Theme {
     pub tab_inactive: Color,
     pub fold_bar_bg: Color,
     pub fold_bar_active_bg: Color,
-    pub workspace_tab_active_bg: Color,
-    pub workspace_tab_inactive_bg: Color,
 }
 
 impl Default for Theme {
@@ -83,8 +82,6 @@ impl Default for Theme {
             tab_inactive: Color::DarkGray,
             fold_bar_bg: Color::Rgb(40, 40, 40),
             fold_bar_active_bg: Color::DarkGray,
-            workspace_tab_active_bg: Color::Cyan,
-            workspace_tab_inactive_bg: Color::Rgb(50, 50, 50),
         }
     }
 }
@@ -191,6 +188,7 @@ impl KeyMap {
             ("ctrl+?", Action::Help),
             ("shift+pageup", Action::ScrollMode),
             ("ctrl+p", Action::CommandPalette),
+            ("ctrl+space", Action::SelectMode),
         ];
 
         for (key_str, action) in defaults {
@@ -210,6 +208,60 @@ impl KeyMap {
         for n in 1..=9u8 {
             let ch = (b'0' + n) as char;
             let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::ALT);
+            map.insert(key, Action::FocusGroupN(n));
+        }
+
+        Self { map }
+    }
+
+    pub fn select_defaults() -> Self {
+        let mut map = HashMap::new();
+
+        let defaults: Vec<(&str, Action)> = vec![
+            ("h", Action::FocusLeft),
+            ("j", Action::FocusDown),
+            ("k", Action::FocusUp),
+            ("l", Action::FocusRight),
+            ("left", Action::FocusLeft),
+            ("down", Action::FocusDown),
+            ("up", Action::FocusUp),
+            ("right", Action::FocusRight),
+            ("n", Action::NewTab),
+            ("w", Action::CloseTab),
+            ("[", Action::PrevTab),
+            ("]", Action::NextTab),
+            ("d", Action::SplitHorizontal),
+            ("shift+d", Action::SplitVertical),
+            ("t", Action::NewWorkspace),
+            ("shift+w", Action::CloseWorkspace),
+            ("shift+h", Action::ResizeShrinkH),
+            ("shift+l", Action::ResizeGrowH),
+            ("shift+j", Action::ResizeGrowV),
+            ("shift+k", Action::ResizeShrinkV),
+            ("=", Action::Equalize),
+            ("alt+h", Action::MoveTabLeft),
+            ("alt+j", Action::MoveTabDown),
+            ("alt+k", Action::MoveTabUp),
+            ("alt+l", Action::MoveTabRight),
+            ("/", Action::CommandPalette),
+            ("?", Action::Help),
+            ("s", Action::SessionPicker),
+            ("c", Action::CopyMode),
+            ("p", Action::PasteClipboard),
+            ("r", Action::RestartPane),
+            ("esc", Action::SelectMode),
+        ];
+
+        for (key_str, action) in defaults {
+            if let Some(key) = parse_key(key_str) {
+                map.insert(key, action);
+            }
+        }
+
+        // 1..9 → FocusGroupN
+        for n in 1..=9u8 {
+            let ch = (b'0' + n) as char;
+            let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
             map.insert(key, Action::FocusGroupN(n));
         }
 
@@ -290,6 +342,7 @@ fn action_name_map() -> HashMap<&'static str, Action> {
     m.insert("rename_window", Action::RenameWindow);
     m.insert("rename_pane", Action::RenamePane);
     m.insert("detach", Action::Detach);
+    m.insert("select_mode", Action::SelectMode);
     m
 }
 
@@ -302,6 +355,7 @@ pub struct Config {
     pub theme: Theme,
     pub behavior: Behavior,
     pub keys: KeyMap,
+    pub select_keys: KeyMap,
     pub status_bar: StatusBarConfig,
 }
 
@@ -311,6 +365,7 @@ impl Default for Config {
             theme: Theme::default(),
             behavior: Behavior::default(),
             keys: KeyMap::from_defaults(),
+            select_keys: KeyMap::select_defaults(),
             status_bar: StatusBarConfig::default(),
         }
     }
@@ -353,8 +408,6 @@ impl Config {
             if let Some(s) = t.tab_inactive { if let Some(c) = parse_color(&s) { config.theme.tab_inactive = c; } }
             if let Some(s) = t.fold_bar_bg { if let Some(c) = parse_color(&s) { config.theme.fold_bar_bg = c; } }
             if let Some(s) = t.fold_bar_active_bg { if let Some(c) = parse_color(&s) { config.theme.fold_bar_active_bg = c; } }
-            if let Some(s) = t.workspace_tab_active_bg { if let Some(c) = parse_color(&s) { config.theme.workspace_tab_active_bg = c; } }
-            if let Some(s) = t.workspace_tab_inactive_bg { if let Some(c) = parse_color(&s) { config.theme.workspace_tab_inactive_bg = c; } }
         }
 
         // Behavior
@@ -370,6 +423,11 @@ impl Config {
         // Keys
         if let Some(keys) = raw.keys {
             config.keys.merge(&keys);
+        }
+
+        // Select keys
+        if let Some(select_keys) = raw.select_keys {
+            config.select_keys.merge(&select_keys);
         }
 
         // Status bar
@@ -396,6 +454,7 @@ struct RawConfig {
     theme: Option<RawTheme>,
     behavior: Option<RawBehavior>,
     keys: Option<HashMap<String, String>>,
+    select_keys: Option<HashMap<String, String>>,
     status_bar: Option<RawStatusBar>,
 }
 
@@ -411,8 +470,6 @@ struct RawTheme {
     tab_inactive: Option<String>,
     fold_bar_bg: Option<String>,
     fold_bar_active_bg: Option<String>,
-    workspace_tab_active_bg: Option<String>,
-    workspace_tab_inactive_bg: Option<String>,
 }
 
 #[derive(Deserialize, Default)]

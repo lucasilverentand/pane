@@ -180,6 +180,7 @@ pub fn action_display_name(action: &Action) -> &str {
         Action::RenameWindow => "Rename Window",
         Action::RenamePane => "Rename Pane",
         Action::Detach => "Detach",
+        Action::SelectMode => "Select Mode",
     }
 }
 
@@ -219,6 +220,7 @@ fn all_actions() -> Vec<(Action, String)> {
         (Action::RenameWindow, "Rename Window".into()),
         (Action::RenamePane, "Rename Pane".into()),
         (Action::Detach, "Detach".into()),
+        (Action::SelectMode, "Select Mode".into()),
     ]
 }
 
