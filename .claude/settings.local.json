@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(PATH=\"$HOME/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH\" cargo test:*)",
+      "Bash(/Users/luca/.cargo/bin/cargo test:*)",
+      "Bash(PATH=\"$HOME/.cargo/bin:$PATH\" cargo test:*)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "spinnerTipsEnabled": true
+}
