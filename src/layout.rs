@@ -191,9 +191,9 @@ impl LayoutNode {
                 }
                 // Case 3: Not enough space for both — must fold one
                 else {
-                    let fl = first.leaf_count();
-                    let sl = second.leaf_count();
-                    // Folding a subtree costs leaf_count cells (one per pane)
+                    let fl = first.fold_cell_count(*direction);
+                    let sl = second.fold_cell_count(*direction);
+                    // Folding a subtree costs fold_cell_count cells
                     let first_fits_alone = total >= first_min + sl;
                     let second_fits_alone = total >= second_min + fl;
 
@@ -260,11 +260,11 @@ impl LayoutNode {
             } => {
                 let (fw, fh) = first.subtree_min_size(params, leaf_mins);
                 let (sw, sh) = second.subtree_min_size(params, leaf_mins);
-                let fl = first.leaf_count();
-                let sl = second.leaf_count();
-                // When one child folds, each of its leaves takes 1 cell.
-                // Option A: show first, fold second → first_min + second_leaf_count
-                // Option B: show second, fold first → second_min + first_leaf_count
+                let fl = first.fold_cell_count(*direction);
+                let sl = second.fold_cell_count(*direction);
+                // When one child folds, it takes fold_cell_count cells.
+                // Option A: show first, fold second → first_min + second_fold_cells
+                // Option B: show second, fold first → second_min + first_fold_cells
                 // Min = whichever option is smaller.
                 match direction {
                     SplitDirection::Horizontal => {
@@ -342,34 +342,82 @@ impl LayoutNode {
         }
     }
 
-    /// Fold an entire subtree: each leaf gets its own 1-cell fold bar rect.
+    /// Fold an entire subtree recursively, preserving internal split structure.
+    /// - Leaf: gets a single fold bar in the parent direction.
+    /// - Split same direction as fold: children tile along fold axis.
+    /// - Split cross direction: bar is split perpendicular by ratio, each child gets its portion.
     fn fold_subtree(
         node: &LayoutNode,
         bar_rect: Rect,
-        direction: SplitDirection,
+        fold_direction: SplitDirection,
         result: &mut Vec<ResolvedPane>,
     ) {
-        let ids = node.pane_ids();
-        for (i, id) in ids.into_iter().enumerate() {
-            let rect = match direction {
-                SplitDirection::Horizontal => {
-                    // Each leaf gets 1 column within bar_rect
-                    let x = bar_rect.x + (i as u16).min(bar_rect.width.saturating_sub(1));
-                    let w = if (i as u16) < bar_rect.width { 1 } else { 0 };
-                    Rect::new(x, bar_rect.y, w, bar_rect.height)
-                }
-                SplitDirection::Vertical => {
-                    // Each leaf gets 1 row within bar_rect
-                    let y = bar_rect.y + (i as u16).min(bar_rect.height.saturating_sub(1));
-                    let h = if (i as u16) < bar_rect.height { 1 } else { 0 };
-                    Rect::new(bar_rect.x, y, bar_rect.width, h)
-                }
-            };
-            result.push(ResolvedPane::Folded {
-                id,
-                rect,
+        match node {
+            LayoutNode::Leaf(id) => {
+                result.push(ResolvedPane::Folded {
+                    id: *id,
+                    rect: bar_rect,
+                    direction: fold_direction,
+                });
+            }
+            LayoutNode::Split {
                 direction,
-            });
+                ratio,
+                first,
+                second,
+                ..
+            } => {
+                if *direction == fold_direction {
+                    // Same direction: tile children along fold axis
+                    let fc = first.fold_cell_count(fold_direction);
+                    let sc = second.fold_cell_count(fold_direction);
+                    let total = fc + sc;
+                    let (first_bar, second_bar) = match fold_direction {
+                        SplitDirection::Horizontal => {
+                            let fw = if total > 0 {
+                                (bar_rect.width as u32 * fc as u32 / total as u32) as u16
+                            } else {
+                                0
+                            };
+                            let fw = fw.min(bar_rect.width);
+                            (
+                                Rect::new(bar_rect.x, bar_rect.y, fw, bar_rect.height),
+                                Rect::new(
+                                    bar_rect.x + fw,
+                                    bar_rect.y,
+                                    bar_rect.width.saturating_sub(fw),
+                                    bar_rect.height,
+                                ),
+                            )
+                        }
+                        SplitDirection::Vertical => {
+                            let fh = if total > 0 {
+                                (bar_rect.height as u32 * fc as u32 / total as u32) as u16
+                            } else {
+                                0
+                            };
+                            let fh = fh.min(bar_rect.height);
+                            (
+                                Rect::new(bar_rect.x, bar_rect.y, bar_rect.width, fh),
+                                Rect::new(
+                                    bar_rect.x,
+                                    bar_rect.y + fh,
+                                    bar_rect.width,
+                                    bar_rect.height.saturating_sub(fh),
+                                ),
+                            )
+                        }
+                    };
+                    Self::fold_subtree(first, first_bar, fold_direction, result);
+                    Self::fold_subtree(second, second_bar, fold_direction, result);
+                } else {
+                    // Cross direction: split bar_rect perpendicular using ratio
+                    let (first_bar, second_bar) =
+                        Self::split_rects(direction, *ratio, bar_rect);
+                    Self::fold_subtree(first, first_bar, fold_direction, result);
+                    Self::fold_subtree(second, second_bar, fold_direction, result);
+                }
+            }
         }
     }
 
@@ -414,12 +462,14 @@ impl LayoutNode {
         }
     }
 
-    /// Unfold a pane by skewing the ratio so the target's side gets most of the space,
-    /// causing the other side to auto-fold. Preserves positional order.
+    /// Unfold a pane by skewing the ratio at the split responsible for
+    /// folding the target. Skews only that one split — inner ratios are
+    /// preserved so subtree proportions remain stable across fold/unfold.
     pub fn unfold_towards(&mut self, target: PaneId) -> bool {
         match self {
             LayoutNode::Leaf(_) => false,
             LayoutNode::Split {
+                direction,
                 ratio,
                 first,
                 second,
@@ -427,37 +477,39 @@ impl LayoutNode {
             } => {
                 let in_first = first.contains(target);
                 let in_second = second.contains(target);
-                if in_first || in_second {
-                    let is_direct =
-                        matches!(first.as_ref(), LayoutNode::Leaf(id) if *id == target)
-                            || matches!(second.as_ref(), LayoutNode::Leaf(id) if *id == target);
-                    let is_first_leaf =
-                        (in_first && first.first_leaf() == target)
-                            || (in_second && second.first_leaf() == target);
-                    if is_direct || is_first_leaf {
-                        // Skew ratio to give space to the side containing the target
-                        *ratio = if in_first { 0.9 } else { 0.1 };
-                        // Also recurse into the target's subtree to unfold it internally
-                        if in_first {
-                            first.unfold_inner(target);
-                        } else {
-                            second.unfold_inner(target);
-                        }
+                if !(in_first || in_second) {
+                    return false;
+                }
+
+                // Check if the child containing the target is a same-direction
+                // split — if so, the fold might be internal and we should try
+                // recursing first to avoid changing our ratio unnecessarily.
+                let child_is_same_dir_split = {
+                    let child: &LayoutNode = if in_first { first } else { second };
+                    matches!(child, LayoutNode::Split { direction: d, .. } if *d == *direction)
+                };
+                if child_is_same_dir_split {
+                    let child = if in_first {
+                        first.as_mut()
+                    } else {
+                        second.as_mut()
+                    };
+                    if child.unfold_towards(target) {
                         return true;
                     }
-                    // Recurse: skew this split towards the side containing target
-                    *ratio = if in_first { 0.9 } else { 0.1 };
-                    if in_first {
-                        return first.unfold_towards(target);
-                    }
-                    return second.unfold_towards(target);
                 }
-                false
+
+                // The fold is at this level (target is a direct child, in a
+                // cross-direction subtree, or same-direction recursion didn't
+                // find a deeper match). Skew ratio to give space to the target.
+                *ratio = if in_first { 0.9 } else { 0.1 };
+                true
             }
         }
     }
 
     /// Internal helper: unfold within a subtree by setting ratios to 0.5.
+    #[allow(dead_code)]
     fn unfold_inner(&mut self, target: PaneId) -> bool {
         match self {
             LayoutNode::Leaf(_) => false,
@@ -644,11 +696,35 @@ impl LayoutNode {
     }
 
     /// Count the number of leaves in this subtree.
+    #[allow(dead_code)]
     pub fn leaf_count(&self) -> u16 {
         match self {
             LayoutNode::Leaf(_) => 1,
             LayoutNode::Split { first, second, .. } => {
                 first.leaf_count() + second.leaf_count()
+            }
+        }
+    }
+
+    /// How many cells this subtree needs when folded in the given direction.
+    /// Same-direction splits tile children along the fold axis (sum),
+    /// cross-direction splits stack perpendicular (max).
+    fn fold_cell_count(&self, fold_direction: SplitDirection) -> u16 {
+        match self {
+            LayoutNode::Leaf(_) => 1,
+            LayoutNode::Split {
+                direction,
+                first,
+                second,
+                ..
+            } => {
+                let fc = first.fold_cell_count(fold_direction);
+                let sc = second.fold_cell_count(fold_direction);
+                if *direction == fold_direction {
+                    fc + sc
+                } else {
+                    fc.max(sc)
+                }
             }
         }
     }
@@ -1347,7 +1423,7 @@ mod tests {
     #[test]
     fn test_unfold_towards_skews_ratio() {
         // Two panes in horizontal split, ratio=0.9 means id1 is big, id2 is folded.
-        // Clicking id2 should skew ratio to 0.1 so id2 gets the space and id1 folds.
+        // Clicking id2 should skew ratio to 0.1 so id2 gets the space.
         let id1 = PaneId::new_v4();
         let id2 = PaneId::new_v4();
         let mut node = LayoutNode::Split {
@@ -1384,10 +1460,42 @@ mod tests {
     }
 
     #[test]
-    fn test_unfold_towards_preserves_position() {
-        // Three panes: [id1 | [id2 | id3]] with outer ratio 0.9 (id2/id3 folded on right).
-        // Clicking id2 should: set outer ratio to 0.1 (push id1 left/fold).
-        // The inner subtree now has enough space, so inner ratio stays 0.5 (both id2+id3 fit).
+    fn test_unfold_towards_same_direction_recurses() {
+        // [id1 | [id2 | id3]] both horizontal. Inner ratio 0.9 causes id3 to fold.
+        // unfold_towards(id3) recurses into the same-direction child and skews
+        // the inner ratio to 0.1 (give space to id3). Outer ratio is preserved.
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let id3 = PaneId::new_v4();
+        let mut node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.9,
+                first: Box::new(LayoutNode::Leaf(id2)),
+                second: Box::new(LayoutNode::Leaf(id3)),
+            }),
+        };
+        assert!(node.unfold_towards(id3));
+
+        if let LayoutNode::Split { ratio, second, .. } = &node {
+            // Outer ratio preserved — the inner split handled the unfold
+            assert!((*ratio - 0.5).abs() < f64::EPSILON);
+            // Inner ratio skewed to give id3 space
+            if let LayoutNode::Split { ratio: inner_ratio, .. } = second.as_ref() {
+                assert!((*inner_ratio - 0.1).abs() < f64::EPSILON);
+            }
+        }
+    }
+
+    #[test]
+    fn test_unfold_towards_cross_direction_preserves_inner() {
+        // [id1 | Split(V) → [id2, id3]] with outer ratio 0.9.
+        // The vertical subtree is cross-direction, folds as a unit at outer level.
+        // Clicking id3 should skew outer ratio to 0.1 (give space to second),
+        // preserving inner vertical ratio at 0.3.
         let id1 = PaneId::new_v4();
         let id2 = PaneId::new_v4();
         let id3 = PaneId::new_v4();
@@ -1396,33 +1504,22 @@ mod tests {
             ratio: 0.9,
             first: Box::new(LayoutNode::Leaf(id1)),
             second: Box::new(LayoutNode::Split {
-                direction: SplitDirection::Horizontal,
-                ratio: 0.5,
+                direction: SplitDirection::Vertical,
+                ratio: 0.3,
                 first: Box::new(LayoutNode::Leaf(id2)),
                 second: Box::new(LayoutNode::Leaf(id3)),
             }),
         };
-        // id2 is the first leaf of the second subtree, so it represents folded second subtree
-        assert!(node.unfold_towards(id2));
+        assert!(node.unfold_towards(id3));
 
-        // Outer ratio should be 0.1 (give space to second subtree)
         if let LayoutNode::Split { ratio, second, .. } = &node {
+            // Outer ratio skewed to give space to right subtree
             assert!((*ratio - 0.1).abs() < f64::EPSILON);
-            // Inner ratio reset to 0.5 by unfold_inner — both children have room
+            // Inner vertical ratio preserved at 0.3
             if let LayoutNode::Split { ratio: inner_ratio, .. } = second.as_ref() {
-                assert!((*inner_ratio - 0.5).abs() < f64::EPSILON);
+                assert!((*inner_ratio - 0.3).abs() < f64::EPSILON);
             }
         }
-
-        // Verify positions: on a 150-wide area, total 150 < 100+101=201, fold triggers.
-        // ratio 0.1 < 0.5 → fold first (id1), keep second subtree visible
-        let area = Rect::new(0, 0, 150, 10);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-        // id1 should be folded
-        assert!(matches!(resolved[0], ResolvedPane::Folded { id, .. } if id == id1));
-        // id2 should be visible
-        let id2_visible = resolved.iter().any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id2));
-        assert!(id2_visible, "id2 should be visible after unfold_towards");
     }
 
     #[test]
@@ -1523,9 +1620,10 @@ mod tests {
     }
 
     #[test]
-    fn test_fold_subtree_each_leaf_gets_bar() {
+    fn test_fold_subtree_cross_direction_preserves_structure() {
         // Layout: horizontal split, right child is a vertical split with 2 leaves.
-        // When the right subtree folds, each leaf gets its own 1-cell fold bar.
+        // When the right subtree folds horizontally, the cross-direction vertical split
+        // is preserved: both leaves share a single column, split vertically by ratio.
         let id_left = PaneId::new_v4();
         let id_top_right = PaneId::new_v4();
         let id_bot_right = PaneId::new_v4();
@@ -1540,7 +1638,7 @@ mod tests {
                 second: Box::new(LayoutNode::Leaf(id_bot_right)),
             }),
         };
-        // 120 wide, right subtree needs 80+2=82 → fold at 60 per side
+        // 120 wide, right subtree needs 80+1=81 (cross-direction: fold_cell_count=1)
         let area = Rect::new(0, 0, 120, 40);
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
 
@@ -1548,26 +1646,31 @@ mod tests {
         let left_visible = resolved.iter().any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id_left));
         assert!(left_visible, "left pane should be visible");
 
-        // Both right panes should be folded with non-zero rects
+        // Both right panes should be folded
         let right_folded: Vec<_> = resolved.iter().filter(|rp| matches!(rp, ResolvedPane::Folded { .. })).collect();
         assert_eq!(right_folded.len(), 2, "both right panes should be folded");
 
-        // Each fold bar should be 1 cell wide, full height
+        // Both fold bars should be 1 cell wide (same column) and fold direction = Horizontal
         for bar in &right_folded {
             if let ResolvedPane::Folded { rect, direction, .. } = bar {
                 assert_eq!(rect.width, 1, "fold bar should be 1 cell wide");
-                assert_eq!(rect.height, 40, "fold bar should span full height");
                 assert_eq!(*direction, SplitDirection::Horizontal);
             }
         }
 
-        // Bars should be adjacent (side by side)
+        // Bars should share the same x (single column), split vertically
         if let (
             ResolvedPane::Folded { rect: r1, .. },
             ResolvedPane::Folded { rect: r2, .. },
         ) = (right_folded[0], right_folded[1])
         {
-            assert_eq!(r2.x, r1.x + 1, "bars should be adjacent");
+            assert_eq!(r1.x, r2.x, "bars should share the same column");
+            assert_eq!(r1.y + r1.height, r2.y, "bars should be stacked vertically");
+            assert_eq!(
+                r1.height + r2.height,
+                40,
+                "bars should span full height together"
+            );
         }
     }
 

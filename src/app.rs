@@ -27,6 +27,14 @@ pub enum Mode {
     DevServerInput,
     Copy,
     CommandPalette,
+    Confirm,
+}
+
+#[derive(Clone, Debug)]
+pub enum PendingClose {
+    Tab { group_id: PaneGroupId, tab_idx: usize },
+    Group { group_id: PaneGroupId },
+    Workspace { ws_idx: usize },
 }
 
 struct DragState {
@@ -46,6 +54,7 @@ pub struct App {
     pub command_palette_state: Option<CommandPaletteState>,
     pub help_state: HelpState,
     pub copy_mode_state: Option<CopyModeState>,
+    pub pending_close: Option<PendingClose>,
     drag_state: Option<DragState>,
 }
 
@@ -134,6 +143,7 @@ impl App {
             command_palette_state: None,
             help_state: HelpState::default(),
             copy_mode_state: None,
+            pending_close: None,
             drag_state: None,
         })
     }
@@ -164,6 +174,7 @@ impl App {
             command_palette_state: None,
             help_state: HelpState::default(),
             copy_mode_state: None,
+            pending_close: None,
             drag_state: None,
         }
     }
@@ -188,6 +199,7 @@ impl App {
             command_palette_state: None,
             copy_mode_state: None,
             help_state: HelpState::default(),
+            pending_close: None,
             drag_state: None,
         })
     }
@@ -426,6 +438,7 @@ impl App {
         let size = tui.size()?;
         let bar_h = self.state.workspace_bar_height();
 
+        // Right-click on workspace bar → close workspace (with confirmation if running)
         if y < bar_h {
             let names: Vec<String> = self
                 .state
@@ -444,10 +457,63 @@ impl App {
                 )
             {
                 if self.state.workspaces.len() > 1 && i < self.state.workspaces.len() {
-                    self.state.workspaces.remove(i);
-                    if self.state.active_workspace >= self.state.workspaces.len() {
-                        self.state.active_workspace = self.state.workspaces.len() - 1;
+                    let has_busy = self.state.workspaces[i]
+                        .groups
+                        .values()
+                        .any(|g| g.tabs.iter().any(|p| !p.is_idle()));
+                    if has_busy {
+                        self.pending_close = Some(PendingClose::Workspace { ws_idx: i });
+                        self.mode = Mode::Confirm;
+                    } else {
+                        self.state.workspaces.remove(i);
+                        if self.state.active_workspace >= self.state.workspaces.len() {
+                            self.state.active_workspace = self.state.workspaces.len() - 1;
+                        }
                     }
+                }
+            }
+            return Ok(());
+        }
+
+        // Right-click on pane tab bar → close that tab (with confirmation if running)
+        let body_height = size.height.saturating_sub(1 + bar_h);
+        let body = ratatui::layout::Rect::new(0, bar_h, size.width, body_height);
+
+        let params = crate::layout::LayoutParams::from(&self.state.config.behavior);
+        let ws = self.state.active_workspace();
+        let resolved = ws
+            .layout
+            .resolve_with_fold(body, params, &ws.leaf_min_sizes);
+        for rp in &resolved {
+            if let ResolvedPane::Visible {
+                id: group_id, rect, ..
+            } = rp
+            {
+                if x >= rect.x
+                    && x < rect.x + rect.width
+                    && y >= rect.y
+                    && y < rect.y + rect.height
+                {
+                    let ws = self.state.active_workspace();
+                    if let Some(group) = ws.groups.get(group_id) {
+                        if let Some(tab_area) =
+                            crate::ui::pane_view::tab_bar_area(group, *rect)
+                        {
+                            let layout = crate::ui::pane_view::tab_bar_layout(
+                                group,
+                                &self.state.config.theme,
+                                tab_area,
+                            );
+                            if let Some(crate::ui::pane_view::TabBarClick::Tab(i)) =
+                                crate::ui::pane_view::tab_bar_hit_test(&layout, x, y)
+                            {
+                                let group_id = *group_id;
+                                self.close_tab_or_confirm(group_id, i);
+                                return Ok(());
+                            }
+                        }
+                    }
+                    return Ok(());
                 }
             }
         }
@@ -470,6 +536,7 @@ impl App {
             }
             Mode::CommandPalette => return self.handle_command_palette_key(key, tui),
             Mode::Select => return self.handle_select_key(key, tui),
+            Mode::Confirm => return self.handle_confirm_key(key),
             Mode::Normal => {}
         }
 
@@ -513,7 +580,7 @@ impl App {
                 self.state.new_workspace(cols, rows)?;
             }
             Action::CloseWorkspace => {
-                self.state.close_workspace();
+                self.close_workspace_or_confirm();
             }
             Action::SwitchWorkspace(n) => {
                 let idx = (n as usize) - 1;
@@ -539,7 +606,7 @@ impl App {
                 self.state.active_workspace_mut().active_group_mut().prev_tab();
             }
             Action::CloseTab => {
-                self.state.close_active_tab();
+                self.close_active_tab_or_confirm();
             }
             Action::SplitHorizontal => {
                 let (w, h) = size()?;
@@ -741,6 +808,141 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    fn handle_confirm_key(&mut self, key: KeyEvent) -> anyhow::Result<()> {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') => {
+                if let Some(pending) = self.pending_close.take() {
+                    self.execute_pending_close(pending);
+                }
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Esc | KeyCode::Char('n') => {
+                self.pending_close = None;
+                self.mode = Mode::Normal;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn execute_pending_close(&mut self, pending: PendingClose) {
+        match pending {
+            PendingClose::Tab { group_id, tab_idx } => {
+                let ws = self.state.active_workspace_mut();
+                if let Some(group) = ws.groups.get_mut(&group_id) {
+                    if group.tab_count() > 1 {
+                        group.close_tab(tab_idx);
+                    } else {
+                        // Last tab in group — close the group
+                        let group_ids = ws.layout.group_ids();
+                        if group_ids.len() > 1 {
+                            if let Some(new_focus) = ws.layout.close_pane(group_id) {
+                                ws.groups.remove(&group_id);
+                                ws.active_group = new_focus;
+                            }
+                        }
+                    }
+                }
+            }
+            PendingClose::Group { group_id } => {
+                let ws = self.state.active_workspace_mut();
+                let group_ids = ws.layout.group_ids();
+                if group_ids.len() > 1 {
+                    if let Some(new_focus) = ws.layout.close_pane(group_id) {
+                        ws.groups.remove(&group_id);
+                        ws.active_group = new_focus;
+                    }
+                }
+            }
+            PendingClose::Workspace { ws_idx } => {
+                if self.state.workspaces.len() > 1 && ws_idx < self.state.workspaces.len() {
+                    self.state.workspaces.remove(ws_idx);
+                    if self.state.active_workspace >= self.state.workspaces.len() {
+                        self.state.active_workspace = self.state.workspaces.len() - 1;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Close the active tab, with confirmation if the pane has a running process.
+    fn close_active_tab_or_confirm(&mut self) {
+        let ws = self.state.active_workspace();
+        let group_id = ws.active_group;
+
+        if let Some(group) = ws.groups.get(&group_id) {
+            let tab_idx = group.active_tab;
+            let pane = group.active_pane();
+
+            if !pane.is_idle() {
+                // Running foreground process — ask for confirmation
+                if group.tab_count() > 1 {
+                    self.pending_close = Some(PendingClose::Tab { group_id, tab_idx });
+                } else {
+                    self.pending_close = Some(PendingClose::Group { group_id });
+                }
+                self.mode = Mode::Confirm;
+                return;
+            }
+        }
+
+        // Idle or no group — close immediately
+        self.state.close_active_tab();
+    }
+
+    /// Close the active workspace, with confirmation if any pane has a running process.
+    fn close_workspace_or_confirm(&mut self) {
+        if self.state.workspaces.len() <= 1 {
+            return;
+        }
+        let ws_idx = self.state.active_workspace;
+        let has_busy = self.state.workspaces[ws_idx]
+            .groups
+            .values()
+            .any(|g| g.tabs.iter().any(|p| !p.is_idle()));
+
+        if has_busy {
+            self.pending_close = Some(PendingClose::Workspace { ws_idx });
+            self.mode = Mode::Confirm;
+        } else {
+            self.state.close_workspace();
+        }
+    }
+
+    /// Close a specific tab in a specific group, with confirmation if running.
+    fn close_tab_or_confirm(&mut self, group_id: PaneGroupId, tab_idx: usize) {
+        let ws = self.state.active_workspace();
+        if let Some(group) = ws.groups.get(&group_id) {
+            if tab_idx < group.tabs.len() && !group.tabs[tab_idx].is_idle() {
+                // Running process — confirm
+                if group.tab_count() > 1 {
+                    self.pending_close = Some(PendingClose::Tab { group_id, tab_idx });
+                } else {
+                    self.pending_close = Some(PendingClose::Group { group_id });
+                }
+                self.mode = Mode::Confirm;
+                return;
+            }
+
+            // Exited — close immediately
+            if group.tab_count() > 1 {
+                let ws = self.state.active_workspace_mut();
+                if let Some(group) = ws.groups.get_mut(&group_id) {
+                    group.close_tab(tab_idx);
+                }
+            } else {
+                let ws = self.state.active_workspace_mut();
+                let group_ids = ws.layout.group_ids();
+                if group_ids.len() > 1 {
+                    if let Some(new_focus) = ws.layout.close_pane(group_id) {
+                        ws.groups.remove(&group_id);
+                        ws.active_group = new_focus;
+                    }
+                }
+            }
+        }
     }
 
     fn handle_copy_mode_key(&mut self, key: KeyEvent) -> anyhow::Result<()> {

@@ -114,6 +114,7 @@ pub struct Pane {
     pub command: Option<String>,
     pub cwd: PathBuf,
     pub scroll_offset: usize,
+    shell_pid: Option<u32>,
     pty_writer: Option<Box<dyn Write + Send>>,
     pty_child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
@@ -170,6 +171,7 @@ impl Pane {
         };
 
         let pty_handle = pty::spawn_pty(cmd, &args, size, event_tx, id, Some(&cwd), tmux_env)?;
+        let shell_pid = pty_handle.child.process_id();
         let vt = vt100::Parser::new(rows, cols, 1000);
 
         Ok(Self {
@@ -181,6 +183,7 @@ impl Pane {
             command,
             cwd,
             scroll_offset: 0,
+            shell_pid,
             pty_writer: Some(pty_handle.writer),
             pty_child: Some(pty_handle.child),
             pty_master: Some(pty_handle.master),
@@ -200,6 +203,7 @@ impl Pane {
             command: None,
             cwd: PathBuf::from("/"),
             scroll_offset: 0,
+            shell_pid: None,
             pty_writer: None,
             pty_child: None,
             pty_master: None,
@@ -215,6 +219,31 @@ impl Pane {
 
     pub fn is_scrolled(&self) -> bool {
         self.scroll_offset > 0
+    }
+
+    /// Returns true if the pane is idle (exited, or shell at prompt with no foreground job).
+    #[cfg(unix)]
+    pub fn is_idle(&self) -> bool {
+        if self.exited {
+            return true;
+        }
+        let shell_pid = match self.shell_pid {
+            Some(pid) => pid,
+            None => return false,
+        };
+        let fg_pgid = match &self.pty_master {
+            Some(master) => master.process_group_leader(),
+            None => return false,
+        };
+        match fg_pgid {
+            Some(pgid) => pgid as u32 == shell_pid,
+            None => false,
+        }
+    }
+
+    #[cfg(not(unix))]
+    pub fn is_idle(&self) -> bool {
+        self.exited
     }
 
     pub fn scroll_up(&mut self, n: usize) {

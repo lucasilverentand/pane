@@ -96,6 +96,9 @@ pub fn render(app: &App, frame: &mut Frame) {
                 command_palette::render(cp_state, theme, frame, frame.area());
             }
         }
+        Mode::Confirm => {
+            render_confirm_dialog(app, theme, frame, frame.area());
+        }
         Mode::Normal | Mode::Select | Mode::Scroll | Mode::Copy => {}
     }
 }
@@ -128,6 +131,53 @@ fn render_dev_server_input(
         Line::raw(""),
         Line::styled(
             format!("  > {}_", app.dev_server_input),
+            Style::default().fg(Color::White),
+        ),
+        Line::raw(""),
+        Line::styled(
+            "  enter to confirm, esc to cancel",
+            Style::default().fg(theme.dim),
+        ),
+    ];
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+}
+
+fn render_confirm_dialog(
+    app: &App,
+    theme: &crate::config::Theme,
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+) {
+    use ratatui::{
+        style::{Color, Style},
+        text::Line,
+        widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    };
+
+    let message = match &app.pending_close {
+        Some(crate::app::PendingClose::Workspace { .. }) => {
+            "Close workspace with running processes?"
+        }
+        _ => "Close tab with running process?",
+    };
+
+    let popup_area = centered_rect(40, 15, area);
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(" confirm ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.accent));
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let lines = vec![
+        Line::raw(""),
+        Line::styled(
+            format!("  {}", message),
             Style::default().fg(Color::White),
         ),
         Line::raw(""),

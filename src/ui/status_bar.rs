@@ -52,6 +52,10 @@ pub fn render(app: &App, theme: &Theme, frame: &mut Frame, area: Rect) {
             "[CMD] ".to_string(),
             "type to filter  enter run  esc cancel ".to_string(),
         ),
+        Mode::Confirm => (
+            String::new(),
+            "enter/y confirm  esc/n cancel ".to_string(),
+        ),
     };
 
     let left_len = left.len();
