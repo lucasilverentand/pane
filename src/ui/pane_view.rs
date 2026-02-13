@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::Mode;
-use crate::config::Theme;
+use crate::config::{Config, Theme};
 use crate::copy_mode::CopyModeState;
 use crate::layout::SplitDirection;
 use crate::pane::{terminal::{render_screen, render_screen_copy_mode}, PaneGroup};
@@ -17,14 +17,21 @@ pub fn render_group(
     is_active: bool,
     mode: &Mode,
     copy_mode_state: Option<&CopyModeState>,
-    theme: &Theme,
+    config: &Config,
     frame: &mut Frame,
     area: Rect,
 ) {
     let pane = group.active_pane();
+    let theme = &config.theme;
+
+    // Check if the active pane's foreground process has a decoration
+    let decoration_color = pane.foreground_process.as_deref()
+        .and_then(|proc| config.decoration_for(proc))
+        .map(|d| d.border_color);
 
     let border_style = if is_active {
-        Style::default().fg(theme.border_active)
+        let color = decoration_color.unwrap_or(theme.border_active);
+        Style::default().fg(color)
     } else {
         Style::default().fg(theme.border_inactive)
     };

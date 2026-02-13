@@ -141,8 +141,8 @@ pub struct Pane {
     pub command: Option<String>,
     pub cwd: PathBuf,
     pub scroll_offset: usize,
-    /// Cached: true when the foreground process is `claude`.
-    pub running_claude: bool,
+    /// Cached name of the foreground process (e.g. "claude", "nvim").
+    pub foreground_process: Option<String>,
     shell_pid: Option<u32>,
     pty_writer: Option<Box<dyn Write + Send>>,
     pty_child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
@@ -212,7 +212,7 @@ impl Pane {
             command,
             cwd,
             scroll_offset: 0,
-            running_claude: kind == PaneKind::Agent,
+            foreground_process: None,
             shell_pid,
             pty_writer: Some(pty_handle.writer),
             pty_child: Some(pty_handle.child),
@@ -233,7 +233,7 @@ impl Pane {
             command: None,
             cwd: PathBuf::from("/"),
             scroll_offset: 0,
-            running_claude: false,
+            foreground_process: None,
             shell_pid: None,
             pty_writer: None,
             pty_child: None,
@@ -277,27 +277,32 @@ impl Pane {
         self.exited
     }
 
-    /// Check if the foreground process is claude and update the cached flag.
+    /// Update the cached foreground process name by querying the PTY's fg process group.
     #[cfg(unix)]
-    pub fn update_running_claude(&mut self) {
+    pub fn update_foreground_process(&mut self) {
         if self.exited {
-            self.running_claude = false;
+            self.foreground_process = None;
             return;
         }
         let fg_pid = self.pty_master.as_ref()
             .and_then(|m| m.process_group_leader())
             .map(|pgid| pgid as u32);
-        self.running_claude = match fg_pid {
-            Some(pid) => process_name_by_pid(pid)
-                .map(|name| name == "claude")
-                .unwrap_or(false),
-            None => false,
+        self.foreground_process = match fg_pid {
+            Some(pid) => {
+                // If fg pgid == shell pid, shell is at prompt — no foreground process
+                if self.shell_pid == Some(pid) {
+                    None
+                } else {
+                    process_name_by_pid(pid)
+                }
+            }
+            None => None,
         };
     }
 
     #[cfg(not(unix))]
-    pub fn update_running_claude(&mut self) {
-        self.running_claude = false;
+    pub fn update_foreground_process(&mut self) {
+        self.foreground_process = None;
     }
 
     pub fn scroll_up(&mut self, n: usize) {
@@ -336,6 +341,8 @@ impl Pane {
         if !osc_title.is_empty() {
             self.title = osc_title.to_string();
         }
+        // Update cached foreground process name
+        self.update_foreground_process();
     }
 
     pub fn resize_pty(&mut self, cols: u16, rows: u16) {

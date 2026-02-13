@@ -114,6 +114,25 @@ impl Default for Behavior {
 }
 
 // ---------------------------------------------------------------------------
+// PaneDecoration — per-process visual overrides
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+pub struct PaneDecoration {
+    pub process: String,
+    pub border_color: Color,
+}
+
+impl PaneDecoration {
+    fn defaults() -> Vec<Self> {
+        vec![PaneDecoration {
+            process: "claude".to_string(),
+            border_color: Color::Rgb(249, 115, 22), // orange
+        }]
+    }
+}
+
+// ---------------------------------------------------------------------------
 // StatusBarConfig
 // ---------------------------------------------------------------------------
 
@@ -357,6 +376,7 @@ pub struct Config {
     pub keys: KeyMap,
     pub select_keys: KeyMap,
     pub status_bar: StatusBarConfig,
+    pub decorations: Vec<PaneDecoration>,
 }
 
 impl Default for Config {
@@ -367,6 +387,7 @@ impl Default for Config {
             keys: KeyMap::from_defaults(),
             select_keys: KeyMap::select_defaults(),
             status_bar: StatusBarConfig::default(),
+            decorations: PaneDecoration::defaults(),
         }
     }
 }
@@ -391,6 +412,10 @@ impl Config {
         };
 
         Self::from_raw(raw)
+    }
+
+    pub fn decoration_for(&self, process: &str) -> Option<&PaneDecoration> {
+        self.decorations.iter().find(|d| d.process == process)
     }
 
     fn from_raw(raw: RawConfig) -> Self {
@@ -441,6 +466,23 @@ impl Config {
             if let Some(v) = sb.right { config.status_bar.right = v; }
         }
 
+        // Decorations
+        if let Some(raw_decs) = raw.decorations {
+            // User-provided decorations replace the defaults
+            let mut decs = Vec::new();
+            for rd in raw_decs {
+                if let Some(color) = rd.border_color.and_then(|s| parse_color(&s)) {
+                    decs.push(PaneDecoration {
+                        process: rd.process,
+                        border_color: color,
+                    });
+                }
+            }
+            if !decs.is_empty() {
+                config.decorations = decs;
+            }
+        }
+
         config
     }
 }
@@ -456,6 +498,13 @@ struct RawConfig {
     keys: Option<HashMap<String, String>>,
     select_keys: Option<HashMap<String, String>>,
     status_bar: Option<RawStatusBar>,
+    decorations: Option<Vec<RawDecoration>>,
+}
+
+#[derive(Deserialize)]
+struct RawDecoration {
+    process: String,
+    border_color: Option<String>,
 }
 
 #[derive(Deserialize, Default)]

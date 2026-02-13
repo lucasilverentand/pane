@@ -7,7 +7,8 @@ use crate::ui::pane_view;
 pub fn render_workspace(app: &App, frame: &mut Frame, area: Rect) {
     let ws = app.active_workspace();
     let params = LayoutParams::from(&app.state.config.behavior);
-    let theme = &app.state.config.theme;
+    let config = &app.state.config;
+    let theme = &config.theme;
     let copy_mode_state = if app.mode == Mode::Copy {
         app.copy_mode_state.as_ref()
     } else {
@@ -25,7 +26,7 @@ pub fn render_workspace(app: &App, frame: &mut Frame, area: Rect) {
                     is_active,
                     &app.mode,
                     copy_mode_state,
-                    theme,
+                    config,
                     frame,
                     *rect,
                 );
