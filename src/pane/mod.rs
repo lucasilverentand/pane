@@ -9,6 +9,33 @@ use std::io::Write;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
+/// Get the name of a process by PID. Returns None if lookup fails.
+#[cfg(target_os = "macos")]
+fn process_name_by_pid(pid: u32) -> Option<String> {
+    extern "C" {
+        fn proc_name(pid: std::ffi::c_int, buffer: *mut u8, buffersize: u32) -> std::ffi::c_int;
+    }
+    let mut buf = [0u8; 256];
+    let ret = unsafe { proc_name(pid as std::ffi::c_int, buf.as_mut_ptr(), buf.len() as u32) };
+    if ret > 0 {
+        Some(String::from_utf8_lossy(&buf[..ret as usize]).to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn process_name_by_pid(pid: u32) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/{}/comm", pid))
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+#[cfg(not(unix))]
+fn process_name_by_pid(_pid: u32) -> Option<String> {
+    None
+}
+
 pub type PaneGroupId = uuid::Uuid;
 
 pub struct PaneGroup {
@@ -114,6 +141,8 @@ pub struct Pane {
     pub command: Option<String>,
     pub cwd: PathBuf,
     pub scroll_offset: usize,
+    /// Cached: true when the foreground process is `claude`.
+    pub running_claude: bool,
     shell_pid: Option<u32>,
     pty_writer: Option<Box<dyn Write + Send>>,
     pty_child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
@@ -183,6 +212,7 @@ impl Pane {
             command,
             cwd,
             scroll_offset: 0,
+            running_claude: kind == PaneKind::Agent,
             shell_pid,
             pty_writer: Some(pty_handle.writer),
             pty_child: Some(pty_handle.child),
@@ -203,6 +233,7 @@ impl Pane {
             command: None,
             cwd: PathBuf::from("/"),
             scroll_offset: 0,
+            running_claude: false,
             shell_pid: None,
             pty_writer: None,
             pty_child: None,
@@ -244,6 +275,29 @@ impl Pane {
     #[cfg(not(unix))]
     pub fn is_idle(&self) -> bool {
         self.exited
+    }
+
+    /// Check if the foreground process is claude and update the cached flag.
+    #[cfg(unix)]
+    pub fn update_running_claude(&mut self) {
+        if self.exited {
+            self.running_claude = false;
+            return;
+        }
+        let fg_pid = self.pty_master.as_ref()
+            .and_then(|m| m.process_group_leader())
+            .map(|pgid| pgid as u32);
+        self.running_claude = match fg_pid {
+            Some(pid) => process_name_by_pid(pid)
+                .map(|name| name == "claude")
+                .unwrap_or(false),
+            None => false,
+        };
+    }
+
+    #[cfg(not(unix))]
+    pub fn update_running_claude(&mut self) {
+        self.running_claude = false;
     }
 
     pub fn scroll_up(&mut self, n: usize) {
