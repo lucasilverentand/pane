@@ -5,6 +5,7 @@ use crossterm::event::KeyEvent;
 use crate::pane::PaneGroupId;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum Mode {
     Normal,
     Select,
@@ -26,6 +27,7 @@ pub struct LeaderState {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum PendingClose {
     Tab { group_id: PaneGroupId, tab_idx: usize },
     Group { group_id: PaneGroupId },

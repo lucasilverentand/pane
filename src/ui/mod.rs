@@ -3,6 +3,7 @@ pub mod format;
 pub mod help;
 pub mod layout_render;
 pub mod pane_view;
+#[allow(dead_code)]
 pub mod session_picker;
 pub mod status_bar;
 pub mod which_key;

@@ -248,12 +248,14 @@ impl Pane {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_scrolled(&self) -> bool {
         self.scroll_offset > 0
     }
 
     /// Returns true if the pane is idle (exited, or shell at prompt with no foreground job).
     #[cfg(unix)]
+    #[allow(dead_code)]
     pub fn is_idle(&self) -> bool {
         if self.exited {
             return true;
@@ -273,6 +275,7 @@ impl Pane {
     }
 
     #[cfg(not(unix))]
+    #[allow(dead_code)]
     pub fn is_idle(&self) -> bool {
         self.exited
     }
@@ -318,6 +321,7 @@ impl Pane {
         self.scroll_offset = self.vt.screen().scrollback();
     }
 
+    #[allow(dead_code)]
     pub fn scroll_to_top(&mut self) {
         let max_offset = self.vt.screen().size().0 as usize;
         self.scroll_offset = max_offset;

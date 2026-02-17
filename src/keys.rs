@@ -60,6 +60,7 @@ pub fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
 /// Encode a mouse event for the given protocol encoding.
 /// `cb` is the button byte (with motion flag already applied if needed).
 /// `x` and `y` are 0-based pane-local coordinates.
+#[allow(dead_code)]
 pub fn encode_mouse_event(
     cb: u8,
     x: u16,

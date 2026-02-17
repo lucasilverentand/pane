@@ -36,6 +36,7 @@ pub fn list() -> Result<Vec<SessionSummary>> {
     list_from_dir(&sessions_dir())
 }
 
+#[allow(dead_code)]
 pub fn delete(id: &Uuid) -> Result<()> {
     delete_from_dir(id, &sessions_dir())
 }
@@ -106,6 +107,7 @@ pub fn list_from_dir(dir: &Path) -> Result<Vec<SessionSummary>> {
     Ok(summaries)
 }
 
+#[allow(dead_code)]
 pub fn delete_from_dir(id: &Uuid, dir: &Path) -> Result<()> {
     let path = dir.join(format!("{}.json", id));
     if path.exists() {

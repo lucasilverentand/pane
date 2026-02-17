@@ -12,87 +12,6 @@ use crate::copy_mode::CopyModeState;
 use crate::layout::SplitDirection;
 use crate::pane::{terminal::{render_screen, render_screen_copy_mode}, PaneGroup};
 
-pub fn render_group(
-    group: &PaneGroup,
-    is_active: bool,
-    mode: &Mode,
-    copy_mode_state: Option<&CopyModeState>,
-    config: &Config,
-    frame: &mut Frame,
-    area: Rect,
-) {
-    let pane = group.active_pane();
-    let theme = &config.theme;
-
-    // Check if the active pane's foreground process has a decoration
-    let decoration_color = pane.foreground_process.as_deref()
-        .and_then(|proc| config.decoration_for(proc))
-        .map(|d| d.border_color);
-
-    let border_style = if is_active {
-        let color = decoration_color.unwrap_or(theme.border_active);
-        Style::default().fg(color)
-    } else {
-        Style::default().fg(theme.border_inactive)
-    };
-
-    let mut block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(border_style);
-
-    if is_active {
-        let indicator = match mode {
-            Mode::Copy => " COPY ",
-            Mode::Scroll => " SCROLL ",
-            Mode::Select => " SELECT ",
-            _ => " ACTIVE ",
-        };
-        block = block.title_bottom(Line::styled(
-            indicator,
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.width <= 2 || inner.height == 0 {
-        return;
-    }
-
-    // 1-cell padding on left and right
-    let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, inner.height);
-
-    // Only apply copy mode rendering to the active pane
-    let cms = if is_active { copy_mode_state } else { None };
-
-    // Reserve a row for search bar if search is active
-    let show_search = cms.map_or(false, |c| c.search_active);
-
-    let constraints = if show_search {
-        vec![
-            Constraint::Length(1),
-            Constraint::Fill(1),
-            Constraint::Length(1),
-        ]
-    } else {
-        vec![Constraint::Length(1), Constraint::Fill(1)]
-    };
-    let areas = Layout::vertical(constraints).split(padded);
-    let tab_area = areas[0];
-    let content_area = areas[1];
-
-    render_tab_bar(group, theme, frame, tab_area);
-    render_content(pane.screen(), cms, frame, content_area);
-
-    if show_search {
-        render_search_bar(cms.unwrap(), theme, frame, areas[2]);
-    }
-}
-
 fn render_content(
     screen: &vt100::Screen,
     cms: Option<&CopyModeState>,
@@ -133,13 +52,6 @@ pub struct TabBarLayout {
 pub enum TabBarClick {
     Tab(usize),
     NewTab,
-}
-
-fn render_tab_bar(group: &PaneGroup, theme: &Theme, frame: &mut Frame, area: Rect) {
-    let (spans, _layout) = build_tab_bar(group, theme, area);
-    let line = Line::from(spans);
-    let paragraph = Paragraph::new(line);
-    frame.render_widget(paragraph, area);
 }
 
 fn build_tab_bar<'a>(

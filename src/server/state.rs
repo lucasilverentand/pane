@@ -342,6 +342,7 @@ impl ServerState {
         }
     }
 
+    #[allow(dead_code)]
     pub fn close_active_tab(&mut self) {
         let ws = self.active_workspace_mut();
         let active_group_id = ws.active_group;
@@ -564,6 +565,7 @@ impl ServerState {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_active_pane_scrolled(&self) -> bool {
         let ws = self.active_workspace();
         ws.groups
@@ -572,6 +574,7 @@ impl ServerState {
             .unwrap_or(false)
     }
 
+    #[allow(dead_code)]
     pub fn active_pane_screen_rows(&self) -> usize {
         let ws = self.active_workspace();
         ws.groups

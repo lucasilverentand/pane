@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum AppEvent {
     Key(KeyEvent),
     MouseDown { x: u16, y: u16 },

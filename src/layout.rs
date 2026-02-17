@@ -782,6 +782,7 @@ impl LayoutNode {
     /// - `direction` is the split direction
     /// - `border_pos` is the coordinate of the border (x for Horizontal, y for Vertical)
     /// - `total_size` is the total extent in the split direction (for pixel→ratio conversion)
+    #[allow(dead_code)]
     pub fn find_split_border(
         &self,
         x: u16,
