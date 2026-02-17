@@ -265,7 +265,7 @@ async fn process_events(
             | AppEvent::MouseRightDown { .. }
             | AppEvent::MouseDrag { .. }
             | AppEvent::MouseMove { .. }
-            | AppEvent::MouseUp
+            | AppEvent::MouseUp { .. }
             | AppEvent::MouseScroll { .. }
             | AppEvent::Resize(_, _) => {}
         }

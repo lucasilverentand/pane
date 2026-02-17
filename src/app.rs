@@ -1,11 +1,14 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::Rect;
 use tokio::sync::mpsc;
+use vt100::MouseProtocolEncoding;
+use vt100::MouseProtocolMode;
 
 use crate::clipboard;
 use crate::config::{self, Action, Config};
 use crate::copy_mode::{CopyModeAction, CopyModeState};
 use crate::event::{self, AppEvent};
-use crate::layout::{PaneId, ResolvedPane, Side, SplitDirection};
+use crate::layout::{LayoutParams, PaneId, ResolvedPane, Side, SplitDirection};
 use crate::layout_presets::LayoutPreset;
 use crate::pane::{PaneGroupId, PaneKind};
 use crate::server::state::ServerState;
@@ -217,9 +220,12 @@ impl App {
                     self.should_quit = true;
                 }
             }
-            AppEvent::MouseScroll { up } => {
+            AppEvent::MouseScroll { x, y, up } => {
                 if self.mode == Mode::Normal || self.mode == Mode::Select || self.mode == Mode::Scroll {
-                    if up {
+                    let button = if up { 64 } else { 65 };
+                    if self.try_forward_mouse(x, y, button, true, false, tui) {
+                        // Forwarded to child process
+                    } else if up {
                         self.state.scroll_active_pane(|p| p.scroll_up(3));
                         if self.state.is_active_pane_scrolled() {
                             self.mode = Mode::Scroll;
@@ -241,21 +247,30 @@ impl App {
             }
             AppEvent::MouseDown { x, y } => {
                 if self.mode == Mode::Normal || self.mode == Mode::Select {
-                    self.handle_mouse_down(x, y, tui)?;
+                    if !self.try_forward_mouse(x, y, 0, true, false, tui) {
+                        self.handle_mouse_down(x, y, tui)?;
+                    }
                 }
             }
             AppEvent::MouseRightDown { x, y } => {
                 if self.mode == Mode::Normal || self.mode == Mode::Select {
-                    self.handle_mouse_right_down(x, y, tui)?;
+                    if !self.try_forward_mouse(x, y, 2, true, false, tui) {
+                        self.handle_mouse_right_down(x, y, tui)?;
+                    }
                 }
             }
             AppEvent::MouseDrag { x, y } => {
-                self.handle_mouse_drag(x, y);
+                if !self.try_forward_mouse(x, y, 32, true, true, tui) {
+                    self.handle_mouse_drag(x, y);
+                }
             }
             AppEvent::MouseMove { x, y } => {
-                self.handle_mouse_move(x, y);
+                if !self.try_forward_mouse(x, y, 35, true, true, tui) {
+                    self.handle_mouse_move(x, y);
+                }
             }
-            AppEvent::MouseUp => {
+            AppEvent::MouseUp { x, y } => {
+                self.try_forward_mouse(x, y, 3, false, false, tui);
                 self.drag_state = None;
             }
             AppEvent::SystemStats(stats) => {
@@ -264,6 +279,132 @@ impl App {
             AppEvent::Tick => {}
         }
         Ok(())
+    }
+
+    /// Compute the content rect for the active pane (where terminal output is rendered).
+    /// This accounts for borders (1px each side), padding (1px left/right), and tab bar (1 row).
+    fn active_pane_content_rect(&self, tui: &Tui) -> Option<(Rect, PaneGroupId)> {
+        let size = tui.size().ok()?;
+        let bar_h = self.state.workspace_bar_height();
+        let body_height = size.height.saturating_sub(1 + bar_h);
+        let body = Rect::new(0, bar_h, size.width, body_height);
+
+        let params = LayoutParams::from(&self.state.config.behavior);
+        let ws = self.state.active_workspace();
+        let resolved = ws
+            .layout
+            .resolve_with_fold(body, params, &ws.leaf_min_sizes);
+
+        for rp in &resolved {
+            if let ResolvedPane::Visible { id, rect, .. } = rp {
+                if *id == ws.active_group {
+                    // Match render_group layout: Block with Borders::ALL → inner,
+                    // then 1-cell left/right padding, then tab bar is first row.
+                    let block = ratatui::widgets::Block::default()
+                        .borders(ratatui::widgets::Borders::ALL)
+                        .border_type(ratatui::widgets::BorderType::Rounded);
+                    let inner = block.inner(*rect);
+                    if inner.width <= 2 || inner.height <= 1 {
+                        return None;
+                    }
+                    // Content area: padded inner, skip tab bar row
+                    let content = Rect::new(
+                        inner.x + 1,
+                        inner.y + 1,
+                        inner.width - 2,
+                        inner.height - 1,
+                    );
+                    return Some((content, *id));
+                }
+            }
+        }
+        None
+    }
+
+    /// Try to forward a mouse event to the active pane's child process.
+    /// Returns true if the event was forwarded (caller should skip TUI handling).
+    ///
+    /// `button`: X11 button code (0=left, 1=middle, 2=right, 3=release, 64=scroll-up, 65=scroll-down)
+    /// `pressed`: true for press/motion, false for release
+    /// `motion`: true if this is a motion event (adds 32 to the button code)
+    fn try_forward_mouse(
+        &mut self,
+        x: u16,
+        y: u16,
+        button: u8,
+        pressed: bool,
+        motion: bool,
+        tui: &Tui,
+    ) -> bool {
+        let (content_rect, group_id) = match self.active_pane_content_rect(tui) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        // Check if (x, y) is within the content area
+        if x < content_rect.x
+            || x >= content_rect.x + content_rect.width
+            || y < content_rect.y
+            || y >= content_rect.y + content_rect.height
+        {
+            return false;
+        }
+
+        // Check mouse protocol mode on the active pane
+        let ws = self.state.active_workspace();
+        let group = match ws.groups.get(&group_id) {
+            Some(g) => g,
+            None => return false,
+        };
+        let screen = group.active_pane().screen();
+        let mode = screen.mouse_protocol_mode();
+        let encoding = screen.mouse_protocol_encoding();
+
+        if mode == MouseProtocolMode::None {
+            return false;
+        }
+
+        // Check if this event type should be forwarded based on the mode
+        match mode {
+            MouseProtocolMode::None => return false,
+            MouseProtocolMode::Press => {
+                // Only button press events (not release, not motion)
+                if !pressed || motion {
+                    return false;
+                }
+            }
+            MouseProtocolMode::PressRelease => {
+                // Button press and release, no motion
+                if motion {
+                    return false;
+                }
+            }
+            MouseProtocolMode::ButtonMotion => {
+                // Press, release, and motion-while-button-held
+                // Motion-only (button=35) without a real button held should not be forwarded
+                if motion && button == 35 {
+                    return false;
+                }
+            }
+            MouseProtocolMode::AnyMotion => {
+                // Everything gets forwarded
+            }
+        }
+
+        // Translate to pane-local 0-based coordinates
+        let local_x = x - content_rect.x;
+        let local_y = y - content_rect.y;
+
+        // Encode the mouse event
+        let cb = if motion { button | 32 } else { button };
+        let bytes = encode_mouse_event(cb, local_x, local_y, pressed, encoding);
+
+        // Write to the pane
+        let ws = self.state.active_workspace_mut();
+        if let Some(group) = ws.groups.get_mut(&group_id) {
+            group.active_pane_mut().write_input(&bytes);
+        }
+        true
     }
 
     fn handle_mouse_down(&mut self, x: u16, y: u16, tui: &Tui) -> anyhow::Result<()> {
@@ -1275,6 +1416,32 @@ pub enum CliArgs {
     Attach(String),
 }
 
+/// Encode a mouse event for the given protocol encoding.
+/// `cb` is the button byte (with motion flag already applied if needed).
+/// `x` and `y` are 0-based pane-local coordinates.
+fn encode_mouse_event(
+    cb: u8,
+    x: u16,
+    y: u16,
+    pressed: bool,
+    encoding: MouseProtocolEncoding,
+) -> Vec<u8> {
+    match encoding {
+        MouseProtocolEncoding::Sgr => {
+            // SGR format: \x1b[<Btn;Col;RowM (press) or \x1b[<Btn;Col;Rowm (release)
+            let suffix = if pressed { 'M' } else { 'm' };
+            format!("\x1b[<{};{};{}{}", cb, x + 1, y + 1, suffix).into_bytes()
+        }
+        MouseProtocolEncoding::Default | MouseProtocolEncoding::Utf8 => {
+            // Default: \x1b[M followed by 3 bytes: (cb+32), (x+33), (y+33)
+            // Values capped at 223 (255 - 32) for coordinates
+            let bx = (x as u8).min(222) + 33;
+            let by = (y as u8).min(222) + 33;
+            vec![0x1b, b'[', b'M', cb + 32, bx, by]
+        }
+    }
+}
+
 /// Convert a crossterm KeyEvent to bytes suitable for writing to a PTY.
 pub(crate) fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
     let mods = key.modifiers;
@@ -1584,5 +1751,52 @@ mod tests {
         group.prev_tab();
         assert_eq!(group.active_tab, 2);
         assert_eq!(group.active_pane().id, p3_id);
+    }
+
+    // --- encode_mouse_event tests ---
+
+    #[test]
+    fn test_encode_mouse_sgr_left_press() {
+        let bytes = encode_mouse_event(0, 5, 10, true, MouseProtocolEncoding::Sgr);
+        assert_eq!(bytes, b"\x1b[<0;6;11M");
+    }
+
+    #[test]
+    fn test_encode_mouse_sgr_left_release() {
+        let bytes = encode_mouse_event(0, 5, 10, false, MouseProtocolEncoding::Sgr);
+        assert_eq!(bytes, b"\x1b[<0;6;11m");
+    }
+
+    #[test]
+    fn test_encode_mouse_sgr_right_press() {
+        let bytes = encode_mouse_event(2, 0, 0, true, MouseProtocolEncoding::Sgr);
+        assert_eq!(bytes, b"\x1b[<2;1;1M");
+    }
+
+    #[test]
+    fn test_encode_mouse_sgr_scroll_up() {
+        let bytes = encode_mouse_event(64, 3, 7, true, MouseProtocolEncoding::Sgr);
+        assert_eq!(bytes, b"\x1b[<64;4;8M");
+    }
+
+    #[test]
+    fn test_encode_mouse_sgr_drag() {
+        // button 0 + motion flag 32 = 32
+        let bytes = encode_mouse_event(32, 10, 20, true, MouseProtocolEncoding::Sgr);
+        assert_eq!(bytes, b"\x1b[<32;11;21M");
+    }
+
+    #[test]
+    fn test_encode_mouse_default_left_press() {
+        let bytes = encode_mouse_event(0, 5, 10, true, MouseProtocolEncoding::Default);
+        // cb+32=32, x+33=38, y+33=43
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 32, 38, 43]);
+    }
+
+    #[test]
+    fn test_encode_mouse_default_coords_capped() {
+        let bytes = encode_mouse_event(0, 250, 250, true, MouseProtocolEncoding::Default);
+        // x and y capped at 222, then +33 = 255
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 32, 255, 255]);
     }
 }

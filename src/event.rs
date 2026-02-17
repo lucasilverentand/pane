@@ -12,8 +12,8 @@ pub enum AppEvent {
     MouseRightDown { x: u16, y: u16 },
     MouseDrag { x: u16, y: u16 },
     MouseMove { x: u16, y: u16 },
-    MouseUp,
-    MouseScroll { up: bool },
+    MouseUp { x: u16, y: u16 },
+    MouseScroll { x: u16, y: u16, up: bool },
     Resize(u16, u16),
     Tick,
     PtyOutput { pane_id: PaneId, bytes: Vec<u8> },
@@ -44,9 +44,9 @@ pub fn start_event_loop(event_tx: mpsc::UnboundedSender<AppEvent>) {
                             MouseEventKind::Moved => {
                                 AppEvent::MouseMove { x: m.column, y: m.row }
                             }
-                            MouseEventKind::Up(_) => AppEvent::MouseUp,
-                            MouseEventKind::ScrollUp => AppEvent::MouseScroll { up: true },
-                            MouseEventKind::ScrollDown => AppEvent::MouseScroll { up: false },
+                            MouseEventKind::Up(_) => AppEvent::MouseUp { x: m.column, y: m.row },
+                            MouseEventKind::ScrollUp => AppEvent::MouseScroll { x: m.column, y: m.row, up: true },
+                            MouseEventKind::ScrollDown => AppEvent::MouseScroll { x: m.column, y: m.row, up: false },
                             _ => continue,
                         },
                         Event::Resize(w, h) => AppEvent::Resize(w, h),
