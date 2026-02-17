@@ -39,29 +39,34 @@ pub fn render(app: &App, frame: &mut Frame) {
     }
     status_bar::render(app, theme, frame, footer);
 
-    // Set cursor position from active pane's vt100 screen (not in scroll mode)
+    // Set cursor position from active pane's vt100 screen (not in scroll mode).
+    // Only show the host cursor when the child process hasn't hidden it (DECTCEM).
+    // Fullscreen apps like neovim/claude-code manage their own cursor via escape
+    // sequences; showing the host cursor on top causes a visible ghost cursor.
     if app.mode == Mode::Normal && !app.state.workspaces.is_empty() {
         let ws = app.active_workspace();
         if let Some(group) = ws.groups.get(&ws.active_group) {
             let pane = group.active_pane();
-            let params = LayoutParams::from(&app.state.config.behavior);
-            let resolved = ws.layout.resolve_with_fold(body, params, &ws.leaf_min_sizes);
-            for rp in &resolved {
-                if let crate::layout::ResolvedPane::Visible { id, rect } = rp {
-                    if *id == ws.active_group {
-                        let (vt_row, vt_col) = pane.screen().cursor_position();
-                        let tab_bar_offset: u16 = 1;
-                        let cursor_x = rect.x + 2 + vt_col;
-                        let cursor_y = rect.y + 1 + tab_bar_offset + vt_row;
-                        if cursor_x < rect.x + rect.width
-                            && cursor_y < rect.y + rect.height
-                        {
-                            frame.set_cursor_position(ratatui::layout::Position {
-                                x: cursor_x,
-                                y: cursor_y,
-                            });
+            if !pane.screen().hide_cursor() {
+                let params = LayoutParams::from(&app.state.config.behavior);
+                let resolved = ws.layout.resolve_with_fold(body, params, &ws.leaf_min_sizes);
+                for rp in &resolved {
+                    if let crate::layout::ResolvedPane::Visible { id, rect } = rp {
+                        if *id == ws.active_group {
+                            let (vt_row, vt_col) = pane.screen().cursor_position();
+                            let tab_bar_offset: u16 = 1;
+                            let cursor_x = rect.x + 2 + vt_col;
+                            let cursor_y = rect.y + 1 + tab_bar_offset + vt_row;
+                            if cursor_x < rect.x + rect.width
+                                && cursor_y < rect.y + rect.height
+                            {
+                                frame.set_cursor_position(ratatui::layout::Position {
+                                    x: cursor_x,
+                                    y: cursor_y,
+                                });
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
             }
@@ -110,8 +115,8 @@ fn render_dev_server_input(
     area: ratatui::layout::Rect,
 ) {
     use ratatui::{
-        style::{Color, Style},
-        text::Line,
+        style::{Color, Modifier, Style},
+        text::{Line, Span},
         widgets::{Block, BorderType, Borders, Clear, Paragraph},
     };
 
@@ -134,13 +139,67 @@ fn render_dev_server_input(
             Style::default().fg(Color::White),
         ),
         Line::raw(""),
-        Line::styled(
-            "  enter to confirm, esc to cancel",
-            Style::default().fg(theme.dim),
-        ),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                " Cancel ",
+                Style::default()
+                    .fg(Color::White)
+                    .bg(theme.dim)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                " Confirm ",
+                Style::default()
+                    .fg(Color::White)
+                    .bg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
     ];
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, inner);
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum DevServerDialogClick {
+    Cancel,
+    Confirm,
+}
+
+/// Hit-test the dev server input dialog buttons.
+pub fn dev_server_dialog_hit_test(
+    area: ratatui::layout::Rect,
+    x: u16,
+    y: u16,
+) -> Option<DevServerDialogClick> {
+    use ratatui::widgets::{Block, BorderType, Borders};
+
+    let popup_area = centered_rect(50, 15, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(popup_area);
+
+    // Buttons are on line index 3 (0-indexed) of the inner area
+    let button_y = inner.y + 3;
+    if y != button_y {
+        return None;
+    }
+
+    let cancel_start = inner.x + 2;
+    let cancel_end = cancel_start + 8;
+    let confirm_start = cancel_end + 2;
+    let confirm_end = confirm_start + 9;
+
+    if x >= cancel_start && x < cancel_end {
+        Some(DevServerDialogClick::Cancel)
+    } else if x >= confirm_start && x < confirm_end {
+        Some(DevServerDialogClick::Confirm)
+    } else {
+        None
+    }
 }
 
 fn render_confirm_dialog(
@@ -150,8 +209,8 @@ fn render_confirm_dialog(
     area: ratatui::layout::Rect,
 ) {
     use ratatui::{
-        style::{Color, Style},
-        text::Line,
+        style::{Color, Modifier, Style},
+        text::{Line, Span},
         widgets::{Block, BorderType, Borders, Clear, Paragraph},
     };
 
@@ -181,13 +240,68 @@ fn render_confirm_dialog(
             Style::default().fg(Color::White),
         ),
         Line::raw(""),
-        Line::styled(
-            "  enter to confirm, esc to cancel",
-            Style::default().fg(theme.dim),
-        ),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                " Cancel ",
+                Style::default()
+                    .fg(Color::White)
+                    .bg(theme.dim)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                " Confirm ",
+                Style::default()
+                    .fg(Color::White)
+                    .bg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
     ];
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, inner);
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConfirmDialogClick {
+    Cancel,
+    Confirm,
+}
+
+/// Hit-test the confirm dialog buttons. Returns which button was clicked, if any.
+pub fn confirm_dialog_hit_test(
+    area: ratatui::layout::Rect,
+    x: u16,
+    y: u16,
+) -> Option<ConfirmDialogClick> {
+    use ratatui::widgets::{Block, BorderType, Borders};
+
+    let popup_area = centered_rect(40, 15, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(popup_area);
+
+    // Buttons are on line index 3 (0-indexed) of the inner area
+    let button_y = inner.y + 3;
+    if y != button_y {
+        return None;
+    }
+
+    // Layout: "  " (2) + " Cancel " (8) + "  " (2) + " Confirm " (9)
+    let cancel_start = inner.x + 2;
+    let cancel_end = cancel_start + 8;
+    let confirm_start = cancel_end + 2;
+    let confirm_end = confirm_start + 9;
+
+    if x >= cancel_start && x < cancel_end {
+        Some(ConfirmDialogClick::Cancel)
+    } else if x >= confirm_start && x < confirm_end {
+        Some(ConfirmDialogClick::Confirm)
+    } else {
+        None
+    }
 }
 
 fn centered_rect(

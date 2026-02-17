@@ -114,8 +114,17 @@ impl App {
         loop {
             tui.draw(|frame| ui::render(&app, frame))?;
 
+            // Wait for at least one event, then drain all pending events
+            // before redrawing. This batches rapid PTY output (e.g. neovim
+            // redraws) into a single render pass instead of one per chunk.
             if let Some(event) = event_rx.recv().await {
                 app.handle_event(event, &tui)?;
+            }
+            while let Ok(event) = event_rx.try_recv() {
+                app.handle_event(event, &tui)?;
+                if app.should_quit {
+                    break;
+                }
             }
 
             if app.should_quit {
@@ -251,7 +260,48 @@ impl App {
                 }
             }
             AppEvent::MouseDown { x, y } => {
-                if self.mode == Mode::Normal || self.mode == Mode::Select {
+                if self.mode == Mode::Confirm {
+                    let size = tui.size()?;
+                    let area = Rect::new(0, 0, size.width, size.height);
+                    if let Some(click) = ui::confirm_dialog_hit_test(area, x, y) {
+                        match click {
+                            ui::ConfirmDialogClick::Confirm => {
+                                if let Some(pending) = self.pending_close.take() {
+                                    self.execute_pending_close(pending);
+                                }
+                                self.mode = Mode::Normal;
+                            }
+                            ui::ConfirmDialogClick::Cancel => {
+                                self.pending_close = None;
+                                self.mode = Mode::Normal;
+                            }
+                        }
+                    }
+                } else if self.mode == Mode::DevServerInput {
+                    let size = tui.size()?;
+                    let area = Rect::new(0, 0, size.width, size.height);
+                    if let Some(click) = ui::dev_server_dialog_hit_test(area, x, y) {
+                        match click {
+                            ui::DevServerDialogClick::Confirm => {
+                                let cmd = std::mem::take(&mut self.dev_server_input);
+                                if !cmd.is_empty() {
+                                    let size = tui.size()?;
+                                    self.state.add_tab_to_active_group(
+                                        PaneKind::DevServer,
+                                        Some(cmd),
+                                        size.width.saturating_sub(4),
+                                        size.height.saturating_sub(3),
+                                    )?;
+                                }
+                                self.mode = Mode::Normal;
+                            }
+                            ui::DevServerDialogClick::Cancel => {
+                                self.dev_server_input.clear();
+                                self.mode = Mode::Normal;
+                            }
+                        }
+                    }
+                } else if self.mode == Mode::Normal || self.mode == Mode::Select {
                     if !self.try_forward_mouse(x, y, 0, true, false, tui) {
                         self.handle_mouse_down(x, y, tui)?;
                     }
@@ -575,6 +625,8 @@ impl App {
             }
 
             self.state.update_leaf_mins();
+            let (w, h) = self.state.last_size;
+            self.state.resize_all_panes(w, h);
         }
     }
 
@@ -615,6 +667,8 @@ impl App {
                         if self.state.active_workspace >= self.state.workspaces.len() {
                             self.state.active_workspace = self.state.workspaces.len() - 1;
                         }
+                        let (w, h) = self.state.last_size;
+                        self.state.resize_all_panes(w, h);
                     }
                 }
             }
@@ -854,16 +908,22 @@ impl App {
                 let active = self.state.active_workspace().active_group;
                 self.state.active_workspace_mut().layout.resize(active, -0.05);
                 self.state.update_leaf_mins();
+                let (w, h) = self.state.last_size;
+                self.state.resize_all_panes(w, h);
             }
             Action::ResizeGrowH => {
                 let active = self.state.active_workspace().active_group;
                 self.state.active_workspace_mut().layout.resize(active, 0.05);
                 self.state.update_leaf_mins();
+                let (w, h) = self.state.last_size;
+                self.state.resize_all_panes(w, h);
             }
             Action::ResizeGrowV => {
                 let active = self.state.active_workspace().active_group;
                 self.state.active_workspace_mut().layout.resize(active, 0.05);
                 self.state.update_leaf_mins();
+                let (w, h) = self.state.last_size;
+                self.state.resize_all_panes(w, h);
             }
             Action::ResizeShrinkV => {
                 let active = self.state.active_workspace().active_group;
@@ -872,10 +932,14 @@ impl App {
                     .layout
                     .resize(active, -0.05);
                 self.state.update_leaf_mins();
+                let (w, h) = self.state.last_size;
+                self.state.resize_all_panes(w, h);
             }
             Action::Equalize => {
                 self.state.active_workspace_mut().layout.equalize();
                 self.state.active_workspace_mut().leaf_min_sizes.clear();
+                let (w, h) = self.state.last_size;
+                self.state.resize_all_panes(w, h);
             }
             Action::SessionPicker => {
                 self.session_list = session::store::list().unwrap_or_default();
@@ -1011,6 +1075,8 @@ impl App {
                 }
             }
         }
+        let (w, h) = self.state.last_size;
+        self.state.resize_all_panes(w, h);
     }
 
     /// Close the active tab, with confirmation if the pane has a running process.
@@ -1054,6 +1120,8 @@ impl App {
             self.mode = Mode::Confirm;
         } else {
             self.state.close_workspace();
+            let (w, h) = self.state.last_size;
+            self.state.resize_all_panes(w, h);
         }
     }
 
@@ -1089,6 +1157,8 @@ impl App {
                 }
             }
         }
+        let (w, h) = self.state.last_size;
+        self.state.resize_all_panes(w, h);
     }
 
     fn handle_copy_mode_key(&mut self, key: KeyEvent) -> anyhow::Result<()> {

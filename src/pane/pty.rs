@@ -56,7 +56,7 @@ pub fn spawn_pty(
     let tx = event_tx.clone();
     let pid = pane_id;
     tokio::task::spawn_blocking(move || {
-        let mut buf = [0u8; 4096];
+        let mut buf = [0u8; 65536];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => {

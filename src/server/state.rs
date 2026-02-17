@@ -362,6 +362,8 @@ impl ServerState {
             ws.groups.remove(&active_group_id);
             ws.active_group = new_focus;
         }
+        let (w, h) = self.last_size;
+        self.resize_all_panes(w, h);
     }
 
     pub fn move_tab_to_neighbor(&mut self, direction: SplitDirection, side: Side) {
