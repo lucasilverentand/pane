@@ -37,6 +37,8 @@ pub fn spawn_pty(
     }
     cmd_builder.env("PANE", "1");
     cmd_builder.env("PANE_PANE", pane_id.to_string());
+    cmd_builder.env("TERM", "xterm-256color");
+    cmd_builder.env("COLORTERM", "truecolor");
 
     if let Some(ref env) = tmux_env {
         cmd_builder.env("TMUX", &env.tmux_value);

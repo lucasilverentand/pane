@@ -527,10 +527,8 @@ impl ServerState {
                         id: group_id, rect, ..
                     } => {
                         if let Some(group) = ws.groups.get_mut(&group_id) {
-                            let has_tab_bar = group.tab_count() > 1;
-                            let tab_bar_offset: u16 = if has_tab_bar { 1 } else { 0 };
                             let cols = rect.width.saturating_sub(4);
-                            let rows = rect.height.saturating_sub(2 + tab_bar_offset);
+                            let rows = rect.height.saturating_sub(3); // 2 borders + 1 tab bar (always rendered)
                             if cols > 0 && rows > 0 {
                                 for pane in &mut group.tabs {
                                     pane.resize_pty(cols, rows);

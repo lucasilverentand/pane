@@ -35,6 +35,12 @@ fn render_screen_inner(
 
         for col in 0..cols {
             let cell = screen.cell(row as u16, col as u16);
+
+            // Skip wide char continuation cells — the wide char already occupies 2 columns
+            if cell.as_ref().map_or(false, |c| c.is_wide_continuation()) {
+                continue;
+            }
+
             let mut style = match cell {
                 Some(ref cell) => cell_style(cell),
                 None => Style::default(),
@@ -222,6 +228,21 @@ mod tests {
         let italic_span = &lines[0].spans[0];
         assert!(italic_span.content.starts_with("italic"));
         assert!(italic_span.style.add_modifier.contains(Modifier::ITALIC));
+    }
+
+    #[test]
+    fn test_render_wide_chars() {
+        // CJK character "中" is a wide char occupying 2 columns
+        let parser = make_screen(3, 20, "中文".as_bytes());
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let first_line: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        // Wide chars should not have extra spaces from continuation cells
+        assert!(first_line.starts_with("中文"));
+        // Each wide char = 2 display columns, so total rendered width should be cols
+        // "中文" = 4 display cols + 16 spaces = 20
+        assert_eq!(first_line.chars().count(), 2 + 16); // 2 CJK chars + 16 spaces
     }
 
     #[test]
