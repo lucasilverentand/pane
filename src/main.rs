@@ -1,8 +1,10 @@
 mod app;
+mod client;
 mod clipboard;
 mod config;
 mod copy_mode;
 mod event;
+mod keys;
 mod layout;
 mod layout_presets;
 mod pane;
@@ -13,7 +15,6 @@ mod tui;
 mod ui;
 mod workspace;
 
-use app::{App, CliArgs};
 use clap::{Parser, Subcommand};
 use config::Config;
 
@@ -51,6 +52,11 @@ enum Commands {
         /// Keys to send
         keys: String,
     },
+    /// Run the daemon in the foreground (for debugging or manual use)
+    Daemon {
+        /// Session name
+        name: Option<String>,
+    },
     /// tmux compatibility shim — accepts raw tmux CLI syntax
     #[command(hide = true)]
     Tmux {
@@ -66,24 +72,34 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         None => {
-            // Default: attach to existing or start new (embedded mode)
+            // Default: auto-start daemon for "default" session + connect client
+            let session_name = "default";
+            server::daemon::start_daemon(session_name)?;
             tui::install_panic_hook();
-            let args = CliArgs::Default;
-            App::run_with_args(args, config)
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(client::Client::run(session_name, config))
         }
         Some(Commands::New { name }) => {
-            tui::install_panic_hook();
             let name = name.unwrap_or_else(|| {
                 format!("session-{}", chrono::Utc::now().timestamp())
             });
-            let args = CliArgs::New(name);
-            App::run_with_args(args, config)
+            server::daemon::start_daemon(&name)?;
+            tui::install_panic_hook();
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(client::Client::run(&name, config))
         }
         Some(Commands::Attach { name }) => {
-            tui::install_panic_hook();
             let name = name.unwrap_or_else(|| "default".to_string());
-            let args = CliArgs::Attach(name);
-            App::run_with_args(args, config)
+            // For attach, start daemon if not running (restores from saved session)
+            server::daemon::start_daemon(&name)?;
+            tui::install_panic_hook();
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(client::Client::run(&name, config))
+        }
+        Some(Commands::Daemon { name }) => {
+            let name = name.unwrap_or_else(|| "default".to_string());
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(server::daemon::run_server(name, config))
         }
         Some(Commands::Ls) => {
             // Check for running server sessions

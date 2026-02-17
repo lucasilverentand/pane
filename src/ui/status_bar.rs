@@ -8,43 +8,52 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, Mode};
+use crate::app::Mode;
+use crate::client::Client;
 use crate::config::Theme;
 use crate::ui::format::format_string;
 
-pub fn render(app: &App, theme: &Theme, frame: &mut Frame, area: Rect) {
-    let (left, right) = match &app.mode {
+fn format_leader_key(key: &crossterm::event::KeyEvent) -> String {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    match key.code {
+        KeyCode::Char(c) => {
+            if key.modifiers.contains(KeyModifiers::SHIFT) || c.is_uppercase() {
+                c.to_string()
+            } else {
+                c.to_string()
+            }
+        }
+        _ => "?".to_string(),
+    }
+}
+
+/// Render the status bar for a daemon-connected client.
+pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Rect) {
+    let (left, right) = match &client.mode {
         Mode::Normal => {
-            let vars = build_vars(app);
-            let left = format_string(&app.state.config.status_bar.left, &vars);
-            let right = format_string(&app.state.config.status_bar.right, &vars);
+            let vars = build_client_vars(client);
+            let left = format_string(&client.config.status_bar.left, &vars);
+            let right = format_string(&client.config.status_bar.right, &vars);
             (left, right)
         }
         Mode::Scroll => {
-            let mode_left = build_mode_left(app, "[SCROLL] ");
+            let title = client_pane_title(client);
+            let mode_left = format!("[SCROLL] {}", title);
             let right = "j/k up/down  u/d page  g/G top/end  esc quit ".to_string();
             (mode_left, right)
         }
-        Mode::SessionPicker => (
-            String::new(),
-            "up/down navigate  enter open  n new  d delete  q quit ".to_string(),
-        ),
         Mode::Help => (String::new(), "esc close  / search  j/k scroll ".to_string()),
-        Mode::DevServerInput => (
-            String::new(),
-            "type command, enter to confirm, esc to cancel ".to_string(),
-        ),
         Mode::Select => {
-            let mode_left = build_mode_left(app, "[SELECT] ");
+            let title = client_pane_title(client);
             (
-                mode_left,
+                format!("[SELECT] {}", title),
                 "hjkl nav  n tab  d split  w close  1-9 pane  esc back ".to_string(),
             )
         }
         Mode::Copy => {
-            let mode_left = build_mode_left(app, "[COPY] ");
+            let title = client_pane_title(client);
             (
-                mode_left,
+                format!("[COPY] {}", title),
                 "hjkl move  v select  y yank  / search  esc quit ".to_string(),
             )
         }
@@ -57,7 +66,7 @@ pub fn render(app: &App, theme: &Theme, frame: &mut Frame, area: Rect) {
             "enter/y confirm  esc/n cancel ".to_string(),
         ),
         Mode::Leader => {
-            let path_str = if let Some(ref ls) = app.leader_state {
+            let path_str = if let Some(ref ls) = client.leader_state {
                 let keys: Vec<String> = ls.path.iter().map(|k| format_leader_key(k)).collect();
                 if keys.is_empty() {
                     "\\".to_string()
@@ -72,6 +81,14 @@ pub fn render(app: &App, theme: &Theme, frame: &mut Frame, area: Rect) {
                 "esc cancel ".to_string(),
             )
         }
+        Mode::SessionPicker => (
+            String::new(),
+            "up/down navigate  enter open  n new  d delete  q quit ".to_string(),
+        ),
+        Mode::DevServerInput => (
+            String::new(),
+            "type command, enter to confirm, esc to cancel ".to_string(),
+        ),
     };
 
     let left_len = left.len();
@@ -93,50 +110,25 @@ pub fn render(app: &App, theme: &Theme, frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn build_mode_left(app: &App, prefix: &str) -> String {
-    let title = pane_title(app);
-    format!("{}{}", prefix, title)
-}
-
-fn pane_title(app: &App) -> String {
-    if app.state.workspaces.is_empty() {
-        return String::new();
-    }
-    let ws = app.active_workspace();
-    let title = ws
-        .groups
-        .get(&ws.active_group)
-        .map(|g| g.active_pane().title.clone())
-        .unwrap_or_default();
-    // Only use the first line to avoid multi-line bleed in the status bar
-    title.lines().next().unwrap_or("").to_string()
-}
-
-fn format_leader_key(key: &crossterm::event::KeyEvent) -> String {
-    use crossterm::event::{KeyCode, KeyModifiers};
-    match key.code {
-        KeyCode::Char(c) => {
-            if key.modifiers.contains(KeyModifiers::SHIFT) || c.is_uppercase() {
-                c.to_string()
-            } else {
-                c.to_string()
+fn client_pane_title(client: &Client) -> String {
+    if let Some(ws) = client.active_workspace() {
+        if let Some(group) = ws.groups.iter().find(|g| g.id == ws.active_group) {
+            if let Some(pane) = group.tabs.get(group.active_tab) {
+                return pane.title.lines().next().unwrap_or("").to_string();
             }
         }
-        _ => "?".to_string(),
     }
+    String::new()
 }
 
-/// Build the template variables HashMap from app state.
-fn build_vars(app: &App) -> HashMap<String, String> {
+fn build_client_vars(client: &Client) -> HashMap<String, String> {
     let mut vars = HashMap::new();
 
-    // Pane info
-    let title = pane_title(app);
+    let title = client_pane_title(client);
     vars.insert("pane_title".to_string(), title);
 
-    if !app.state.workspaces.is_empty() {
-        let ws = app.active_workspace();
-        vars.insert("session_name".to_string(), app.state.session_name.clone());
+    if let Some(ws) = client.active_workspace() {
+        vars.insert("session_name".to_string(), client.render_state.session_name.clone());
         vars.insert("window_name".to_string(), ws.name.clone());
 
         let group_ids = ws.layout.group_ids();
@@ -148,37 +140,24 @@ fn build_vars(app: &App) -> HashMap<String, String> {
         }
         vars.insert(
             "window_index".to_string(),
-            (app.state.active_workspace + 1).to_string(),
+            (client.render_state.active_workspace + 1).to_string(),
         );
     }
 
-    // System stats (conditionally include based on config)
-    if app.state.config.status_bar.show_cpu {
-        vars.insert("cpu".to_string(), app.state.system_stats.format_cpu());
-    }
-    if app.state.config.status_bar.show_memory {
-        vars.insert("mem".to_string(), app.state.system_stats.format_memory());
-    }
-    if app.state.config.status_bar.show_load {
-        vars.insert("load".to_string(), app.state.system_stats.format_load());
-    }
-    if app.state.config.status_bar.show_disk {
-        vars.insert("disk".to_string(), app.state.system_stats.format_disk());
-    }
+    // Client count (available as {client_count} in status bar templates)
+    vars.insert("client_count".to_string(), client.client_count.to_string());
 
-    // Build a combined stats string with separators for backward compat
-    let mut stat_parts: Vec<String> = Vec::new();
-    if app.state.config.status_bar.show_cpu {
-        stat_parts.push(app.state.system_stats.format_cpu());
+    if client.config.status_bar.show_cpu {
+        vars.insert("cpu".to_string(), client.system_stats.format_cpu());
     }
-    if app.state.config.status_bar.show_memory {
-        stat_parts.push(app.state.system_stats.format_memory());
+    if client.config.status_bar.show_memory {
+        vars.insert("mem".to_string(), client.system_stats.format_memory());
     }
-    if app.state.config.status_bar.show_load {
-        stat_parts.push(app.state.system_stats.format_load());
+    if client.config.status_bar.show_load {
+        vars.insert("load".to_string(), client.system_stats.format_load());
     }
-    if app.state.config.status_bar.show_disk {
-        stat_parts.push(app.state.system_stats.format_disk());
+    if client.config.status_bar.show_disk {
+        vars.insert("disk".to_string(), client.system_stats.format_disk());
     }
 
     vars

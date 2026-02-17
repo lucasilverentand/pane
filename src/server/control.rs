@@ -79,6 +79,13 @@ pub async fn run_control_mode(
                 ServerResponse::Error(msg) => {
                     let _ = writeln!(out, "%error {}", msg);
                 }
+                ServerResponse::FullScreenDump { pane_id, data } => {
+                    let encoded = base64_encode(&data);
+                    let _ = writeln!(out, "%screen-dump {} {}", pane_id, encoded);
+                }
+                ServerResponse::ClientCountChanged(count) => {
+                    let _ = writeln!(out, "%client-count {}", count);
+                }
                 ServerResponse::CommandOutput { .. } => {
                     // CommandSync responses are sent directly, not broadcast
                 }

@@ -98,6 +98,8 @@ pub struct Behavior {
     pub vim_navigator: bool,
     pub mouse: bool,
     pub default_shell: Option<String>,
+    /// Seconds of no connected clients before auto-saving and exiting (default: 86400 = 24h).
+    pub auto_suspend_secs: u64,
 }
 
 impl Default for Behavior {
@@ -109,6 +111,7 @@ impl Default for Behavior {
             vim_navigator: false,
             mouse: true,
             default_shell: None,
+            auto_suspend_secs: 86400,
         }
     }
 }
@@ -597,6 +600,7 @@ impl Config {
             if let Some(v) = b.vim_navigator { config.behavior.vim_navigator = v; }
             if let Some(v) = b.mouse { config.behavior.mouse = v; }
             if b.default_shell.is_some() { config.behavior.default_shell = b.default_shell; }
+            if let Some(v) = b.auto_suspend_secs { config.behavior.auto_suspend_secs = v; }
         }
 
         // Keys
@@ -706,6 +710,7 @@ struct RawBehavior {
     vim_navigator: Option<bool>,
     mouse: Option<bool>,
     default_shell: Option<String>,
+    auto_suspend_secs: Option<u64>,
 }
 
 #[derive(Deserialize, Default)]

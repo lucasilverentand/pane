@@ -11,11 +11,13 @@ pub mod workspace_bar;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::Frame;
 
-use crate::app::{App, Mode};
+use crate::app::Mode;
+use crate::client::Client;
 use crate::layout::LayoutParams;
 
-pub fn render(app: &App, frame: &mut Frame) {
-    let theme = &app.state.config.theme;
+/// Render the TUI for a connected client (daemon mode).
+pub fn render_client(client: &Client, frame: &mut Frame) {
+    let theme = &client.config.theme;
 
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(1),
@@ -24,49 +26,90 @@ pub fn render(app: &App, frame: &mut Frame) {
     ])
     .areas(frame.area());
 
+    // Workspace bar
     {
-        let names: Vec<String> = app.state.workspaces.iter().map(|ws| ws.name.clone()).collect();
+        let names: Vec<String> = client.render_state.workspaces.iter().map(|ws| ws.name.clone()).collect();
         workspace_bar::render(
             &names,
-            app.state.active_workspace,
+            client.render_state.active_workspace,
             theme,
             frame,
             header,
         );
     }
 
-    if !app.state.workspaces.is_empty() && app.mode != Mode::SessionPicker {
-        layout_render::render_workspace(app, frame, body);
-    }
-    status_bar::render(app, theme, frame, footer);
+    // Render workspace body
+    if let Some(ws) = client.active_workspace() {
+        let params = LayoutParams::from(&client.config.behavior);
+        let copy_mode_state = if client.mode == Mode::Copy {
+            client.copy_mode_state.as_ref()
+        } else {
+            None
+        };
+        let resolved = ws.layout.resolve_with_fold(body, params, &ws.leaf_min_sizes);
 
-    // Set cursor position from active pane's vt100 screen (not in scroll mode).
-    // Only show the host cursor when the child process hasn't hidden it (DECTCEM).
-    // Fullscreen apps like neovim/claude-code manage their own cursor via escape
-    // sequences; showing the host cursor on top causes a visible ghost cursor.
-    if app.mode == Mode::Normal && !app.state.workspaces.is_empty() {
-        let ws = app.active_workspace();
-        if let Some(group) = ws.groups.get(&ws.active_group) {
-            let pane = group.active_pane();
-            if !pane.screen().hide_cursor() {
-                let params = LayoutParams::from(&app.state.config.behavior);
-                let resolved = ws.layout.resolve_with_fold(body, params, &ws.leaf_min_sizes);
-                for rp in &resolved {
-                    if let crate::layout::ResolvedPane::Visible { id, rect } = rp {
-                        if *id == ws.active_group {
-                            let (vt_row, vt_col) = pane.screen().cursor_position();
-                            let tab_bar_offset: u16 = 1;
-                            let cursor_x = rect.x + 2 + vt_col;
-                            let cursor_y = rect.y + 1 + tab_bar_offset + vt_row;
-                            if cursor_x < rect.x + rect.width
-                                && cursor_y < rect.y + rect.height
-                            {
-                                frame.set_cursor_position(ratatui::layout::Position {
-                                    x: cursor_x,
-                                    y: cursor_y,
-                                });
+        // First pass: visible panes
+        for rp in &resolved {
+            if let crate::layout::ResolvedPane::Visible { id: group_id, rect } = rp {
+                if let Some(group) = ws.groups.iter().find(|g| g.id == *group_id) {
+                    let is_active = *group_id == ws.active_group;
+                    let pane = group.tabs.get(group.active_tab);
+                    let screen = pane.and_then(|p| client.pane_screen(p.id));
+                    pane_view::render_group_from_snapshot(
+                        group,
+                        screen,
+                        is_active,
+                        &client.mode,
+                        copy_mode_state,
+                        &client.config,
+                        frame,
+                        *rect,
+                    );
+                }
+            }
+        }
+
+        // Second pass: fold bars
+        for rp in &resolved {
+            if let crate::layout::ResolvedPane::Folded { id: group_id, rect, direction } = rp {
+                if rect.width == 0 || rect.height == 0 {
+                    continue;
+                }
+                let is_active = *group_id == ws.active_group;
+                pane_view::render_folded(is_active, *direction, theme, frame, *rect);
+            }
+        }
+    }
+
+    // Status bar
+    status_bar::render_client(client, theme, frame, footer);
+
+    // Cursor position
+    if client.mode == Mode::Normal {
+        if let Some(ws) = client.active_workspace() {
+            if let Some(group) = ws.groups.iter().find(|g| g.id == ws.active_group) {
+                if let Some(pane) = group.tabs.get(group.active_tab) {
+                    if let Some(screen) = client.pane_screen(pane.id) {
+                        if !screen.hide_cursor() {
+                            let params = LayoutParams::from(&client.config.behavior);
+                            let resolved = ws.layout.resolve_with_fold(body, params, &ws.leaf_min_sizes);
+                            for rp in &resolved {
+                                if let crate::layout::ResolvedPane::Visible { id, rect } = rp {
+                                    if *id == ws.active_group {
+                                        let (vt_row, vt_col) = screen.cursor_position();
+                                        let tab_bar_offset: u16 = 1;
+                                        let cursor_x = rect.x + 2 + vt_col;
+                                        let cursor_y = rect.y + 1 + tab_bar_offset + vt_row;
+                                        if cursor_x < rect.x + rect.width && cursor_y < rect.y + rect.height {
+                                            frame.set_cursor_position(ratatui::layout::Position {
+                                                x: cursor_x,
+                                                y: cursor_y,
+                                            });
+                                        }
+                                        break;
+                                    }
+                                }
                             }
-                            break;
                         }
                     }
                 }
@@ -74,142 +117,36 @@ pub fn render(app: &App, frame: &mut Frame) {
         }
     }
 
-    // Render overlays on top
-    match &app.mode {
-        Mode::SessionPicker => {
-            session_picker::render(
-                &app.session_list,
-                app.session_selected,
-                theme,
-                frame,
-                frame.area(),
-            );
-        }
-        Mode::DevServerInput => {
-            render_dev_server_input(app, theme, frame, frame.area());
-        }
+    // Overlays
+    match &client.mode {
         Mode::Help => {
             help::render(
-                &app.state.config.keys,
-                &app.help_state,
+                &client.config.keys,
+                &client.help_state,
                 theme,
                 frame,
                 frame.area(),
             );
         }
         Mode::CommandPalette => {
-            if let Some(ref cp_state) = app.command_palette_state {
+            if let Some(ref cp_state) = client.command_palette_state {
                 command_palette::render(cp_state, theme, frame, frame.area());
             }
         }
         Mode::Confirm => {
-            render_confirm_dialog(app, theme, frame, frame.area());
+            render_confirm_dialog(client, theme, frame, frame.area());
         }
         Mode::Leader => {
-            if let Some(ref ls) = app.leader_state {
+            if let Some(ref ls) = client.leader_state {
                 which_key::render(ls, theme, frame, frame.area());
             }
         }
-        Mode::Normal | Mode::Select | Mode::Scroll | Mode::Copy => {}
-    }
-}
-
-fn render_dev_server_input(
-    app: &App,
-    theme: &crate::config::Theme,
-    frame: &mut Frame,
-    area: ratatui::layout::Rect,
-) {
-    use ratatui::{
-        style::{Color, Modifier, Style},
-        text::{Line, Span},
-        widgets::{Block, BorderType, Borders, Clear, Paragraph},
-    };
-
-    let popup_area = centered_rect(50, 15, area);
-    frame.render_widget(Clear, popup_area);
-
-    let block = Block::default()
-        .title(" enter command ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.accent));
-
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
-
-    let lines = vec![
-        Line::raw(""),
-        Line::styled(
-            format!("  > {}_", app.dev_server_input),
-            Style::default().fg(Color::White),
-        ),
-        Line::raw(""),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                " Cancel ",
-                Style::default()
-                    .fg(Color::White)
-                    .bg(theme.dim)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                " Confirm ",
-                Style::default()
-                    .fg(Color::White)
-                    .bg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-    ];
-    let paragraph = Paragraph::new(lines);
-    frame.render_widget(paragraph, inner);
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum DevServerDialogClick {
-    Cancel,
-    Confirm,
-}
-
-/// Hit-test the dev server input dialog buttons.
-pub fn dev_server_dialog_hit_test(
-    area: ratatui::layout::Rect,
-    x: u16,
-    y: u16,
-) -> Option<DevServerDialogClick> {
-    use ratatui::widgets::{Block, BorderType, Borders};
-
-    let popup_area = centered_rect(50, 15, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
-    let inner = block.inner(popup_area);
-
-    // Buttons are on line index 3 (0-indexed) of the inner area
-    let button_y = inner.y + 3;
-    if y != button_y {
-        return None;
-    }
-
-    let cancel_start = inner.x + 2;
-    let cancel_end = cancel_start + 8;
-    let confirm_start = cancel_end + 2;
-    let confirm_end = confirm_start + 9;
-
-    if x >= cancel_start && x < cancel_end {
-        Some(DevServerDialogClick::Cancel)
-    } else if x >= confirm_start && x < confirm_end {
-        Some(DevServerDialogClick::Confirm)
-    } else {
-        None
+        _ => {}
     }
 }
 
 fn render_confirm_dialog(
-    app: &App,
+    client: &Client,
     theme: &crate::config::Theme,
     frame: &mut Frame,
     area: ratatui::layout::Rect,
@@ -220,7 +157,7 @@ fn render_confirm_dialog(
         widgets::{Block, BorderType, Borders, Clear, Paragraph},
     };
 
-    let message = match &app.pending_close {
+    let message = match &client.pending_close {
         Some(crate::app::PendingClose::Workspace { .. }) => {
             "Close workspace with running processes?"
         }

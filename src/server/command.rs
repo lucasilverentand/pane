@@ -43,6 +43,21 @@ pub enum Command {
     SelectLayout { layout_name: String },
     ResizePane { target: Option<TargetPane>, direction: ResizeDirection, amount: u16 },
 
+    // Workspace commands
+    CloseWorkspace,
+    SelectWorkspaceByIndex { index: usize },
+
+    // Tab cycling
+    NextWindow,
+    PreviousWindow,
+
+    // Pane management
+    RestartPane,
+    MoveTab { direction: PaneDirection },
+    EqualizeLayout,
+    ToggleSync,
+    PasteBuffer { text: String },
+
     // Misc commands
     DisplayMessage { message: String, to_stdout: bool },
 }
@@ -379,6 +394,91 @@ pub fn execute(
             state.resize_all_panes(w, h);
             broadcast_layout(state, broadcast_tx);
             Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::CloseWorkspace => {
+            state.close_workspace();
+            let (w, h) = state.last_size;
+            state.resize_all_panes(w, h);
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::SelectWorkspaceByIndex { index } => {
+            if *index < state.workspaces.len() {
+                state.active_workspace = *index;
+                broadcast_layout(state, broadcast_tx);
+                Ok(CommandResult::LayoutChanged)
+            } else {
+                bail!("workspace index {} out of range", index);
+            }
+        }
+
+        Command::NextWindow => {
+            let ws = state.active_workspace_mut();
+            if let Some(group) = ws.groups.get_mut(&ws.active_group) {
+                group.next_tab();
+            }
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::PreviousWindow => {
+            let ws = state.active_workspace_mut();
+            if let Some(group) = ws.groups.get_mut(&ws.active_group) {
+                group.prev_tab();
+            }
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::RestartPane => {
+            let (w, h) = state.last_size;
+            let bar_h = state.workspace_bar_height();
+            let cols = w.saturating_sub(4);
+            let rows = h.saturating_sub(2 + bar_h + 1);
+            state.restart_active_pane(cols, rows)?;
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::MoveTab { direction } => {
+            let (split_dir, side) = match direction {
+                PaneDirection::Left => (SplitDirection::Horizontal, crate::layout::Side::First),
+                PaneDirection::Right => (SplitDirection::Horizontal, crate::layout::Side::Second),
+                PaneDirection::Up => (SplitDirection::Vertical, crate::layout::Side::First),
+                PaneDirection::Down => (SplitDirection::Vertical, crate::layout::Side::Second),
+            };
+            state.move_tab_to_neighbor(split_dir, side);
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::EqualizeLayout => {
+            state.active_workspace_mut().layout.equalize();
+            state.active_workspace_mut().leaf_min_sizes.clear();
+            let (w, h) = state.last_size;
+            state.resize_all_panes(w, h);
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::ToggleSync => {
+            let ws = state.active_workspace_mut();
+            ws.sync_panes = !ws.sync_panes;
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::PasteBuffer { text } => {
+            let bytes = text.as_bytes().to_vec();
+            if !bytes.is_empty() {
+                let ws = state.active_workspace_mut();
+                if let Some(group) = ws.groups.get_mut(&ws.active_group) {
+                    group.active_pane_mut().write_input(&bytes);
+                }
+            }
+            Ok(CommandResult::Ok(String::new()))
         }
 
         Command::DisplayMessage { message, .. } => {

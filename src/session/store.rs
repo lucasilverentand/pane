@@ -40,6 +40,13 @@ pub fn delete(id: &Uuid) -> Result<()> {
     delete_from_dir(id, &sessions_dir())
 }
 
+/// Load the most recently updated session with the given name.
+pub fn load_by_name(name: &str) -> Option<Session> {
+    let summaries = list().ok()?;
+    let summary = summaries.iter().find(|s| s.name == name)?;
+    load(&summary.id).ok()
+}
+
 // Path-parameterized variants for testability
 
 pub fn save_to_dir(session: &Session, dir: &Path) -> Result<()> {

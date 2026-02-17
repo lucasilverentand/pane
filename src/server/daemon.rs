@@ -60,6 +60,10 @@ impl ClientRegistry {
         let min_h = clients.values().map(|(_, h)| *h).min().unwrap_or(24);
         Some((min_w, min_h))
     }
+
+    async fn count(&self) -> usize {
+        self.inner.lock().await.len()
+    }
 }
 
 /// Returns the socket directory: $TMPDIR/pane-{uid}/ or /tmp/pane-{uid}/
@@ -116,8 +120,14 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
     // Start system stats collector
     system_stats::start_stats_collector(event_tx.clone(), config.status_bar.update_interval_secs);
 
-    // Create initial server state
-    let state = ServerState::new_session(session_name.clone(), &event_tx, 80, 24, config)?;
+    let auto_suspend_secs = config.behavior.auto_suspend_secs;
+
+    // Try to restore from saved session, otherwise create a new one
+    let state = if let Some(saved) = session::store::load_by_name(&session_name) {
+        ServerState::restore_session(saved, event_tx.clone(), 80, 24, config)?
+    } else {
+        ServerState::new_session(session_name.clone(), &event_tx, 80, 24, config)?
+    };
     let state = Arc::new(Mutex::new(state));
 
     // ID map for tmux-compatible sequential IDs
@@ -203,6 +213,40 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
             state.config = new_config;
         }
     });
+
+    // Auto-suspend: save and exit after N seconds of no connected clients
+    if auto_suspend_secs > 0 {
+        let state_clone = Arc::clone(&state);
+        let clients_clone = clients.clone();
+        let broadcast_tx_suspend = broadcast_tx.clone();
+        let sock_path_suspend = sock_path.clone();
+        tokio::spawn(async move {
+            let mut last_empty: Option<tokio::time::Instant> = None;
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                let count = clients_clone.count().await;
+                if count == 0 {
+                    if last_empty.is_none() {
+                        last_empty = Some(tokio::time::Instant::now());
+                    }
+                    if let Some(since) = last_empty {
+                        if since.elapsed().as_secs() >= auto_suspend_secs {
+                            // Save session and exit
+                            let state = state_clone.lock().await;
+                            let session = Session::from_state(&state);
+                            let _ = session::store::save(&session);
+                            let _ = broadcast_tx_suspend.send(ServerResponse::SessionEnded);
+                            let _ = std::fs::remove_file(&sock_path_suspend);
+                            std::process::exit(0);
+                        }
+                    }
+                } else {
+                    last_empty = None;
+                }
+            }
+        });
+    }
 
     // Wait for the event loop to finish (happens when all panes exit)
     event_loop.await?;
@@ -343,6 +387,8 @@ async fn handle_client(
         let state_guard = state.lock().await;
         let (w, h) = state_guard.last_size;
         clients.register(client_id, w, h).await;
+        let count = clients.count().await as u32;
+        let _ = broadcast_tx.send(ServerResponse::ClientCountChanged(count));
     }
 
     // Send initial layout state
@@ -424,7 +470,7 @@ async fn handle_client(
                 let group = ws.groups.get_mut(&ws.active_group);
                 if let Some(group) = group {
                     let pane = group.active_pane_mut();
-                    let bytes = crate::app::key_to_bytes(key_event);
+                    let bytes = crate::keys::key_to_bytes(key_event);
                     if !bytes.is_empty() {
                         pane.write_input(&bytes);
                     }
@@ -468,6 +514,10 @@ async fn handle_client(
 
     // Client disconnected: unregister and recalculate effective size
     clients.unregister(client_id).await;
+    {
+        let count = clients.count().await as u32;
+        let _ = broadcast_tx.send(ServerResponse::ClientCountChanged(count));
+    }
     if let Some((eff_w, eff_h)) = clients.min_size().await {
         let mut state = state.lock().await;
         state.last_size = (eff_w, eff_h);
@@ -608,6 +658,48 @@ async fn handle_command(
     }
 }
 
+/// Start a daemon in the background for the given session.
+/// Forks the current exe with `daemon <session_name>` args, detaches stdio,
+/// and waits for the socket to appear (up to 5 seconds).
+pub fn start_daemon(session_name: &str) -> Result<()> {
+    let exe = std::env::current_exe()?;
+    let sock = socket_path(session_name);
+
+    // If socket already exists and daemon is alive, nothing to do
+    if sock.exists() && std::os::unix::net::UnixStream::connect(&sock).is_ok() {
+        return Ok(());
+    }
+
+    // Clean up stale socket
+    if sock.exists() {
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    // Ensure socket directory exists
+    let sock_dir = socket_dir();
+    std::fs::create_dir_all(&sock_dir)?;
+
+    // Fork a background daemon process
+    use std::process::{Command, Stdio};
+    Command::new(exe)
+        .arg("daemon")
+        .arg(session_name)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    // Wait for socket to appear (100 retries × 50ms = 5s max)
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if sock.exists() && std::os::unix::net::UnixStream::connect(&sock).is_ok() {
+            return Ok(());
+        }
+    }
+
+    anyhow::bail!("timed out waiting for daemon to start for session '{}'", session_name)
+}
+
 fn cleanup_stale_socket(path: &Path) {
     if path.exists() {
         // Try to connect — if it fails, the socket is stale
@@ -741,7 +833,7 @@ mod tests {
         (client_stream, handle, state)
     }
 
-    /// Helper: attach to the server and consume the initial Attached + LayoutChanged messages.
+    /// Helper: attach to the server and consume the initial Attached + LayoutChanged + ClientCountChanged messages.
     async fn attach_and_consume_initial(stream: &mut UnixStream) {
         framing::send(
             stream,
@@ -756,9 +848,14 @@ mod tests {
         let resp: ServerResponse = framing::recv_required(stream).await.unwrap();
         assert!(matches!(resp, ServerResponse::Attached { .. }));
 
-        // Read initial LayoutChanged
-        let resp: ServerResponse = framing::recv_required(stream).await.unwrap();
-        assert!(matches!(resp, ServerResponse::LayoutChanged { .. }));
+        // Consume LayoutChanged and ClientCountChanged in any order
+        for _ in 0..2 {
+            let resp: ServerResponse = framing::recv_required(stream).await.unwrap();
+            match resp {
+                ServerResponse::LayoutChanged { .. } | ServerResponse::ClientCountChanged(_) => {}
+                other => panic!("expected LayoutChanged or ClientCountChanged, got {:?}", other),
+            }
+        }
     }
 
     #[tokio::test]

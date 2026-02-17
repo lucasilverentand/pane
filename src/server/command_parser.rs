@@ -40,6 +40,15 @@ pub fn parse(input: &str) -> Result<Command> {
         "select-layout" => parse_select_layout(args),
         "resize-pane" | "resizep" => parse_resize_pane(args),
         "display-message" | "display" => parse_display_message(args),
+        "close-workspace" => Ok(Command::CloseWorkspace),
+        "select-workspace" => parse_select_workspace(args),
+        "next-window" | "next" => Ok(Command::NextWindow),
+        "previous-window" | "prev" => Ok(Command::PreviousWindow),
+        "restart-pane" => Ok(Command::RestartPane),
+        "move-tab" => parse_move_tab(args),
+        "equalize-layout" | "equalize" => Ok(Command::EqualizeLayout),
+        "toggle-sync" => Ok(Command::ToggleSync),
+        "paste-buffer" | "pasteb" => parse_paste_buffer(args),
         _ => bail!("unknown command: {}", cmd_name),
     }
 }
@@ -359,6 +368,33 @@ fn parse_display_message(args: &[String]) -> Result<Command> {
     }
     let message = msg_parts.join(" ");
     Ok(Command::DisplayMessage { message, to_stdout })
+}
+
+fn parse_select_workspace(args: &[String]) -> Result<Command> {
+    let (target_str, _rest) = extract_target(args);
+    let idx_str = target_str.ok_or_else(|| anyhow::anyhow!("select-workspace requires -t INDEX"))?;
+    let index: usize = idx_str.parse().map_err(|_| anyhow::anyhow!("invalid workspace index: {}", idx_str))?;
+    Ok(Command::SelectWorkspaceByIndex { index })
+}
+
+fn parse_move_tab(args: &[String]) -> Result<Command> {
+    let mut direction = None;
+    for arg in args {
+        match arg.as_str() {
+            "-L" => direction = Some(PaneDirection::Left),
+            "-R" => direction = Some(PaneDirection::Right),
+            "-U" => direction = Some(PaneDirection::Up),
+            "-D" => direction = Some(PaneDirection::Down),
+            _ => {}
+        }
+    }
+    let direction = direction.ok_or_else(|| anyhow::anyhow!("move-tab requires direction flag (-L/-R/-U/-D)"))?;
+    Ok(Command::MoveTab { direction })
+}
+
+fn parse_paste_buffer(args: &[String]) -> Result<Command> {
+    let text = args.join(" ");
+    Ok(Command::PasteBuffer { text })
 }
 
 #[cfg(test)]

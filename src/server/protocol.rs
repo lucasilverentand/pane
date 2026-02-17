@@ -1,6 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
+
 use crate::layout::{LayoutNode, PaneId};
 use crate::pane::{PaneGroupId, PaneKind};
 use crate::system_stats::SystemStats;
@@ -140,6 +142,10 @@ pub enum ServerResponse {
     LayoutChanged { render_state: RenderState },
     StatsUpdate(SerializableSystemStats),
     SessionEnded,
+    /// Full screen dump for a pane, sent when a client attaches mid-session.
+    FullScreenDump { pane_id: PaneId, data: Vec<u8> },
+    /// Notify clients when the number of connected clients changes.
+    ClientCountChanged(u32),
     Error(String),
     /// Synchronous command result: output text, optional pane/window IDs, and success flag.
     CommandOutput {
@@ -167,6 +173,8 @@ pub struct WorkspaceSnapshot {
     pub layout: LayoutNode,
     pub groups: Vec<GroupSnapshot>,
     pub active_group: PaneGroupId,
+    pub sync_panes: bool,
+    pub leaf_min_sizes: HashMap<PaneGroupId, (u16, u16)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -182,6 +190,8 @@ pub struct PaneSnapshot {
     pub kind: PaneKind,
     pub title: String,
     pub exited: bool,
+    pub foreground_process: Option<String>,
+    pub cwd: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +252,8 @@ impl RenderState {
                                 kind: pane.kind.clone(),
                                 title: pane.title.clone(),
                                 exited: pane.exited,
+                                foreground_process: pane.foreground_process.clone(),
+                                cwd: pane.cwd.to_string_lossy().to_string(),
                             })
                             .collect(),
                         active_tab: group.active_tab,
@@ -252,6 +264,8 @@ impl RenderState {
                     layout: ws.layout.clone(),
                     groups,
                     active_group: ws.active_group,
+                    sync_panes: ws.sync_panes,
+                    leaf_min_sizes: ws.leaf_min_sizes.clone(),
                 }
             })
             .collect();
@@ -394,10 +408,14 @@ mod tests {
                         kind: PaneKind::Shell,
                         title: "shell".to_string(),
                         exited: false,
+                        foreground_process: None,
+                        cwd: "/tmp".to_string(),
                     }],
                     active_tab: 0,
                 }],
                 active_group: PaneGroupId::new_v4(),
+                sync_panes: false,
+                leaf_min_sizes: HashMap::new(),
             }],
             active_workspace: 0,
             session_name: "default".to_string(),
