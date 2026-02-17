@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -9,7 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 
-use crate::app::{LeaderState, Mode, PendingClose};
+use crate::app::{LeaderState, Mode};
 use crate::clipboard;
 use crate::config::{self, Action, Config};
 use crate::copy_mode::{CopyModeAction, CopyModeState};
@@ -19,7 +18,6 @@ use crate::server::framing;
 use crate::server::protocol::{
     ClientRequest, RenderState, SerializableKeyEvent, ServerResponse, WorkspaceSnapshot,
 };
-use crate::session::store::SessionSummary;
 use crate::system_stats::SystemStats;
 use crate::tui::Tui;
 use crate::ui;
@@ -41,11 +39,6 @@ pub struct Client {
     pub help_state: HelpState,
     pub command_palette_state: Option<CommandPaletteState>,
     pub copy_mode_state: Option<CopyModeState>,
-    pub pending_close: Option<PendingClose>,
-    pub dev_server_input: String,
-    pub session_list: Vec<SessionSummary>,
-    pub session_selected: usize,
-
     pub should_quit: bool,
 }
 
@@ -67,11 +60,6 @@ impl Client {
             help_state: HelpState::default(),
             command_palette_state: None,
             copy_mode_state: None,
-            pending_close: None,
-            dev_server_input: String::new(),
-            session_list: Vec::new(),
-            session_selected: 0,
-
             should_quit: false,
         }
     }
@@ -285,11 +273,9 @@ impl Client {
                     if let Some(click) = ui::confirm_dialog_hit_test(area, x, y) {
                         match click {
                             ui::ConfirmDialogClick::Confirm => {
-                                self.pending_close = None;
                                 self.mode = Mode::Normal;
                             }
                             ui::ConfirmDialogClick::Cancel => {
-                                self.pending_close = None;
                                 self.mode = Mode::Normal;
                             }
                         }
@@ -329,11 +315,11 @@ impl Client {
                 let mut w = writer.lock().await;
                 let _ = send_request(&mut *w, &ClientRequest::MouseDrag { x, y }).await;
             }
-            AppEvent::MouseUp { .. } => {
+            AppEvent::MouseUp => {
                 let mut w = writer.lock().await;
                 let _ = send_request(&mut *w, &ClientRequest::MouseUp).await;
             }
-            AppEvent::MouseScroll { up, .. } => {
+            AppEvent::MouseScroll { up } => {
                 let mut w = writer.lock().await;
                 let _ = send_request(&mut *w, &ClientRequest::MouseScroll { up }).await;
             }
@@ -341,7 +327,7 @@ impl Client {
                 let mut w = writer.lock().await;
                 let _ = send_request(&mut *w, &ClientRequest::MouseMove { x, y }).await;
             }
-            AppEvent::MouseRightDown { .. } => {
+            AppEvent::MouseRightDown => {
                 // Right-click handled client-side in future
             }
             AppEvent::Tick => {
@@ -375,8 +361,8 @@ impl Client {
             Mode::CommandPalette => return self.handle_command_palette_key(key, tui, writer).await,
             Mode::Confirm => return self.handle_confirm_key(key),
             Mode::Leader => return self.handle_leader_key(key, tui, writer).await,
-            Mode::SessionPicker | Mode::DevServerInput | Mode::Select => {
-                // These modes will fall through to action handling below
+            Mode::Select => {
+                // Falls through to action handling below
             }
             Mode::Normal => {}
         }
@@ -492,11 +478,9 @@ impl Client {
     fn handle_confirm_key(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Enter | KeyCode::Char('y') => {
-                self.pending_close = None;
                 self.mode = Mode::Normal;
             }
             KeyCode::Esc | KeyCode::Char('n') => {
-                self.pending_close = None;
                 self.mode = Mode::Normal;
             }
             _ => {}
@@ -699,13 +683,6 @@ impl Client {
 
     pub fn active_workspace(&self) -> Option<&WorkspaceSnapshot> {
         self.render_state.workspaces.get(self.render_state.active_workspace)
-    }
-
-    pub fn active_pane_screen(&self) -> Option<&vt100::Screen> {
-        let ws = self.active_workspace()?;
-        let group = ws.groups.iter().find(|g| g.id == ws.active_group)?;
-        let pane = group.tabs.get(group.active_tab)?;
-        self.screens.get(&pane.id).map(|p| p.screen())
     }
 
     pub fn pane_screen(&self, pane_id: PaneId) -> Option<&vt100::Screen> {

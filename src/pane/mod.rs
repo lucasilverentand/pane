@@ -39,7 +39,7 @@ fn process_name_by_pid(_pid: u32) -> Option<String> {
 pub type PaneGroupId = uuid::Uuid;
 
 pub struct PaneGroup {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // groups are keyed by this id in the HashMap
     pub id: PaneGroupId,
     pub tabs: Vec<Pane>,
     pub active_tab: usize,
@@ -131,7 +131,6 @@ impl PaneKind {
     }
 }
 
-#[allow(dead_code)]
 pub struct Pane {
     pub id: PaneId,
     pub kind: PaneKind,
@@ -145,23 +144,12 @@ pub struct Pane {
     pub foreground_process: Option<String>,
     shell_pid: Option<u32>,
     pty_writer: Option<Box<dyn Write + Send>>,
+    #[allow(dead_code)] // kept alive to prevent child process kill on drop
     pty_child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
 }
 
 impl Pane {
-    #[allow(dead_code)]
-    pub fn spawn(
-        id: PaneId,
-        kind: PaneKind,
-        cols: u16,
-        rows: u16,
-        event_tx: mpsc::UnboundedSender<AppEvent>,
-        command: Option<String>,
-    ) -> anyhow::Result<Self> {
-        Self::spawn_with_env(id, kind, cols, rows, event_tx, command, None)
-    }
-
     pub fn spawn_with_env(
         id: PaneId,
         kind: PaneKind,
@@ -248,36 +236,9 @@ impl Pane {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn is_scrolled(&self) -> bool {
         self.scroll_offset > 0
-    }
-
-    /// Returns true if the pane is idle (exited, or shell at prompt with no foreground job).
-    #[cfg(unix)]
-    #[allow(dead_code)]
-    pub fn is_idle(&self) -> bool {
-        if self.exited {
-            return true;
-        }
-        let shell_pid = match self.shell_pid {
-            Some(pid) => pid,
-            None => return false,
-        };
-        let fg_pgid = match &self.pty_master {
-            Some(master) => master.process_group_leader(),
-            None => return false,
-        };
-        match fg_pgid {
-            Some(pgid) => pgid as u32 == shell_pid,
-            None => false,
-        }
-    }
-
-    #[cfg(not(unix))]
-    #[allow(dead_code)]
-    pub fn is_idle(&self) -> bool {
-        self.exited
     }
 
     /// Update the cached foreground process name by querying the PTY's fg process group.
@@ -317,14 +278,6 @@ impl Pane {
 
     pub fn scroll_down(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
-        self.vt.set_scrollback(self.scroll_offset);
-        self.scroll_offset = self.vt.screen().scrollback();
-    }
-
-    #[allow(dead_code)]
-    pub fn scroll_to_top(&mut self) {
-        let max_offset = self.vt.screen().size().0 as usize;
-        self.scroll_offset = max_offset;
         self.vt.set_scrollback(self.scroll_offset);
         self.scroll_offset = self.vt.screen().scrollback();
     }
@@ -556,23 +509,6 @@ mod tests {
         pane.scroll_to_bottom();
         assert_eq!(pane.scroll_offset, 0);
         assert!(!pane.is_scrolled());
-    }
-
-    #[test]
-    fn test_scroll_to_top() {
-        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
-        pane.vt = vt100::Parser::new(3, 80, 1000);
-        for i in 0..20 {
-            pane.vt.process(format!("line {}\r\n", i).as_bytes());
-        }
-        pane.scroll_to_top();
-        assert!(pane.is_scrolled());
-        // Should be at maximum available scrollback
-        let offset = pane.scroll_offset;
-        assert!(offset > 0);
-        // Scrolling up more shouldn't increase it (already at top)
-        pane.scroll_up(100);
-        assert_eq!(pane.scroll_offset, offset);
     }
 
     #[test]

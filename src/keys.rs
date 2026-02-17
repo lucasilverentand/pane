@@ -1,5 +1,4 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use vt100::MouseProtocolEncoding;
 
 /// Convert a crossterm KeyEvent to bytes suitable for writing to a PTY.
 pub fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
@@ -54,29 +53,5 @@ pub fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
             _ => vec![],
         },
         _ => vec![],
-    }
-}
-
-/// Encode a mouse event for the given protocol encoding.
-/// `cb` is the button byte (with motion flag already applied if needed).
-/// `x` and `y` are 0-based pane-local coordinates.
-#[allow(dead_code)]
-pub fn encode_mouse_event(
-    cb: u8,
-    x: u16,
-    y: u16,
-    pressed: bool,
-    encoding: MouseProtocolEncoding,
-) -> Vec<u8> {
-    match encoding {
-        MouseProtocolEncoding::Sgr => {
-            let suffix = if pressed { 'M' } else { 'm' };
-            format!("\x1b[<{};{};{}{}", cb, x + 1, y + 1, suffix).into_bytes()
-        }
-        MouseProtocolEncoding::Default | MouseProtocolEncoding::Utf8 => {
-            let bx = (x as u8).min(222) + 33;
-            let by = (y as u8).min(222) + 33;
-            vec![0x1b, b'[', b'M', cb + 32, bx, by]
-        }
     }
 }

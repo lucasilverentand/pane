@@ -36,11 +36,6 @@ pub fn list() -> Result<Vec<SessionSummary>> {
     list_from_dir(&sessions_dir())
 }
 
-#[allow(dead_code)]
-pub fn delete(id: &Uuid) -> Result<()> {
-    delete_from_dir(id, &sessions_dir())
-}
-
 /// Load the most recently updated session with the given name.
 pub fn load_by_name(name: &str) -> Option<Session> {
     let summaries = list().ok()?;
@@ -105,15 +100,6 @@ pub fn list_from_dir(dir: &Path) -> Result<Vec<SessionSummary>> {
 
     summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     Ok(summaries)
-}
-
-#[allow(dead_code)]
-pub fn delete_from_dir(id: &Uuid, dir: &Path) -> Result<()> {
-    let path = dir.join(format!("{}.json", id));
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -192,31 +178,10 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_session() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let session = make_test_session("doomed");
-        let id = session.id;
-        save_to_dir(&session, dir.path()).unwrap();
-
-        assert_eq!(list_from_dir(dir.path()).unwrap().len(), 1);
-
-        delete_from_dir(&id, dir.path()).unwrap();
-        assert_eq!(list_from_dir(dir.path()).unwrap().len(), 0);
-    }
-
-    #[test]
     fn test_load_nonexistent() {
         let dir = tempfile::tempdir().unwrap();
         let result = load_from_dir(&Uuid::new_v4(), dir.path());
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_delete_nonexistent_is_ok() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = delete_from_dir(&Uuid::new_v4(), dir.path());
-        assert!(result.is_ok());
     }
 
     #[test]

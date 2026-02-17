@@ -81,14 +81,6 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
                 "esc cancel ".to_string(),
             )
         }
-        Mode::SessionPicker => (
-            String::new(),
-            "up/down navigate  enter open  n new  d delete  q quit ".to_string(),
-        ),
-        Mode::DevServerInput => (
-            String::new(),
-            "type command, enter to confirm, esc to cancel ".to_string(),
-        ),
     };
 
     let left_len = left.len();

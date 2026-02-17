@@ -423,7 +423,7 @@ impl LayoutNode {
 
     /// Unfold a pane by resetting its parent split ratio to 0.5.
     /// Returns true if the target was found and the parent ratio was reset.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn unfold(&mut self, target: PaneId) -> bool {
         match self {
             LayoutNode::Leaf(_) => false,
@@ -504,33 +504,6 @@ impl LayoutNode {
                 // find a deeper match). Skew ratio to give space to the target.
                 *ratio = if in_first { 0.9 } else { 0.1 };
                 true
-            }
-        }
-    }
-
-    /// Internal helper: unfold within a subtree by setting ratios to 0.5.
-    #[allow(dead_code)]
-    fn unfold_inner(&mut self, target: PaneId) -> bool {
-        match self {
-            LayoutNode::Leaf(_) => false,
-            LayoutNode::Split {
-                ratio,
-                first,
-                second,
-                ..
-            } => {
-                let in_first = first.contains(target);
-                let in_second = second.contains(target);
-                if in_first || in_second {
-                    *ratio = 0.5;
-                    if in_first {
-                        first.unfold_inner(target);
-                    } else {
-                        second.unfold_inner(target);
-                    }
-                    return true;
-                }
-                false
             }
         }
     }
@@ -695,17 +668,6 @@ impl LayoutNode {
         }
     }
 
-    /// Count the number of leaves in this subtree.
-    #[allow(dead_code)]
-    pub fn leaf_count(&self) -> u16 {
-        match self {
-            LayoutNode::Leaf(_) => 1,
-            LayoutNode::Split { first, second, .. } => {
-                first.leaf_count() + second.leaf_count()
-            }
-        }
-    }
-
     /// How many cells this subtree needs when folded in the given direction.
     /// Same-direction splits tile children along the fold axis (sum),
     /// cross-direction splits stack perpendicular (max).
@@ -772,79 +734,6 @@ impl LayoutNode {
             LayoutNode::Leaf(id) => *id == target,
             LayoutNode::Split { first, second, .. } => {
                 first.contains(target) || second.contains(target)
-            }
-        }
-    }
-
-    /// Find a split border at the given (x, y) position within `area`.
-    /// Returns `(first_child_first_leaf, direction, border_pos, total_size)` where:
-    /// - `first_child_first_leaf` is the ID to pass to `resize()` (the first child's first leaf)
-    /// - `direction` is the split direction
-    /// - `border_pos` is the coordinate of the border (x for Horizontal, y for Vertical)
-    /// - `total_size` is the total extent in the split direction (for pixel→ratio conversion)
-    #[allow(dead_code)]
-    pub fn find_split_border(
-        &self,
-        x: u16,
-        y: u16,
-        area: Rect,
-    ) -> Option<(PaneId, SplitDirection, u16, u16)> {
-        match self {
-            LayoutNode::Leaf(_) => None,
-            LayoutNode::Split {
-                direction,
-                ratio,
-                first,
-                second,
-            } => {
-                let ratio_pct = (*ratio * 100.0) as u32;
-                let remainder = 100 - ratio_pct;
-                let chunks = match direction {
-                    SplitDirection::Horizontal => Layout::horizontal([
-                        Constraint::Percentage(ratio_pct as u16),
-                        Constraint::Percentage(remainder as u16),
-                    ])
-                    .split(area),
-                    SplitDirection::Vertical => Layout::vertical([
-                        Constraint::Percentage(ratio_pct as u16),
-                        Constraint::Percentage(remainder as u16),
-                    ])
-                    .split(area),
-                };
-
-                let first_rect = chunks[0];
-                let hit = match direction {
-                    SplitDirection::Horizontal => {
-                        let border_x = first_rect.x + first_rect.width;
-                        let in_y = y >= area.y && y < area.y + area.height;
-                        let near = x >= border_x.saturating_sub(1) && x <= border_x;
-                        in_y && near
-                    }
-                    SplitDirection::Vertical => {
-                        let border_y = first_rect.y + first_rect.height;
-                        let in_x = x >= area.x && x < area.x + area.width;
-                        let near = y >= border_y.saturating_sub(1) && y <= border_y;
-                        in_x && near
-                    }
-                };
-
-                if hit {
-                    let border_pos = match direction {
-                        SplitDirection::Horizontal => first_rect.x + first_rect.width,
-                        SplitDirection::Vertical => first_rect.y + first_rect.height,
-                    };
-                    let total_size = match direction {
-                        SplitDirection::Horizontal => area.width,
-                        SplitDirection::Vertical => area.height,
-                    };
-                    let leaf_id = first.first_leaf();
-                    return Some((leaf_id, *direction, border_pos, total_size));
-                }
-
-                // Recurse into children
-                first
-                    .find_split_border(x, y, chunks[0])
-                    .or_else(|| second.find_split_border(x, y, chunks[1]))
             }
         }
     }

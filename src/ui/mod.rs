@@ -3,8 +3,6 @@ pub mod format;
 pub mod help;
 pub mod layout_render;
 pub mod pane_view;
-#[allow(dead_code)]
-pub mod session_picker;
 pub mod status_bar;
 pub mod which_key;
 pub mod workspace_bar;
@@ -147,7 +145,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
 }
 
 fn render_confirm_dialog(
-    client: &Client,
+    _client: &Client,
     theme: &crate::config::Theme,
     frame: &mut Frame,
     area: ratatui::layout::Rect,
@@ -158,12 +156,7 @@ fn render_confirm_dialog(
         widgets::{Block, BorderType, Borders, Clear, Paragraph},
     };
 
-    let message = match &client.pending_close {
-        Some(crate::app::PendingClose::Workspace { .. }) => {
-            "Close workspace with running processes?"
-        }
-        _ => "Close tab with running process?",
-    };
+    let message = "Close tab with running process?";
 
     let popup_area = centered_rect(40, 15, area);
     frame.render_widget(Clear, popup_area);

@@ -306,10 +306,10 @@ async fn process_events(
             // These events come from clients, not the internal event loop
             AppEvent::Key(_)
             | AppEvent::MouseDown { .. }
-            | AppEvent::MouseRightDown { .. }
+            | AppEvent::MouseRightDown
             | AppEvent::MouseDrag { .. }
             | AppEvent::MouseMove { .. }
-            | AppEvent::MouseUp { .. }
+            | AppEvent::MouseUp
             | AppEvent::MouseScroll { .. }
             | AppEvent::Resize(_, _) => {}
         }

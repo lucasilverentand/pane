@@ -63,7 +63,7 @@ impl ServerState {
     }
 
     /// Get the last assigned pane number (the one just assigned by next_tmux_env).
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn last_pane_number(&self) -> u32 {
         self.next_pane_number.saturating_sub(1)
     }
@@ -342,31 +342,6 @@ impl ServerState {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn close_active_tab(&mut self) {
-        let ws = self.active_workspace_mut();
-        let active_group_id = ws.active_group;
-
-        if let Some(group) = ws.groups.get_mut(&active_group_id) {
-            if group.tab_count() > 1 {
-                group.close_tab(group.active_tab);
-                return;
-            }
-        }
-
-        let group_ids = ws.layout.group_ids();
-        if group_ids.len() <= 1 {
-            return;
-        }
-
-        if let Some(new_focus) = ws.layout.close_pane(active_group_id) {
-            ws.groups.remove(&active_group_id);
-            ws.active_group = new_focus;
-        }
-        let (w, h) = self.last_size;
-        self.resize_all_panes(w, h);
-    }
-
     pub fn move_tab_to_neighbor(&mut self, direction: SplitDirection, side: Side) {
         let ws = self.active_workspace();
         let source_group_id = ws.active_group;
@@ -565,23 +540,6 @@ impl ServerState {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn is_active_pane_scrolled(&self) -> bool {
-        let ws = self.active_workspace();
-        ws.groups
-            .get(&ws.active_group)
-            .map(|g| g.active_pane().is_scrolled())
-            .unwrap_or(false)
-    }
-
-    #[allow(dead_code)]
-    pub fn active_pane_screen_rows(&self) -> usize {
-        let ws = self.active_workspace();
-        ws.groups
-            .get(&ws.active_group)
-            .map(|g| g.active_pane().screen().size().0 as usize)
-            .unwrap_or(24)
-    }
 }
 
 #[cfg(test)]
