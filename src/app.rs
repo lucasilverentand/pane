@@ -106,6 +106,11 @@ impl App {
             }
         };
 
+        // Correct PTY sizes using actual layout rects before first render
+        let init_size = tui.size()?;
+        app.state.last_size = (init_size.width, init_size.height);
+        app.state.resize_all_panes(init_size.width, init_size.height);
+
         loop {
             tui.draw(|frame| ui::render(&app, frame))?;
 

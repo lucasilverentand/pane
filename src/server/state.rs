@@ -413,6 +413,9 @@ impl ServerState {
         if let Some(group) = ws.groups.get_mut(&ws.active_group) {
             group.add_tab(pane);
         }
+
+        let (w, h) = self.last_size;
+        self.resize_all_panes(w, h);
         Ok(pane_id)
     }
 
@@ -468,6 +471,9 @@ impl ServerState {
         let workspace = Workspace::new(next_workspace_name(&self.workspaces), group_id, group);
         self.workspaces.push(workspace);
         self.active_workspace = self.workspaces.len() - 1;
+
+        let (w, h) = self.last_size;
+        self.resize_all_panes(w, h);
         Ok(())
     }
 
@@ -508,6 +514,9 @@ impl ServerState {
         if let Some(group) = ws.groups.get_mut(&active_group_id) {
             *group.active_pane_mut() = new_pane;
         }
+
+        let (w, h) = self.last_size;
+        self.resize_all_panes(w, h);
         Ok(())
     }
 
