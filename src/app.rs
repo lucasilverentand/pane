@@ -31,6 +31,14 @@ pub enum Mode {
     Copy,
     CommandPalette,
     Confirm,
+    Leader,
+}
+
+pub struct LeaderState {
+    pub path: Vec<KeyEvent>,
+    pub current_node: crate::config::LeaderNode,
+    pub entered_at: std::time::Instant,
+    pub popup_visible: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +66,7 @@ pub struct App {
     pub help_state: HelpState,
     pub copy_mode_state: Option<CopyModeState>,
     pub pending_close: Option<PendingClose>,
+    pub leader_state: Option<LeaderState>,
     drag_state: Option<DragState>,
 }
 
@@ -161,6 +170,7 @@ impl App {
             help_state: HelpState::default(),
             copy_mode_state: None,
             pending_close: None,
+            leader_state: None,
             drag_state: None,
         })
     }
@@ -192,6 +202,7 @@ impl App {
             help_state: HelpState::default(),
             copy_mode_state: None,
             pending_close: None,
+            leader_state: None,
             drag_state: None,
         }
     }
@@ -217,6 +228,7 @@ impl App {
             copy_mode_state: None,
             help_state: HelpState::default(),
             pending_close: None,
+            leader_state: None,
             drag_state: None,
         })
     }
@@ -331,7 +343,16 @@ impl App {
             AppEvent::SystemStats(stats) => {
                 self.state.system_stats = stats;
             }
-            AppEvent::Tick => {}
+            AppEvent::Tick => {
+                if let Some(ref mut ls) = self.leader_state {
+                    if !ls.popup_visible {
+                        let elapsed = ls.entered_at.elapsed().as_millis() as u64;
+                        if elapsed >= self.state.config.leader.timeout_ms {
+                            ls.popup_visible = true;
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -737,10 +758,25 @@ impl App {
             Mode::CommandPalette => return self.handle_command_palette_key(key, tui),
             Mode::Select => return self.handle_select_key(key, tui),
             Mode::Confirm => return self.handle_confirm_key(key),
+            Mode::Leader => return self.handle_leader_key(key, tui),
             Mode::Normal => {}
         }
 
+        // Check for leader key before keymap lookup
         let normalized = config::normalize_key(key);
+        let leader_key = config::normalize_key(self.state.config.leader.key);
+        if normalized == leader_key {
+            let root = self.state.config.leader.root.clone();
+            self.leader_state = Some(LeaderState {
+                path: Vec::new(),
+                current_node: root,
+                entered_at: std::time::Instant::now(),
+                popup_visible: false,
+            });
+            self.mode = Mode::Leader;
+            return Ok(());
+        }
+
         if let Some(action) = self.state.config.keys.lookup(&normalized).cloned() {
             return self.execute_action(action, tui);
         }
@@ -1033,6 +1069,60 @@ impl App {
                 self.mode = Mode::Normal;
             }
             _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_leader_key(&mut self, key: KeyEvent, tui: &Tui) -> anyhow::Result<()> {
+        use crate::config::LeaderNode;
+
+        if key.code == KeyCode::Esc {
+            self.leader_state = None;
+            self.mode = Mode::Normal;
+            return Ok(());
+        }
+
+        let normalized = config::normalize_key(key);
+        let next = {
+            let ls = self.leader_state.as_ref().unwrap();
+            if let LeaderNode::Group { children, .. } = &ls.current_node {
+                children.get(&normalized).cloned()
+            } else {
+                None
+            }
+        };
+
+        match next {
+            Some(LeaderNode::Leaf { action, .. }) => {
+                self.leader_state = None;
+                self.mode = Mode::Normal;
+                return self.execute_action(action, tui);
+            }
+            Some(LeaderNode::PassThrough) => {
+                self.leader_state = None;
+                self.mode = Mode::Normal;
+                // Send the leader key as literal bytes to the PTY
+                let leader_key = self.state.config.leader.key;
+                let bytes = key_to_bytes(leader_key);
+                if !bytes.is_empty() {
+                    let ws = self.state.active_workspace_mut();
+                    if let Some(group) = ws.groups.get_mut(&ws.active_group) {
+                        group.active_pane_mut().write_input(&bytes);
+                    }
+                }
+            }
+            Some(group @ LeaderNode::Group { .. }) => {
+                let ls = self.leader_state.as_mut().unwrap();
+                ls.path.push(normalized);
+                ls.current_node = group;
+                ls.entered_at = std::time::Instant::now();
+                ls.popup_visible = false;
+            }
+            None => {
+                // Unknown key — cancel silently
+                self.leader_state = None;
+                self.mode = Mode::Normal;
+            }
         }
         Ok(())
     }

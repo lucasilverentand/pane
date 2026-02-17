@@ -362,7 +362,204 @@ fn action_name_map() -> HashMap<&'static str, Action> {
     m.insert("rename_pane", Action::RenamePane);
     m.insert("detach", Action::Detach);
     m.insert("select_mode", Action::SelectMode);
+    for n in 1..=9u8 {
+        // Leak is fine — these are static strings created once at startup
+        let name: &'static str = Box::leak(format!("focus_group_{}", n).into_boxed_str());
+        m.insert(name, Action::FocusGroupN(n));
+        let ws_name: &'static str = Box::leak(format!("switch_workspace_{}", n).into_boxed_str());
+        m.insert(ws_name, Action::SwitchWorkspace(n));
+    }
     m
+}
+
+// ---------------------------------------------------------------------------
+// Leader key
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+pub enum LeaderNode {
+    Leaf { action: Action, label: String },
+    Group { label: String, children: HashMap<KeyEvent, LeaderNode> },
+    PassThrough,
+}
+
+#[derive(Clone, Debug)]
+pub struct LeaderConfig {
+    pub key: KeyEvent,
+    pub timeout_ms: u64,
+    pub root: LeaderNode,
+}
+
+impl Default for LeaderConfig {
+    fn default() -> Self {
+        Self {
+            key: KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE),
+            timeout_ms: 300,
+            root: default_leader_tree(),
+        }
+    }
+}
+
+fn default_leader_tree() -> LeaderNode {
+    let mut root = HashMap::new();
+
+    // \w → +Window
+    {
+        let mut children = HashMap::new();
+        insert_leaf(&mut children, "h", Action::FocusLeft, "Focus Left");
+        insert_leaf(&mut children, "j", Action::FocusDown, "Focus Down");
+        insert_leaf(&mut children, "k", Action::FocusUp, "Focus Up");
+        insert_leaf(&mut children, "l", Action::FocusRight, "Focus Right");
+        for n in 1..=9u8 {
+            let ch = (b'0' + n) as char;
+            let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
+            children.insert(key, LeaderNode::Leaf {
+                action: Action::FocusGroupN(n),
+                label: format!("Focus {}", n),
+            });
+        }
+        insert_leaf(&mut children, "d", Action::SplitHorizontal, "Split H");
+        insert_leaf(&mut children, "shift+d", Action::SplitVertical, "Split V");
+        insert_leaf(&mut children, "c", Action::CloseTab, "Close");
+        insert_leaf(&mut children, "=", Action::Equalize, "Equalize");
+        insert_leaf(&mut children, "r", Action::RestartPane, "Restart");
+        let key = parse_key("w").unwrap();
+        root.insert(key, LeaderNode::Group { label: "Window".into(), children });
+    }
+
+    // \t → +Tab
+    {
+        let mut children = HashMap::new();
+        insert_leaf(&mut children, "n", Action::NewTab, "New Tab");
+        insert_leaf(&mut children, "c", Action::CloseTab, "Close Tab");
+        insert_leaf(&mut children, "]", Action::NextTab, "Next Tab");
+        insert_leaf(&mut children, "[", Action::PrevTab, "Prev Tab");
+        insert_leaf(&mut children, "h", Action::MoveTabLeft, "Move Left");
+        insert_leaf(&mut children, "j", Action::MoveTabDown, "Move Down");
+        insert_leaf(&mut children, "k", Action::MoveTabUp, "Move Up");
+        insert_leaf(&mut children, "l", Action::MoveTabRight, "Move Right");
+        let key = parse_key("t").unwrap();
+        root.insert(key, LeaderNode::Group { label: "Tab".into(), children });
+    }
+
+    // \s → +Session
+    {
+        let mut children = HashMap::new();
+        insert_leaf(&mut children, "s", Action::SessionPicker, "Sessions");
+        insert_leaf(&mut children, "p", Action::CommandPalette, "Palette");
+        let key = parse_key("s").unwrap();
+        root.insert(key, LeaderNode::Group { label: "Session".into(), children });
+    }
+
+    // \W → +Workspace
+    {
+        let mut children = HashMap::new();
+        insert_leaf(&mut children, "n", Action::NewWorkspace, "New");
+        insert_leaf(&mut children, "c", Action::CloseWorkspace, "Close");
+        for n in 1..=9u8 {
+            let ch = (b'0' + n) as char;
+            let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
+            children.insert(key, LeaderNode::Leaf {
+                action: Action::SwitchWorkspace(n),
+                label: format!("Switch {}", n),
+            });
+        }
+        let key = parse_key("shift+w").unwrap();
+        root.insert(key, LeaderNode::Group { label: "Workspace".into(), children });
+    }
+
+    // \r → +Resize
+    {
+        let mut children = HashMap::new();
+        insert_leaf(&mut children, "h", Action::ResizeShrinkH, "Shrink H");
+        insert_leaf(&mut children, "l", Action::ResizeGrowH, "Grow H");
+        insert_leaf(&mut children, "j", Action::ResizeGrowV, "Grow V");
+        insert_leaf(&mut children, "k", Action::ResizeShrinkV, "Shrink V");
+        insert_leaf(&mut children, "=", Action::Equalize, "Equalize");
+        let key = parse_key("r").unwrap();
+        root.insert(key, LeaderNode::Group { label: "Resize".into(), children });
+    }
+
+    // \y → Paste
+    insert_leaf(&mut root, "y", Action::PasteClipboard, "Paste");
+    // \/ → Help
+    insert_leaf(&mut root, "/", Action::Help, "Help");
+
+    // \\ → PassThrough (literal backslash)
+    let bs_key = KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE);
+    root.insert(bs_key, LeaderNode::PassThrough);
+
+    LeaderNode::Group { label: "Leader".into(), children: root }
+}
+
+fn insert_leaf(map: &mut HashMap<KeyEvent, LeaderNode>, key_str: &str, action: Action, label: &str) {
+    if let Some(key) = parse_key(key_str) {
+        map.insert(key, LeaderNode::Leaf { action, label: label.to_string() });
+    }
+}
+
+/// Build a leader tree from TOML config, merging on top of defaults.
+fn build_leader_tree(raw_keys: &HashMap<String, String>, defaults: LeaderNode) -> LeaderNode {
+    let name_to_action = action_name_map();
+    let mut root = defaults;
+
+    for (key_path, value) in raw_keys {
+        let segments: Vec<&str> = key_path.split_whitespace().collect();
+        let parsed_keys: Vec<KeyEvent> = segments.iter().filter_map(|s| parse_key(s)).collect();
+        if parsed_keys.len() != segments.len() || parsed_keys.is_empty() {
+            continue;
+        }
+
+        if value == "passthrough" {
+            insert_into_tree(&mut root, &parsed_keys, LeaderNode::PassThrough);
+        } else if let Some(stripped) = value.strip_prefix('+') {
+            // Group label — ensure the group exists
+            if parsed_keys.len() == 1 {
+                let existing = get_or_create_group(&mut root, &parsed_keys[0], stripped);
+                let _ = existing; // just ensure it exists
+            }
+        } else if let Some(action) = name_to_action.get(value.as_str()) {
+            let label = value.replace('_', " ");
+            let node = LeaderNode::Leaf { action: action.clone(), label };
+            insert_into_tree(&mut root, &parsed_keys, node);
+        }
+    }
+
+    root
+}
+
+fn get_or_create_group<'a>(tree: &'a mut LeaderNode, key: &KeyEvent, label: &str) -> &'a mut HashMap<KeyEvent, LeaderNode> {
+    if let LeaderNode::Group { children, .. } = tree {
+        children.entry(*key).or_insert_with(|| LeaderNode::Group {
+            label: label.to_string(),
+            children: HashMap::new(),
+        });
+        if let Some(LeaderNode::Group { children: inner, .. }) = children.get_mut(key) {
+            return inner;
+        }
+    }
+    // Fallback — shouldn't happen if root is always a Group
+    panic!("root must be a Group");
+}
+
+fn insert_into_tree(tree: &mut LeaderNode, keys: &[KeyEvent], node: LeaderNode) {
+    if keys.is_empty() {
+        return;
+    }
+    if keys.len() == 1 {
+        if let LeaderNode::Group { children, .. } = tree {
+            children.insert(keys[0], node);
+        }
+        return;
+    }
+    // Descend
+    if let LeaderNode::Group { children, .. } = tree {
+        let child = children.entry(keys[0]).or_insert_with(|| LeaderNode::Group {
+            label: String::new(),
+            children: HashMap::new(),
+        });
+        insert_into_tree(child, &keys[1..], node);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +574,7 @@ pub struct Config {
     pub select_keys: KeyMap,
     pub status_bar: StatusBarConfig,
     pub decorations: Vec<PaneDecoration>,
+    pub leader: LeaderConfig,
 }
 
 impl Default for Config {
@@ -388,6 +586,7 @@ impl Default for Config {
             select_keys: KeyMap::select_defaults(),
             status_bar: StatusBarConfig::default(),
             decorations: PaneDecoration::defaults(),
+            leader: LeaderConfig::default(),
         }
     }
 }
@@ -466,6 +665,21 @@ impl Config {
             if let Some(v) = sb.right { config.status_bar.right = v; }
         }
 
+        // Leader
+        if let Some(ref leader) = raw.leader {
+            if let Some(ref key_str) = leader.key {
+                if let Some(k) = parse_key(key_str) {
+                    config.leader.key = k;
+                }
+            }
+            if let Some(ms) = leader.timeout_ms {
+                config.leader.timeout_ms = ms;
+            }
+        }
+        if let Some(ref leader_keys) = raw.leader_keys {
+            config.leader.root = build_leader_tree(leader_keys, config.leader.root);
+        }
+
         // Decorations
         if let Some(raw_decs) = raw.decorations {
             // User-provided decorations replace the defaults
@@ -499,6 +713,14 @@ struct RawConfig {
     select_keys: Option<HashMap<String, String>>,
     status_bar: Option<RawStatusBar>,
     decorations: Option<Vec<RawDecoration>>,
+    leader: Option<RawLeader>,
+    leader_keys: Option<HashMap<String, String>>,
+}
+
+#[derive(Deserialize, Default)]
+struct RawLeader {
+    key: Option<String>,
+    timeout_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]

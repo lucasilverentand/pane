@@ -5,6 +5,7 @@ pub mod layout_render;
 pub mod pane_view;
 pub mod session_picker;
 pub mod status_bar;
+pub mod which_key;
 pub mod workspace_bar;
 
 use ratatui::layout::{Constraint, Layout};
@@ -103,6 +104,11 @@ pub fn render(app: &App, frame: &mut Frame) {
         }
         Mode::Confirm => {
             render_confirm_dialog(app, theme, frame, frame.area());
+        }
+        Mode::Leader => {
+            if let Some(ref ls) = app.leader_state {
+                which_key::render(ls, theme, frame, frame.area());
+            }
         }
         Mode::Normal | Mode::Select | Mode::Scroll | Mode::Copy => {}
     }

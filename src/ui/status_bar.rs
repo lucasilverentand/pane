@@ -56,6 +56,22 @@ pub fn render(app: &App, theme: &Theme, frame: &mut Frame, area: Rect) {
             String::new(),
             "enter/y confirm  esc/n cancel ".to_string(),
         ),
+        Mode::Leader => {
+            let path_str = if let Some(ref ls) = app.leader_state {
+                let keys: Vec<String> = ls.path.iter().map(|k| format_leader_key(k)).collect();
+                if keys.is_empty() {
+                    "\\".to_string()
+                } else {
+                    format!("\\ {}", keys.join(" "))
+                }
+            } else {
+                "\\".to_string()
+            };
+            (
+                format!("[LEADER] {}", path_str),
+                "esc cancel ".to_string(),
+            )
+        }
     };
 
     let left_len = left.len();
@@ -94,6 +110,20 @@ fn pane_title(app: &App) -> String {
         .unwrap_or_default();
     // Only use the first line to avoid multi-line bleed in the status bar
     title.lines().next().unwrap_or("").to_string()
+}
+
+fn format_leader_key(key: &crossterm::event::KeyEvent) -> String {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    match key.code {
+        KeyCode::Char(c) => {
+            if key.modifiers.contains(KeyModifiers::SHIFT) || c.is_uppercase() {
+                c.to_string()
+            } else {
+                c.to_string()
+            }
+        }
+        _ => "?".to_string(),
+    }
 }
 
 /// Build the template variables HashMap from app state.
