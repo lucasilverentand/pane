@@ -156,7 +156,7 @@ impl Default for StatusBarConfig {
             show_disk: false,
             update_interval_secs: 3,
             left: "".to_string(),
-            right: "#{cpu} #{mem} #{load}  ctrl+h help ".to_string(),
+            right: "#{cpu} #{mem} #{load}  \\ leader ".to_string(),
         }
     }
 }
@@ -176,58 +176,13 @@ impl KeyMap {
 
         let defaults: Vec<(&str, Action)> = vec![
             ("ctrl+q", Action::Quit),
-            ("ctrl+t", Action::NewWorkspace),
-            ("ctrl+shift+w", Action::CloseWorkspace),
-            ("ctrl+n", Action::NewTab),
-            ("ctrl+shift+n", Action::DevServerInput),
-            ("ctrl+tab", Action::NextTab),
-            ("alt+]", Action::NextTab),
-            ("ctrl+shift+tab", Action::PrevTab),
-            ("alt+[", Action::PrevTab),
-            ("ctrl+w", Action::CloseTab),
-            ("ctrl+d", Action::SplitHorizontal),
-            ("ctrl+shift+d", Action::SplitVertical),
-            ("ctrl+r", Action::RestartPane),
-            ("alt+h", Action::FocusLeft),
-            ("alt+j", Action::FocusDown),
-            ("alt+k", Action::FocusUp),
-            ("alt+l", Action::FocusRight),
-            ("alt+shift+h", Action::MoveTabLeft),
-            ("alt+shift+j", Action::MoveTabDown),
-            ("alt+shift+k", Action::MoveTabUp),
-            ("alt+shift+l", Action::MoveTabRight),
-            ("ctrl+alt+h", Action::ResizeShrinkH),
-            ("ctrl+alt+l", Action::ResizeGrowH),
-            ("ctrl+alt+j", Action::ResizeGrowV),
-            ("ctrl+alt+k", Action::ResizeShrinkV),
-            ("ctrl+alt+=", Action::Equalize),
-            ("ctrl+s", Action::SessionPicker),
-            ("ctrl+h", Action::Help),
-            ("ctrl+/", Action::Help),
-            ("ctrl+?", Action::Help),
             ("shift+pageup", Action::ScrollMode),
-            ("ctrl+p", Action::CommandPalette),
-            ("ctrl+space", Action::SelectMode),
         ];
 
         for (key_str, action) in defaults {
             if let Some(key) = parse_key(key_str) {
                 map.insert(key, action);
             }
-        }
-
-        // ctrl+1..9 → SwitchWorkspace
-        for n in 1..=9u8 {
-            let ch = (b'0' + n) as char;
-            let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL);
-            map.insert(key, Action::SwitchWorkspace(n));
-        }
-
-        // alt+1..9 → FocusGroupN
-        for n in 1..=9u8 {
-            let ch = (b'0' + n) as char;
-            let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::ALT);
-            map.insert(key, Action::FocusGroupN(n));
         }
 
         Self { map }
@@ -1065,17 +1020,13 @@ mod tests {
     }
 
     #[test]
-    fn test_keymap_defaults_switch_workspace_3() {
+    fn test_keymap_defaults_no_old_binds() {
         let km = KeyMap::from_defaults();
+        // Old ctrl/alt combos removed — now handled via leader key
         let key = make_key(KeyCode::Char('3'), KeyModifiers::CONTROL);
-        assert_eq!(km.lookup(&key), Some(&Action::SwitchWorkspace(3)));
-    }
-
-    #[test]
-    fn test_keymap_defaults_focus_group_5() {
-        let km = KeyMap::from_defaults();
+        assert_eq!(km.lookup(&key), None);
         let key = make_key(KeyCode::Char('5'), KeyModifiers::ALT);
-        assert_eq!(km.lookup(&key), Some(&Action::FocusGroupN(5)));
+        assert_eq!(km.lookup(&key), None);
     }
 
     #[test]
