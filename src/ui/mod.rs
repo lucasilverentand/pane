@@ -2,7 +2,7 @@ pub mod command_palette;
 pub mod format;
 pub mod help;
 pub mod layout_render;
-pub mod pane_view;
+pub mod window_view;
 pub mod status_bar;
 pub mod which_key;
 pub mod workspace_bar;
@@ -18,15 +18,27 @@ use crate::layout::LayoutParams;
 pub fn render_client(client: &Client, frame: &mut Frame) {
     let theme = &client.config.theme;
 
-    let [header, body, footer] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Fill(1),
-        Constraint::Length(1),
-    ])
-    .areas(frame.area());
+    let show_workspace_bar = client.render_state.workspaces.len() > 1;
 
-    // Workspace bar
-    {
+    let (header, body, footer) = if show_workspace_bar {
+        let [h, b, f] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
+        (Some(h), b, f)
+    } else {
+        let [b, f] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
+        (None, b, f)
+    };
+
+    // Workspace bar (only when >1 workspace)
+    if let Some(header) = header {
         let names: Vec<&str> = client.render_state.workspaces.iter().map(|ws| ws.name.as_str()).collect();
         workspace_bar::render(
             &names,
@@ -36,6 +48,9 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
             header,
         );
     }
+
+    // Status bar
+    status_bar::render_client(client, theme, frame, footer);
 
     // Render workspace body + cursor
     if let Some(ws) = client.active_workspace() {
@@ -54,7 +69,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                     let is_active = *group_id == ws.active_group;
                     let pane = group.tabs.get(group.active_tab);
                     let screen = pane.and_then(|p| client.pane_screen(p.id));
-                    pane_view::render_group_from_snapshot(
+                    window_view::render_group_from_snapshot(
                         group,
                         screen,
                         is_active,
@@ -75,7 +90,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                     continue;
                 }
                 let is_active = *group_id == ws.active_group;
-                pane_view::render_folded(is_active, *direction, theme, frame, *rect);
+                window_view::render_folded(is_active, *direction, theme, frame, *rect);
             }
         }
 
@@ -89,7 +104,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                                 if let crate::layout::ResolvedPane::Visible { id, rect } = rp {
                                     if *id == ws.active_group {
                                         let (vt_row, vt_col) = screen.cursor_position();
-                                        let tab_bar_offset: u16 = 1;
+                                        let tab_bar_offset: u16 = if group.tabs.len() > 1 { 1 } else { 0 };
                                         let cursor_x = rect.x + 2 + vt_col;
                                         let cursor_y = rect.y + 1 + tab_bar_offset + vt_row;
                                         if cursor_x < rect.x + rect.width && cursor_y < rect.y + rect.height {

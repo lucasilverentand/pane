@@ -105,9 +105,9 @@ pub fn list_from_dir(dir: &Path) -> Result<Vec<SessionSummary>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{LayoutNode, PaneId};
-    use crate::pane::{PaneGroupId, PaneKind};
-    use crate::session::{PaneConfig, PaneGroupConfig, WorkspaceConfig};
+    use crate::layout::{LayoutNode, TabId};
+    use crate::window::{WindowId, TabKind};
+    use crate::session::{TabConfig, WindowConfig, WorkspaceConfig};
     use std::collections::HashMap;
 
     fn test_tempdir() -> tempfile::TempDir {
@@ -117,8 +117,8 @@ mod tests {
     }
 
     fn make_test_session(name: &str) -> Session {
-        let group_id = PaneGroupId::new_v4();
-        let pane_id = PaneId::new_v4();
+        let group_id = WindowId::new_v4();
+        let pane_id = TabId::new_v4();
         Session {
             id: Uuid::new_v4(),
             name: name.to_string(),
@@ -128,11 +128,11 @@ mod tests {
             workspaces: vec![WorkspaceConfig {
                 name: "1".to_string(),
                 layout: LayoutNode::Leaf(group_id),
-                groups: vec![PaneGroupConfig {
+                groups: vec![WindowConfig {
                     id: group_id,
-                    tabs: vec![PaneConfig {
+                    tabs: vec![TabConfig {
                         id: pane_id,
-                        kind: PaneKind::Shell,
+                        kind: TabKind::Shell,
                         title: "shell".to_string(),
                         command: None,
                         cwd: PathBuf::from("/tmp"),
@@ -232,9 +232,9 @@ mod tests {
     #[test]
     fn test_summary_pane_count() {
         let dir = test_tempdir();
-        let group_id = PaneGroupId::new_v4();
-        let pane1 = PaneId::new_v4();
-        let pane2 = PaneId::new_v4();
+        let group_id = WindowId::new_v4();
+        let pane1 = TabId::new_v4();
+        let pane2 = TabId::new_v4();
 
         let session = Session {
             id: Uuid::new_v4(),
@@ -245,21 +245,21 @@ mod tests {
             workspaces: vec![WorkspaceConfig {
                 name: "1".to_string(),
                 layout: LayoutNode::Leaf(group_id),
-                groups: vec![PaneGroupConfig {
+                groups: vec![WindowConfig {
                     id: group_id,
                     tabs: vec![
-                        PaneConfig {
+                        TabConfig {
                             id: pane1,
-                            kind: PaneKind::Shell,
+                            kind: TabKind::Shell,
                             title: "shell".to_string(),
                             command: None,
                             cwd: PathBuf::from("/"),
                             env: HashMap::new(),
                             scrollback: vec![],
                         },
-                        PaneConfig {
+                        TabConfig {
                             id: pane2,
-                            kind: PaneKind::Nvim,
+                            kind: TabKind::Nvim,
                             title: "nvim".to_string(),
                             command: None,
                             cwd: PathBuf::from("/"),
@@ -286,8 +286,8 @@ mod tests {
         let dir = test_tempdir();
         // Create a v1 session (no "version" field, no "sync_panes", no group "name")
         let id = Uuid::new_v4();
-        let group_id = PaneGroupId::new_v4();
-        let pane_id = PaneId::new_v4();
+        let group_id = WindowId::new_v4();
+        let pane_id = TabId::new_v4();
         let v1_json = serde_json::json!({
             "id": id.to_string(),
             "name": "old-session",

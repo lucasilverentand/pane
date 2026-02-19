@@ -2,8 +2,8 @@
 use anyhow::{bail, Result};
 use tokio::sync::broadcast;
 
-use crate::layout::{PaneId, SplitDirection};
-use crate::pane::{PaneGroupId, PaneKind};
+use crate::layout::{TabId, SplitDirection};
+use crate::window::{WindowId, TabKind};
 use crate::server::id_map::IdMap;
 use crate::server::protocol::{RenderState, ServerResponse};
 use crate::server::state::ServerState;
@@ -25,7 +25,7 @@ pub enum Command {
     HasSession { name: String },
     NewSession { name: String, window_name: Option<String>, detached: bool },
 
-    // Window (PaneGroup) commands
+    // Window (Window) commands
     NewWindow { target_session: Option<String>, window_name: Option<String> },
     KillWindow { target: Option<TargetWindow> },
     SelectWindow { target: TargetWindow },
@@ -171,7 +171,7 @@ pub fn execute(
             let gid = ws.active_group;
             let win_n = id_map.register_window(gid);
             let pane_n = if let Some(group) = ws.groups.get(&gid) {
-                id_map.register_pane(group.active_pane().id)
+                id_map.register_pane(group.active_tab().id)
             } else {
                 0
             };
@@ -188,7 +188,7 @@ pub fn execute(
             let bar_h = state.workspace_bar_height();
             let cols = w.saturating_sub(4);
             let rows = h.saturating_sub(2 + bar_h + 1);
-            let pane_id = state.add_tab_to_active_group(PaneKind::Shell, None, cols, rows)?;
+            let pane_id = state.add_tab_to_active_group(TabKind::Shell, None, cols, rows)?;
             if let Some(wname) = window_name {
                 let ws = state.active_workspace_mut();
                 if let Some(group) = ws.groups.get_mut(&ws.active_group) {
@@ -249,7 +249,7 @@ pub fn execute(
                 );
                 let active_flag = *gid == ws.active_group;
                 if let Some(fmt) = &format {
-                    let pane_n = id_map.register_pane(group.active_pane().id);
+                    let pane_n = id_map.register_pane(group.active_tab().id);
                     lines.push(expand_format(fmt, win_n, pane_n, name, group, active_flag, state));
                 } else {
                     let active = if active_flag { " (active)" } else { "" };
@@ -273,7 +273,7 @@ pub fn execute(
             let bar_h = state.workspace_bar_height();
             let cols = w.saturating_sub(4);
             let rows = h.saturating_sub(2 + bar_h + 1);
-            let (new_group_id, new_pane_id) = state.split_active_group(direction, PaneKind::Shell, cols, rows)?;
+            let (new_group_id, new_pane_id) = state.split_active_group(direction, TabKind::Shell, cols, rows)?;
             let pane_n = id_map.register_pane(new_pane_id);
             let win_n = id_map.register_window(new_group_id);
             broadcast_layout(state, broadcast_tx);
@@ -335,7 +335,7 @@ pub fn execute(
             if let Some(t) = title {
                 let ws = state.active_workspace_mut();
                 if let Some(group) = ws.groups.get_mut(&group_id) {
-                    group.active_pane_mut().title = t.clone();
+                    group.active_tab_mut().title = t.clone();
                 }
             }
             broadcast_layout(state, broadcast_tx);
@@ -366,7 +366,7 @@ pub fn execute(
 
         Command::SendKeys { target, keys } => {
             let (_group_id, pane_id) = resolve_pane_target(target.as_ref(), state, id_map)?;
-            if let Some(pane) = state.find_pane_mut(pane_id) {
+            if let Some(pane) = state.find_tab_mut(pane_id) {
                 for key_str in keys {
                     let bytes = parse_key_literal(key_str);
                     pane.write_input(&bytes);
@@ -396,15 +396,18 @@ pub fn execute(
             }
             state.update_leaf_mins();
             let (w, h) = state.last_size;
-            state.resize_all_panes(w, h);
+            state.resize_all_tabs(w, h);
             broadcast_layout(state, broadcast_tx);
             Ok(CommandResult::LayoutChanged)
         }
 
         Command::CloseWorkspace => {
-            state.close_workspace();
+            if state.close_workspace() {
+                let _ = broadcast_tx.send(ServerResponse::SessionEnded);
+                return Ok(CommandResult::SessionEnded);
+            }
             let (w, h) = state.last_size;
-            state.resize_all_panes(w, h);
+            state.resize_all_tabs(w, h);
             broadcast_layout(state, broadcast_tx);
             Ok(CommandResult::LayoutChanged)
         }
@@ -442,7 +445,7 @@ pub fn execute(
             let bar_h = state.workspace_bar_height();
             let cols = w.saturating_sub(4);
             let rows = h.saturating_sub(2 + bar_h + 1);
-            state.restart_active_pane(cols, rows)?;
+            state.restart_active_tab(cols, rows)?;
             broadcast_layout(state, broadcast_tx);
             Ok(CommandResult::LayoutChanged)
         }
@@ -463,7 +466,7 @@ pub fn execute(
             state.active_workspace_mut().layout.equalize();
             state.active_workspace_mut().leaf_min_sizes.clear();
             let (w, h) = state.last_size;
-            state.resize_all_panes(w, h);
+            state.resize_all_tabs(w, h);
             broadcast_layout(state, broadcast_tx);
             Ok(CommandResult::LayoutChanged)
         }
@@ -480,7 +483,7 @@ pub fn execute(
             if !bytes.is_empty() {
                 let ws = state.active_workspace_mut();
                 if let Some(group) = ws.groups.get_mut(&ws.active_group) {
-                    group.active_pane_mut().write_input(&bytes);
+                    group.active_tab_mut().write_input(&bytes);
                 }
             }
             Ok(CommandResult::Ok(String::new()))
@@ -497,13 +500,13 @@ pub fn execute(
             let gid = ws.active_group;
             let win_n = id_map.register_window(gid);
             let pane_n = if let Some(group) = ws.groups.get(&gid) {
-                id_map.register_pane(group.active_pane().id)
+                id_map.register_pane(group.active_tab().id)
             } else {
                 0
             };
             let group = ws.groups.get(&gid);
             let expanded = if let Some(group) = group {
-                expand_format(message, win_n, pane_n, &group.active_pane().title, group, true, state)
+                expand_format(message, win_n, pane_n, &group.active_tab().title, group, true, state)
             } else {
                 message.clone()
             };
@@ -518,12 +521,12 @@ fn broadcast_layout(state: &ServerState, broadcast_tx: &broadcast::Sender<Server
     let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
 }
 
-/// Resolve a window target to a PaneGroupId.
+/// Resolve a window target to a WindowId.
 fn resolve_window_target(
     target: Option<&TargetWindow>,
     state: &ServerState,
     id_map: &mut IdMap,
-) -> Result<PaneGroupId> {
+) -> Result<WindowId> {
     match target {
         None => Ok(state.active_workspace().active_group),
         Some(TargetWindow::Id(n)) => {
@@ -537,25 +540,25 @@ fn resolve_window_target(
     }
 }
 
-/// Resolve a pane target to both the PaneGroupId and PaneId.
+/// Resolve a pane target to both the WindowId and TabId.
 fn resolve_pane_target(
     target: Option<&TargetPane>,
     state: &ServerState,
     id_map: &mut IdMap,
-) -> Result<(PaneGroupId, PaneId)> {
+) -> Result<(WindowId, TabId)> {
     match target {
         None => {
             let ws = state.active_workspace();
             let gid = ws.active_group;
             let pid = ws.groups.get(&gid)
-                .map(|g| g.active_pane().id)
+                .map(|g| g.active_tab().id)
                 .ok_or_else(|| anyhow::anyhow!("no active pane"))?;
             Ok((gid, pid))
         }
         Some(TargetPane::Id(n)) => {
             let pane_id = id_map.pane_id(*n)
                 .ok_or_else(|| anyhow::anyhow!("no pane with id %{}", n))?;
-            let (_, group_id) = state.find_pane_location(pane_id)
+            let (_, group_id) = state.find_tab_location(pane_id)
                 .ok_or_else(|| anyhow::anyhow!("pane %{} not found in any workspace", n))?;
             Ok((group_id, pane_id))
         }
@@ -571,19 +574,19 @@ fn resolve_pane_target(
             let neighbor_id = ws.layout.find_neighbor(active, split_dir, side)
                 .ok_or_else(|| anyhow::anyhow!("no pane in that direction"))?;
             let pid = ws.groups.get(&neighbor_id)
-                .map(|g| g.active_pane().id)
+                .map(|g| g.active_tab().id)
                 .ok_or_else(|| anyhow::anyhow!("neighbor group has no panes"))?;
             Ok((neighbor_id, pid))
         }
     }
 }
 
-/// Resolve a pane target to just the PaneGroupId.
+/// Resolve a pane target to just the WindowId.
 fn resolve_pane_to_group(
     target: &TargetPane,
     state: &ServerState,
     id_map: &mut IdMap,
-) -> Result<PaneGroupId> {
+) -> Result<WindowId> {
     let (gid, _) = resolve_pane_target(Some(target), state, id_map)?;
     Ok(gid)
 }
@@ -594,7 +597,7 @@ fn expand_format(
     window_id: u32,
     pane_id: u32,
     pane_title: &str,
-    group: &crate::pane::PaneGroup,
+    group: &crate::window::Window,
     is_active: bool,
     state: &ServerState,
 ) -> String {
@@ -654,8 +657,8 @@ fn parse_key_literal(s: &str) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::layout::PaneId;
-    use crate::pane::{Pane, PaneGroup, PaneGroupId, PaneKind};
+    use crate::layout::TabId;
+    use crate::window::{Tab, Window, WindowId, TabKind};
     use crate::server::id_map::IdMap;
     use crate::workspace::Workspace;
     use std::collections::HashMap;
@@ -664,10 +667,10 @@ mod tests {
     /// Build a ServerState without PTY spawning using spawn_error panes.
     fn make_test_state() -> (ServerState, IdMap, broadcast::Sender<ServerResponse>, mpsc::UnboundedReceiver<crate::event::AppEvent>) {
         let (event_tx, rx) = mpsc::unbounded_channel();
-        let pane_id = PaneId::new_v4();
-        let group_id = PaneGroupId::new_v4();
-        let pane = Pane::spawn_error(pane_id, PaneKind::Shell, "test");
-        let group = PaneGroup::new(group_id, pane);
+        let pane_id = TabId::new_v4();
+        let group_id = WindowId::new_v4();
+        let pane = Tab::spawn_error(pane_id, TabKind::Shell, "test");
+        let group = Window::new(group_id, pane);
         let workspace = Workspace::new("workspace".to_string(), group_id, group);
         let state = ServerState {
             workspaces: vec![workspace],
@@ -689,16 +692,16 @@ mod tests {
     }
 
     /// Build a state with two groups in a horizontal split.
-    fn make_split_state() -> (ServerState, IdMap, broadcast::Sender<ServerResponse>, PaneGroupId, PaneGroupId) {
+    fn make_split_state() -> (ServerState, IdMap, broadcast::Sender<ServerResponse>, WindowId, WindowId) {
         let (event_tx, _rx) = mpsc::unbounded_channel();
-        let gid1 = PaneGroupId::new_v4();
-        let gid2 = PaneGroupId::new_v4();
-        let pid1 = PaneId::new_v4();
-        let pid2 = PaneId::new_v4();
-        let p1 = Pane::spawn_error(pid1, PaneKind::Shell, "left");
-        let p2 = Pane::spawn_error(pid2, PaneKind::Shell, "right");
-        let g1 = PaneGroup::new(gid1, p1);
-        let g2 = PaneGroup::new(gid2, p2);
+        let gid1 = WindowId::new_v4();
+        let gid2 = WindowId::new_v4();
+        let pid1 = TabId::new_v4();
+        let pid2 = TabId::new_v4();
+        let p1 = Tab::spawn_error(pid1, TabKind::Shell, "left");
+        let p2 = Tab::spawn_error(pid2, TabKind::Shell, "right");
+        let g1 = Window::new(gid1, p1);
+        let g2 = Window::new(gid2, p2);
         let mut groups = HashMap::new();
         groups.insert(gid1, g1);
         groups.insert(gid2, g2);
@@ -805,8 +808,8 @@ mod tests {
 
     // ---- expand_format tests ----
 
-    /// Helper: create a minimal ServerState + PaneGroup for expand_format tests.
-    fn make_test_state_and_group() -> (ServerState, crate::pane::PaneGroup) {
+    /// Helper: create a minimal ServerState + Window for expand_format tests.
+    fn make_test_state_and_group() -> (ServerState, crate::window::Window) {
         let (event_tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let state = ServerState::new_session(
             "my-session".to_string(),
@@ -819,7 +822,7 @@ mod tests {
         let ws = state.active_workspace();
         let group = ws.groups.values().next().unwrap();
         // Clone the group data we need (can't return references)
-        let group_clone = crate::pane::PaneGroup {
+        let group_clone = crate::window::Window {
             id: group.id,
             tabs: Vec::new(), // empty for format tests — only metadata matters
             active_tab: 0,
@@ -914,9 +917,9 @@ mod tests {
     fn test_execute_select_workspace_by_index() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         // Add a second workspace
-        let gid2 = PaneGroupId::new_v4();
-        let p2 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "ws2");
-        let g2 = PaneGroup::new(gid2, p2);
+        let gid2 = WindowId::new_v4();
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "ws2");
+        let g2 = Window::new(gid2, p2);
         let ws2 = Workspace::new("workspace 2".to_string(), gid2, g2);
         state.workspaces.push(ws2);
 
@@ -935,21 +938,19 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_close_workspace_single_noop() {
+    fn test_execute_close_workspace_single_ends_session() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let cmd = Command::CloseWorkspace;
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
-        assert!(matches!(result, CommandResult::LayoutChanged));
-        // Still 1 workspace (close_workspace is a no-op for single)
-        assert_eq!(state.workspaces.len(), 1);
+        assert!(matches!(result, CommandResult::SessionEnded));
     }
 
     #[test]
     fn test_execute_close_workspace_with_multiple() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
-        let gid2 = PaneGroupId::new_v4();
-        let p2 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "ws2");
-        let g2 = PaneGroup::new(gid2, p2);
+        let gid2 = WindowId::new_v4();
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "ws2");
+        let g2 = Window::new(gid2, p2);
         state.workspaces.push(Workspace::new("workspace 2".to_string(), gid2, g2));
         state.active_workspace = 1;
 
@@ -1099,8 +1100,8 @@ mod tests {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         // Add a second tab so we can kill one
         let gid = state.active_workspace().active_group;
-        let pid2 = PaneId::new_v4();
-        let p2 = Pane::spawn_error(pid2, PaneKind::Shell, "tab2");
+        let pid2 = TabId::new_v4();
+        let p2 = Tab::spawn_error(pid2, TabKind::Shell, "tab2");
         state.active_workspace_mut().groups.get_mut(&gid).unwrap().add_tab(p2);
         id_map.register_pane(pid2);
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 2);
@@ -1140,7 +1141,7 @@ mod tests {
     fn test_execute_select_pane_with_title() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let gid = state.active_workspace().active_group;
-        let pid = state.active_workspace().groups[&gid].active_pane().id;
+        let pid = state.active_workspace().groups[&gid].active_tab().id;
         let pn = id_map.register_pane(pid);
         let cmd = Command::SelectPane {
             target: TargetPane::Id(pn),
@@ -1149,7 +1150,7 @@ mod tests {
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(matches!(result, CommandResult::LayoutChanged));
         let ws = state.active_workspace();
-        assert_eq!(ws.groups[&gid].active_pane().title, "new-title");
+        assert_eq!(ws.groups[&gid].active_tab().title, "new-title");
     }
 
     #[test]
@@ -1168,8 +1169,8 @@ mod tests {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let gid = state.active_workspace().active_group;
         // Add a second tab
-        let pid2 = PaneId::new_v4();
-        let p2 = Pane::spawn_error(pid2, PaneKind::Shell, "tab2");
+        let pid2 = TabId::new_v4();
+        let p2 = Tab::spawn_error(pid2, TabKind::Shell, "tab2");
         state.active_workspace_mut().groups.get_mut(&gid).unwrap().add_tab(p2);
         // active_tab is now 1 (just added)
 
@@ -1183,8 +1184,8 @@ mod tests {
     fn test_execute_previous_window() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let gid = state.active_workspace().active_group;
-        let pid2 = PaneId::new_v4();
-        let p2 = Pane::spawn_error(pid2, PaneKind::Shell, "tab2");
+        let pid2 = TabId::new_v4();
+        let p2 = Tab::spawn_error(pid2, TabKind::Shell, "tab2");
         state.active_workspace_mut().groups.get_mut(&gid).unwrap().add_tab(p2);
         // active_tab = 1, prev should go to 0
         let cmd = Command::PreviousWindow;
@@ -1196,7 +1197,7 @@ mod tests {
     fn test_execute_previous_window_wraps() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let gid = state.active_workspace().active_group;
-        let p2 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "tab2");
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "tab2");
         state.active_workspace_mut().groups.get_mut(&gid).unwrap().add_tab(p2);
         // Set to tab 0, prev should wrap to last
         state.active_workspace_mut().groups.get_mut(&gid).unwrap().active_tab = 0;
@@ -1300,7 +1301,7 @@ mod tests {
     fn test_execute_move_tab_with_split() {
         let (mut state, mut id_map, broadcast_tx, gid1, gid2) = make_split_state();
         // Add extra tab to gid1
-        let p_extra = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "extra");
+        let p_extra = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "extra");
         state.active_workspace_mut().groups.get_mut(&gid1).unwrap().add_tab(p_extra);
         assert_eq!(state.active_workspace().groups[&gid1].tab_count(), 2);
 
@@ -1441,7 +1442,7 @@ mod tests {
     #[test]
     fn test_execute_select_pane_by_id() {
         let (mut state, mut id_map, broadcast_tx, _gid1, gid2) = make_split_state();
-        let pid2 = state.active_workspace().groups[&gid2].active_pane().id;
+        let pid2 = state.active_workspace().groups[&gid2].active_tab().id;
         let pn = id_map.register_pane(pid2);
         let cmd = Command::SelectPane {
             target: TargetPane::Id(pn),

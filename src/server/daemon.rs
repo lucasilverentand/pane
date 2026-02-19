@@ -272,7 +272,7 @@ async fn process_events(
             AppEvent::PtyOutput { pane_id, bytes } => {
                 {
                     let mut state = state.lock().await;
-                    if let Some(pane) = state.find_pane_mut(pane_id) {
+                    if let Some(pane) = state.find_tab_mut(pane_id) {
                         pane.process_output(&bytes);
                     }
                 }
@@ -461,7 +461,7 @@ async fn handle_client(
                 let (eff_w, eff_h) = clients.min_size().await.unwrap_or((width, height));
                 let mut state = state.lock().await;
                 state.last_size = (eff_w, eff_h);
-                state.resize_all_panes(eff_w, eff_h);
+                state.resize_all_tabs(eff_w, eff_h);
                 let render_state = RenderState::from_server_state(&state);
                 let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
             }
@@ -472,7 +472,7 @@ async fn handle_client(
                 let ws = state.active_workspace_mut();
                 let group = ws.groups.get_mut(&ws.active_group);
                 if let Some(group) = group {
-                    let pane = group.active_pane_mut();
+                    let pane = group.active_tab_mut();
                     let bytes = crate::keys::key_to_bytes(key_event);
                     if !bytes.is_empty() {
                         pane.write_input(&bytes);
@@ -496,9 +496,9 @@ async fn handle_client(
             ClientRequest::MouseScroll { up } => {
                 let mut state = state.lock().await;
                 if up {
-                    state.scroll_active_pane(|p| p.scroll_up(3));
+                    state.scroll_active_tab(|p| p.scroll_up(3));
                 } else {
-                    state.scroll_active_pane(|p| p.scroll_down(3));
+                    state.scroll_active_tab(|p| p.scroll_down(3));
                 }
             }
             ClientRequest::Command(cmd) => {
@@ -526,7 +526,7 @@ async fn handle_client(
     if let Some((eff_w, eff_h)) = clients.min_size().await {
         let mut state = state.lock().await;
         state.last_size = (eff_w, eff_h);
-        state.resize_all_panes(eff_w, eff_h);
+        state.resize_all_tabs(eff_w, eff_h);
         let render_state = RenderState::from_server_state(&state);
         let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
     }
@@ -576,29 +576,29 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
                 // Check tab bar click before focusing the group
                 if let Some(group) = state.active_workspace().groups.get(group_id) {
                     if let Some(tab_area) =
-                        crate::ui::pane_view::tab_bar_area(group, *rect)
+                        crate::ui::window_view::tab_bar_area(group, *rect)
                     {
-                        let layout = crate::ui::pane_view::tab_bar_layout(
+                        let layout = crate::ui::window_view::tab_bar_layout(
                             group,
                             &state.config.theme,
                             tab_area,
                         );
                         if let Some(click) =
-                            crate::ui::pane_view::tab_bar_hit_test(&layout, x, y)
+                            crate::ui::window_view::tab_bar_hit_test(&layout, x, y)
                         {
                             state.active_workspace_mut().active_group = *group_id;
                             match click {
-                                crate::ui::pane_view::TabBarClick::Tab(i) => {
+                                crate::ui::window_view::TabBarClick::Tab(i) => {
                                     state
                                         .active_workspace_mut()
                                         .active_group_mut()
                                         .active_tab = i;
                                 }
-                                crate::ui::pane_view::TabBarClick::NewTab => {
+                                crate::ui::window_view::TabBarClick::NewTab => {
                                     let cols = w.saturating_sub(4);
                                     let rows = h.saturating_sub(3);
                                     let _ = state.add_tab_to_active_group(
-                                        crate::pane::PaneKind::Shell,
+                                        crate::window::TabKind::Shell,
                                         None,
                                         cols,
                                         rows,
@@ -812,7 +812,7 @@ mod tests {
                     AppEvent::PtyOutput { pane_id, bytes } => {
                         {
                             let mut s = state_clone.lock().await;
-                            if let Some(pane) = s.find_pane_mut(pane_id) {
+                            if let Some(pane) = s.find_tab_mut(pane_id) {
                                 pane.process_output(&bytes);
                             }
                         }
@@ -1327,7 +1327,7 @@ mod tests {
         let s = state.lock().await;
         let ws = s.active_workspace();
         let group = ws.groups.get(&ws.active_group).unwrap();
-        assert_eq!(group.active_pane().title, "my-title");
+        assert_eq!(group.active_tab().title, "my-title");
         drop(s);
 
         framing::send(&mut client, &ClientRequest::Detach)

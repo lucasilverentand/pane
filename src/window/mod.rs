@@ -2,7 +2,7 @@ pub mod pty;
 pub mod terminal;
 
 use crate::event::AppEvent;
-use crate::layout::PaneId;
+use crate::layout::TabId;
 use portable_pty::PtySize;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -36,37 +36,37 @@ fn process_name_by_pid(_pid: u32) -> Option<String> {
     None
 }
 
-pub type PaneGroupId = uuid::Uuid;
+pub type WindowId = uuid::Uuid;
 
-pub struct PaneGroup {
+pub struct Window {
     #[allow(dead_code)] // groups are keyed by this id in the HashMap
-    pub id: PaneGroupId,
-    pub tabs: Vec<Pane>,
+    pub id: WindowId,
+    pub tabs: Vec<Tab>,
     pub active_tab: usize,
     /// Optional user-assigned window name.
     pub name: Option<String>,
 }
 
-impl PaneGroup {
-    pub fn new(id: PaneGroupId, pane: Pane) -> Self {
+impl Window {
+    pub fn new(id: WindowId, tab: Tab) -> Self {
         Self {
             id,
-            tabs: vec![pane],
+            tabs: vec![tab],
             active_tab: 0,
             name: None,
         }
     }
 
-    pub fn active_pane(&self) -> &Pane {
+    pub fn active_tab(&self) -> &Tab {
         &self.tabs[self.active_tab]
     }
 
-    pub fn active_pane_mut(&mut self) -> &mut Pane {
+    pub fn active_tab_mut(&mut self) -> &mut Tab {
         &mut self.tabs[self.active_tab]
     }
 
-    pub fn add_tab(&mut self, pane: Pane) {
-        self.tabs.push(pane);
+    pub fn add_tab(&mut self, tab: Tab) {
+        self.tabs.push(tab);
         self.active_tab = self.tabs.len() - 1;
     }
 
@@ -81,7 +81,7 @@ impl PaneGroup {
         true
     }
 
-    pub fn remove_tab(&mut self, idx: usize) -> Option<Pane> {
+    pub fn remove_tab(&mut self, idx: usize) -> Option<Tab> {
         if self.tabs.len() <= 1 {
             return None;
         }
@@ -113,27 +113,27 @@ impl PaneGroup {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PaneKind {
+pub enum TabKind {
     Shell,
     Agent,
     Nvim,
     DevServer,
 }
 
-impl PaneKind {
+impl TabKind {
     pub fn label(&self) -> &str {
         match self {
-            PaneKind::Shell => "shell",
-            PaneKind::Agent => "claude",
-            PaneKind::Nvim => "nvim",
-            PaneKind::DevServer => "server",
+            TabKind::Shell => "shell",
+            TabKind::Agent => "claude",
+            TabKind::Nvim => "nvim",
+            TabKind::DevServer => "server",
         }
     }
 }
 
-pub struct Pane {
-    pub id: PaneId,
-    pub kind: PaneKind,
+pub struct Tab {
+    pub id: TabId,
+    pub kind: TabKind,
     pub title: String,
     pub vt: vt100::Parser,
     pub exited: bool,
@@ -149,10 +149,10 @@ pub struct Pane {
     pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
 }
 
-impl Pane {
+impl Tab {
     pub fn spawn_with_env(
-        id: PaneId,
-        kind: PaneKind,
+        id: TabId,
+        kind: TabKind,
         cols: u16,
         rows: u16,
         event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -160,15 +160,15 @@ impl Pane {
         tmux_env: Option<pty::TmuxEnv>,
     ) -> anyhow::Result<Self> {
         let (cmd, args): (&str, Vec<&str>) = match &kind {
-            PaneKind::Shell => {
+            TabKind::Shell => {
                 let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
                 // Leak is acceptable here; these are long-lived process strings
                 let shell: &'static str = Box::leak(shell.into_boxed_str());
                 (shell, vec![])
             }
-            PaneKind::Nvim => ("nvim", vec![]),
-            PaneKind::Agent => ("claude", vec![]),
-            PaneKind::DevServer => {
+            TabKind::Nvim => ("nvim", vec![]),
+            TabKind::Agent => ("claude", vec![]),
+            TabKind::DevServer => {
                 let cmd_str = command.as_deref().unwrap_or("echo 'no command'");
                 let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
                 let shell: &'static str = Box::leak(shell.into_boxed_str());
@@ -209,7 +209,7 @@ impl Pane {
     }
 
     /// Create a pane that shows an error message instead of a PTY.
-    pub fn spawn_error(id: PaneId, kind: PaneKind, error_msg: &str) -> Self {
+    pub fn spawn_error(id: TabId, kind: TabKind, error_msg: &str) -> Self {
         let mut vt = vt100::Parser::new(24, 80, 0);
         vt.process(format!("[error: {}]\r\n", error_msg).as_bytes());
         Self {
@@ -328,19 +328,19 @@ mod tests {
 
     #[test]
     fn test_spawn_error_sets_title() {
-        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "bad thing");
+        let pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "bad thing");
         assert_eq!(pane.title, "shell (error)");
     }
 
     #[test]
     fn test_spawn_error_sets_exited() {
-        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Agent, "fail");
+        let pane = Tab::spawn_error(TabId::new_v4(), TabKind::Agent, "fail");
         assert!(pane.exited);
     }
 
     #[test]
     fn test_spawn_error_has_no_pty() {
-        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "err");
+        let pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "err");
         assert!(pane.pty_writer.is_none());
         assert!(pane.pty_child.is_none());
         assert!(pane.pty_master.is_none());
@@ -348,35 +348,35 @@ mod tests {
 
     #[test]
     fn test_spawn_error_writes_message_to_screen() {
-        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "something broke");
+        let pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "something broke");
         let content = pane.screen().contents();
         assert!(content.contains("[error: something broke]"));
     }
 
     #[test]
     fn test_spawn_error_empty_message() {
-        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        let pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "");
         let content = pane.screen().contents();
         assert!(content.contains("[error: ]"));
     }
 
     #[test]
     fn test_spawn_error_preserves_kind() {
-        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::DevServer, "fail");
-        assert_eq!(pane.kind, PaneKind::DevServer);
+        let pane = Tab::spawn_error(TabId::new_v4(), TabKind::DevServer, "fail");
+        assert_eq!(pane.kind, TabKind::DevServer);
         assert_eq!(pane.title, "server (error)");
     }
 
     #[test]
     fn test_spawn_error_preserves_id() {
-        let id = PaneId::new_v4();
-        let pane = Pane::spawn_error(id, PaneKind::Shell, "err");
+        let id = TabId::new_v4();
+        let pane = Tab::spawn_error(id, TabKind::Shell, "err");
         assert_eq!(pane.id, id);
     }
 
     #[test]
     fn test_process_output_updates_screen() {
-        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        let mut pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "");
         pane.vt = vt100::Parser::new(24, 80, 0);
         pane.process_output(b"hello world");
         let content = pane.screen().contents();
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn test_process_output_osc_title_update() {
-        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        let mut pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "");
         pane.vt = vt100::Parser::new(24, 80, 0);
         // OSC 0 sets window title: ESC ] 0 ; title BEL
         pane.process_output(b"\x1b]0;my-custom-title\x07");
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_process_output_empty_osc_title_keeps_existing() {
-        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        let mut pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "");
         pane.title = "original".to_string();
         pane.vt = vt100::Parser::new(24, 80, 0);
         // Regular output without OSC title — title should stay
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn test_resize_pty_updates_vt_size() {
-        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        let mut pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "");
         pane.resize_pty(120, 40);
         let (rows, cols) = pane.screen().size();
         assert_eq!(rows, 40);
@@ -413,21 +413,21 @@ mod tests {
 
     #[test]
     fn test_write_input_on_error_pane_does_not_panic() {
-        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "err");
+        let mut pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "err");
         // Should be a no-op since there's no PTY writer
         pane.write_input(b"hello");
     }
 
     #[test]
     fn test_pane_group_close_middle_tab() {
-        let gid = PaneGroupId::new_v4();
-        let p1_id = PaneId::new_v4();
-        let p2_id = PaneId::new_v4();
-        let p3_id = PaneId::new_v4();
-        let p1 = Pane::spawn_error(p1_id, PaneKind::Shell, "t1");
-        let p2 = Pane::spawn_error(p2_id, PaneKind::Shell, "t2");
-        let p3 = Pane::spawn_error(p3_id, PaneKind::Shell, "t3");
-        let mut group = PaneGroup::new(gid, p1);
+        let gid = WindowId::new_v4();
+        let p1_id = TabId::new_v4();
+        let p2_id = TabId::new_v4();
+        let p3_id = TabId::new_v4();
+        let p1 = Tab::spawn_error(p1_id, TabKind::Shell, "t1");
+        let p2 = Tab::spawn_error(p2_id, TabKind::Shell, "t2");
+        let p3 = Tab::spawn_error(p3_id, TabKind::Shell, "t3");
+        let mut group = Window::new(gid, p1);
         group.add_tab(p2);
         group.add_tab(p3);
         // Active is 2 (last added). Close middle tab (index 1).
@@ -435,47 +435,47 @@ mod tests {
         assert_eq!(group.tab_count(), 2);
         // active_tab was 2, now clamped to 1
         assert_eq!(group.active_tab, 1);
-        assert_eq!(group.active_pane().id, p3_id);
+        assert_eq!(group.active_tab().id, p3_id);
     }
 
     #[test]
     fn test_pane_group_close_active_first_tab() {
-        let gid = PaneGroupId::new_v4();
-        let p1 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "t1");
-        let p2_id = PaneId::new_v4();
-        let p2 = Pane::spawn_error(p2_id, PaneKind::Shell, "t2");
-        let mut group = PaneGroup::new(gid, p1);
+        let gid = WindowId::new_v4();
+        let p1 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t1");
+        let p2_id = TabId::new_v4();
+        let p2 = Tab::spawn_error(p2_id, TabKind::Shell, "t2");
+        let mut group = Window::new(gid, p1);
         group.add_tab(p2);
         // Switch to first tab
         group.active_tab = 0;
         assert!(group.close_tab(0));
         assert_eq!(group.tab_count(), 1);
         assert_eq!(group.active_tab, 0);
-        assert_eq!(group.active_pane().id, p2_id);
+        assert_eq!(group.active_tab().id, p2_id);
     }
 
     #[test]
     fn test_pane_kind_label_devserver() {
-        assert_eq!(PaneKind::DevServer.label(), "server");
+        assert_eq!(TabKind::DevServer.label(), "server");
     }
 
     #[test]
     fn test_pane_kind_clone_eq() {
-        let k1 = PaneKind::Agent;
+        let k1 = TabKind::Agent;
         let k2 = k1.clone();
         assert_eq!(k1, k2);
     }
 
     #[test]
     fn test_scroll_initial_state() {
-        let pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "test");
+        let pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "test");
         assert_eq!(pane.scroll_offset, 0);
         assert!(!pane.is_scrolled());
     }
 
     #[test]
     fn test_scroll_up_no_scrollback() {
-        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        let mut pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "");
         pane.vt = vt100::Parser::new(3, 80, 1000);
         // No content → no scrollback available
         pane.scroll_up(5);
@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn test_scroll_up_with_scrollback() {
-        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        let mut pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "");
         pane.vt = vt100::Parser::new(3, 80, 1000);
         // Generate 20 lines to push content into scrollback
         for i in 0..20 {
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_scroll_to_bottom() {
-        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        let mut pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "");
         pane.vt = vt100::Parser::new(3, 80, 1000);
         for i in 0..20 {
             pane.vt.process(format!("line {}\r\n", i).as_bytes());
@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn test_resize_resets_scroll() {
-        let mut pane = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "");
+        let mut pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "");
         pane.vt = vt100::Parser::new(3, 80, 1000);
         for i in 0..20 {
             pane.vt.process(format!("line {}\r\n", i).as_bytes());

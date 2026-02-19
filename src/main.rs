@@ -6,7 +6,7 @@ mod copy_mode;
 mod event;
 mod keys;
 mod layout;
-mod pane;
+mod window;
 mod server;
 mod session;
 mod system_stats;

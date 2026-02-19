@@ -12,7 +12,7 @@ use crate::app::{LeaderState, Mode};
 use crate::clipboard;
 use crate::config::{self, Action, Config};
 use crate::copy_mode::{CopyModeAction, CopyModeState};
-use crate::layout::PaneId;
+use crate::layout::TabId;
 use crate::server::daemon;
 use crate::server::framing;
 use crate::server::protocol::{
@@ -29,7 +29,7 @@ pub struct Client {
     // Local rendering state (received from server)
     pub mode: Mode,
     pub render_state: RenderState,
-    pub screens: HashMap<PaneId, vt100::Parser>,
+    pub screens: HashMap<TabId, vt100::Parser>,
     pub system_stats: SystemStats,
     pub config: Config,
     pub client_count: u32,
@@ -182,7 +182,7 @@ impl Client {
 
     fn apply_layout(&mut self, render_state: RenderState) {
         // Reconcile screen map: add new panes, remove dead ones
-        let mut live_pane_ids: std::collections::HashSet<PaneId> = std::collections::HashSet::new();
+        let mut live_pane_ids: std::collections::HashSet<TabId> = std::collections::HashSet::new();
         for ws in &render_state.workspaces {
             for group in &ws.groups {
                 for pane in &group.tabs {
@@ -685,7 +685,7 @@ impl Client {
         self.render_state.workspaces.get(self.render_state.active_workspace)
     }
 
-    pub fn pane_screen(&self, pane_id: PaneId) -> Option<&vt100::Screen> {
+    pub fn pane_screen(&self, pane_id: TabId) -> Option<&vt100::Screen> {
         self.screens.get(&pane_id).map(|p| p.screen())
     }
 }

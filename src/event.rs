@@ -1,4 +1,4 @@
-use crate::layout::PaneId;
+use crate::layout::TabId;
 use crate::system_stats::SystemStats;
 use crossterm::event::{Event, EventStream, KeyEvent, MouseButton, MouseEventKind};
 use futures::StreamExt;
@@ -16,8 +16,8 @@ pub enum AppEvent {
     MouseScroll { up: bool },
     Resize(u16, u16),
     Tick,
-    PtyOutput { pane_id: PaneId, bytes: Vec<u8> },
-    PtyExited { pane_id: PaneId },
+    PtyOutput { pane_id: TabId, bytes: Vec<u8> },
+    PtyExited { pane_id: TabId },
     SystemStats(SystemStats),
 }
 

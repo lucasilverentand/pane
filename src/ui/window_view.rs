@@ -10,7 +10,7 @@ use crate::app::Mode;
 use crate::config::{Config, Theme};
 use crate::copy_mode::CopyModeState;
 use crate::layout::SplitDirection;
-use crate::pane::{terminal::{render_screen, render_screen_copy_mode}, PaneGroup};
+use crate::window::{terminal::{render_screen, render_screen_copy_mode}, Window};
 
 fn render_content(
     screen: &vt100::Screen,
@@ -55,7 +55,7 @@ pub enum TabBarClick {
 }
 
 fn build_tab_bar<'a>(
-    group: &PaneGroup,
+    group: &Window,
     theme: &Theme,
     area: Rect,
 ) -> (Vec<Span<'a>>, TabBarLayout) {
@@ -124,7 +124,7 @@ fn build_tab_bar<'a>(
 }
 
 /// Compute tab bar layout for a given group and area (for hit testing from app.rs).
-pub fn tab_bar_layout(group: &PaneGroup, theme: &Theme, area: Rect) -> TabBarLayout {
+pub fn tab_bar_layout(group: &Window, theme: &Theme, area: Rect) -> TabBarLayout {
     let (_spans, layout) = build_tab_bar(group, theme, area);
     layout
 }
@@ -162,7 +162,7 @@ pub fn tab_bar_hit_test(layout: &TabBarLayout, x: u16, y: u16) -> Option<TabBarC
 /// Render a pane group from a snapshot (used by the client).
 /// Receives the active tab's vt100 screen directly instead of accessing the Pane struct.
 pub fn render_group_from_snapshot(
-    group: &crate::server::protocol::GroupSnapshot,
+    group: &crate::server::protocol::WindowSnapshot,
     screen: Option<&vt100::Screen>,
     is_active: bool,
     mode: &Mode,
@@ -217,18 +217,25 @@ pub fn render_group_from_snapshot(
 
     let cms = if is_active { copy_mode_state } else { None };
     let show_search = cms.map_or(false, |c| c.search_active);
+    let show_tab_bar = group.tabs.len() > 1;
 
-    let constraints = if show_search {
-        vec![Constraint::Length(1), Constraint::Fill(1), Constraint::Length(1)]
-    } else {
-        vec![Constraint::Length(1), Constraint::Fill(1)]
-    };
+    let mut constraints = Vec::new();
+    if show_tab_bar {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Fill(1));
+    if show_search {
+        constraints.push(Constraint::Length(1));
+    }
     let areas = Layout::vertical(constraints).split(padded);
-    let tab_area = areas[0];
-    let content_area = areas[1];
 
-    // Tab bar from snapshot
-    render_tab_bar_from_snapshot(group, theme, frame, tab_area);
+    let (content_area, search_area) = if show_tab_bar {
+        // Tab bar from snapshot
+        render_tab_bar_from_snapshot(group, theme, frame, areas[0]);
+        (areas[1], areas.get(2).copied())
+    } else {
+        (areas[0], areas.get(1).copied())
+    };
 
     // Content
     if let Some(screen) = screen {
@@ -236,12 +243,14 @@ pub fn render_group_from_snapshot(
     }
 
     if show_search {
-        render_search_bar(cms.unwrap(), theme, frame, areas[2]);
+        if let Some(search_area) = search_area {
+            render_search_bar(cms.unwrap(), theme, frame, search_area);
+        }
     }
 }
 
 fn render_tab_bar_from_snapshot(
-    group: &crate::server::protocol::GroupSnapshot,
+    group: &crate::server::protocol::WindowSnapshot,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
@@ -341,7 +350,7 @@ pub fn render_folded(
 
 /// Compute the tab bar area for a given pane group within its visible rect.
 /// Returns None if the area is too small.
-pub fn tab_bar_area(_group: &PaneGroup, area: Rect) -> Option<Rect> {
+pub fn tab_bar_area(_group: &Window, area: Rect) -> Option<Rect> {
     // Matches render_group: Block with Borders::ALL → inner, then 1-cell left/right padding,
     // then tab bar is the first row of the padded area.
     let block = Block::default()

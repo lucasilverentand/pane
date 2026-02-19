@@ -1,22 +1,22 @@
 use std::collections::HashMap;
 
 use crate::layout::LayoutNode;
-use crate::pane::{PaneGroup, PaneGroupId};
+use crate::window::{Window, WindowId};
 
 pub struct Workspace {
     pub name: String,
     pub layout: LayoutNode,
-    pub groups: HashMap<PaneGroupId, PaneGroup>,
-    pub active_group: PaneGroupId,
+    pub groups: HashMap<WindowId, Window>,
+    pub active_group: WindowId,
     /// Per-leaf custom minimum sizes set by user drag/resize.
     /// Falls back to global config defaults when absent.
-    pub leaf_min_sizes: HashMap<PaneGroupId, (u16, u16)>,
+    pub leaf_min_sizes: HashMap<WindowId, (u16, u16)>,
     /// When true, key input is broadcast to all panes in this workspace.
     pub sync_panes: bool,
 }
 
 impl Workspace {
-    pub fn new(name: String, group_id: PaneGroupId, group: PaneGroup) -> Self {
+    pub fn new(name: String, group_id: WindowId, group: Window) -> Self {
         let layout = LayoutNode::Leaf(group_id);
         let mut groups = HashMap::new();
         let active_group = group_id;
@@ -32,16 +32,16 @@ impl Workspace {
     }
 
     #[allow(dead_code)]
-    pub fn active_group(&self) -> &PaneGroup {
+    pub fn active_group(&self) -> &Window {
         self.groups.get(&self.active_group).unwrap()
     }
 
-    pub fn active_group_mut(&mut self) -> &mut PaneGroup {
+    pub fn active_group_mut(&mut self) -> &mut Window {
         self.groups.get_mut(&self.active_group).unwrap()
     }
 
     #[allow(dead_code)]
-    pub fn group_ids(&self) -> Vec<PaneGroupId> {
+    pub fn group_ids(&self) -> Vec<WindowId> {
         self.layout.pane_ids()
     }
 }
@@ -49,14 +49,14 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::PaneId;
-    use crate::pane::{Pane, PaneKind};
+    use crate::layout::TabId;
+    use crate::window::{Tab, TabKind};
 
-    fn make_workspace() -> (Workspace, PaneGroupId, PaneId) {
-        let gid = PaneGroupId::new_v4();
-        let pid = PaneId::new_v4();
-        let pane = Pane::spawn_error(pid, PaneKind::Shell, "test");
-        let group = PaneGroup::new(gid, pane);
+    fn make_workspace() -> (Workspace, WindowId, TabId) {
+        let gid = WindowId::new_v4();
+        let pid = TabId::new_v4();
+        let pane = Tab::spawn_error(pid, TabKind::Shell, "test");
+        let group = Window::new(gid, pane);
         let ws = Workspace::new("ws1".to_string(), gid, group);
         (ws, gid, pid)
     }
@@ -91,13 +91,13 @@ mod tests {
         let (ws, gid, pid) = make_workspace();
         let group = ws.active_group();
         assert_eq!(group.id, gid);
-        assert_eq!(group.active_pane().id, pid);
+        assert_eq!(group.active_tab().id, pid);
     }
 
     #[test]
     fn test_active_group_mut_allows_modification() {
         let (mut ws, _, _) = make_workspace();
-        let p2 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Agent, "tab2");
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Agent, "tab2");
         ws.active_group_mut().add_tab(p2);
         assert_eq!(ws.active_group().tab_count(), 2);
     }
@@ -116,9 +116,9 @@ mod tests {
         let (mut ws, gid1, _pid1) = make_workspace();
 
         // Split the initial group horizontally
-        let gid2 = PaneGroupId::new_v4();
-        let p2 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "tab");
-        let group2 = PaneGroup::new(gid2, p2);
+        let gid2 = WindowId::new_v4();
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "tab");
+        let group2 = Window::new(gid2, p2);
         assert!(ws.layout.split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2));
         ws.groups.insert(gid2, group2);
         ws.active_group = gid2;
@@ -147,10 +147,10 @@ mod tests {
     fn test_active_group_after_split() {
         let (mut ws, gid1, _) = make_workspace();
 
-        let gid2 = PaneGroupId::new_v4();
-        let p2 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "t2");
+        let gid2 = WindowId::new_v4();
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t2");
         ws.layout.split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2);
-        ws.groups.insert(gid2, PaneGroup::new(gid2, p2));
+        ws.groups.insert(gid2, Window::new(gid2, p2));
         ws.active_group = gid2;
 
         // Active group should be gid2
@@ -166,10 +166,10 @@ mod tests {
         let (mut ws, gid1, _) = make_workspace();
 
         // Add gid2
-        let gid2 = PaneGroupId::new_v4();
-        let p2 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "t2");
+        let gid2 = WindowId::new_v4();
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t2");
         ws.layout.split_pane(gid1, crate::layout::SplitDirection::Vertical, gid2);
-        ws.groups.insert(gid2, PaneGroup::new(gid2, p2));
+        ws.groups.insert(gid2, Window::new(gid2, p2));
         ws.active_group = gid2;
 
         // Close the active group (gid2)
@@ -188,10 +188,10 @@ mod tests {
         let (mut ws, gid1, _) = make_workspace();
 
         // Add a second group and set leaf_min_sizes for both
-        let gid2 = PaneGroupId::new_v4();
-        let p2 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "t2");
+        let gid2 = WindowId::new_v4();
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t2");
         ws.layout.split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2);
-        ws.groups.insert(gid2, PaneGroup::new(gid2, p2));
+        ws.groups.insert(gid2, Window::new(gid2, p2));
         ws.leaf_min_sizes.insert(gid1, (50, 10));
         ws.leaf_min_sizes.insert(gid2, (60, 12));
 
@@ -217,18 +217,18 @@ mod tests {
         let (mut ws, gid1, _) = make_workspace();
 
         // Add 3 more groups via splits
-        let gid2 = PaneGroupId::new_v4();
-        let gid3 = PaneGroupId::new_v4();
-        let gid4 = PaneGroupId::new_v4();
+        let gid2 = WindowId::new_v4();
+        let gid3 = WindowId::new_v4();
+        let gid4 = WindowId::new_v4();
 
         ws.layout.split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2);
-        ws.groups.insert(gid2, PaneGroup::new(gid2, Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "g2")));
+        ws.groups.insert(gid2, Window::new(gid2, Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "g2")));
 
         ws.layout.split_pane(gid2, crate::layout::SplitDirection::Vertical, gid3);
-        ws.groups.insert(gid3, PaneGroup::new(gid3, Pane::spawn_error(PaneId::new_v4(), PaneKind::Agent, "g3")));
+        ws.groups.insert(gid3, Window::new(gid3, Tab::spawn_error(TabId::new_v4(), TabKind::Agent, "g3")));
 
         ws.layout.split_pane(gid1, crate::layout::SplitDirection::Vertical, gid4);
-        ws.groups.insert(gid4, PaneGroup::new(gid4, Pane::spawn_error(PaneId::new_v4(), PaneKind::Nvim, "g4")));
+        ws.groups.insert(gid4, Window::new(gid4, Tab::spawn_error(TabId::new_v4(), TabKind::Nvim, "g4")));
 
         // 4 groups total
         assert_eq!(ws.groups.len(), 4);
@@ -258,14 +258,14 @@ mod tests {
     fn test_multiple_splits_then_equalize() {
         let (mut ws, gid1, _) = make_workspace();
 
-        let gid2 = PaneGroupId::new_v4();
-        let gid3 = PaneGroupId::new_v4();
+        let gid2 = WindowId::new_v4();
+        let gid3 = WindowId::new_v4();
 
         ws.layout.split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2);
-        ws.groups.insert(gid2, PaneGroup::new(gid2, Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "g2")));
+        ws.groups.insert(gid2, Window::new(gid2, Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "g2")));
 
         ws.layout.split_pane(gid2, crate::layout::SplitDirection::Vertical, gid3);
-        ws.groups.insert(gid3, PaneGroup::new(gid3, Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "g3")));
+        ws.groups.insert(gid3, Window::new(gid3, Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "g3")));
 
         // Resize to skew ratios
         ws.layout.resize(gid1, 0.2);

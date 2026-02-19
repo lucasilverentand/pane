@@ -1,7 +1,7 @@
 pub mod store;
 
-use crate::layout::{LayoutNode, PaneId};
-use crate::pane::{PaneGroupId, PaneKind};
+use crate::layout::{LayoutNode, TabId};
+use crate::window::{WindowId, TabKind};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -28,25 +28,25 @@ pub struct Session {
 pub struct WorkspaceConfig {
     pub name: String,
     pub layout: LayoutNode,
-    pub groups: Vec<PaneGroupConfig>,
-    pub active_group: PaneGroupId,
+    pub groups: Vec<WindowConfig>,
+    pub active_group: WindowId,
     #[serde(default)]
     pub sync_panes: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PaneGroupConfig {
-    pub id: PaneGroupId,
-    pub tabs: Vec<PaneConfig>,
+pub struct WindowConfig {
+    pub id: WindowId,
+    pub tabs: Vec<TabConfig>,
     pub active_tab: usize,
     #[serde(default)]
     pub name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PaneConfig {
-    pub id: PaneId,
-    pub kind: PaneKind,
+pub struct TabConfig {
+    pub id: TabId,
+    pub kind: TabKind,
     pub title: String,
     pub command: Option<String>,
     pub cwd: PathBuf,
@@ -62,7 +62,7 @@ impl Session {
             let mut groups = Vec::new();
 
             for (gid, group) in &ws.groups {
-                let tabs: Vec<PaneConfig> = group
+                let tabs: Vec<TabConfig> = group
                     .tabs
                     .iter()
                     .map(|pane| {
@@ -82,7 +82,7 @@ impl Session {
                             scrollback.pop();
                         }
 
-                        PaneConfig {
+                        TabConfig {
                             id: pane.id,
                             kind: pane.kind.clone(),
                             title: pane.title.clone(),
@@ -94,7 +94,7 @@ impl Session {
                     })
                     .collect();
 
-                groups.push(PaneGroupConfig {
+                groups.push(WindowConfig {
                     id: *gid,
                     tabs,
                     active_tab: group.active_tab,
@@ -129,11 +129,11 @@ mod tests {
     use crate::layout::SplitDirection;
 
     fn make_session() -> Session {
-        let group_id1 = PaneGroupId::new_v4();
-        let group_id2 = PaneGroupId::new_v4();
-        let pane_id1 = PaneId::new_v4();
-        let pane_id2 = PaneId::new_v4();
-        let pane_id3 = PaneId::new_v4();
+        let group_id1 = WindowId::new_v4();
+        let group_id2 = WindowId::new_v4();
+        let pane_id1 = TabId::new_v4();
+        let pane_id2 = TabId::new_v4();
+        let pane_id3 = TabId::new_v4();
 
         Session {
             id: Uuid::new_v4(),
@@ -150,12 +150,12 @@ mod tests {
                     second: Box::new(LayoutNode::Leaf(group_id2)),
                 },
                 groups: vec![
-                    PaneGroupConfig {
+                    WindowConfig {
                         id: group_id1,
                         tabs: vec![
-                            PaneConfig {
+                            TabConfig {
                                 id: pane_id1,
-                                kind: PaneKind::Shell,
+                                kind: TabKind::Shell,
                                 title: "shell".to_string(),
                                 command: None,
                                 cwd: PathBuf::from("/home/user"),
@@ -168,9 +168,9 @@ mod tests {
                                     "   Compiling pane v0.1.0".to_string(),
                                 ],
                             },
-                            PaneConfig {
+                            TabConfig {
                                 id: pane_id2,
-                                kind: PaneKind::Nvim,
+                                kind: TabKind::Nvim,
                                 title: "nvim".to_string(),
                                 command: None,
                                 cwd: PathBuf::from("/home/user"),
@@ -181,11 +181,11 @@ mod tests {
                         active_tab: 0,
                         name: None,
                     },
-                    PaneGroupConfig {
+                    WindowConfig {
                         id: group_id2,
-                        tabs: vec![PaneConfig {
+                        tabs: vec![TabConfig {
                             id: pane_id3,
-                            kind: PaneKind::DevServer,
+                            kind: TabKind::DevServer,
                             title: "server".to_string(),
                             command: Some("npm run dev".to_string()),
                             cwd: PathBuf::from("/home/user/project"),
@@ -223,7 +223,7 @@ mod tests {
 
         let group0 = &restored.workspaces[0].groups[0];
         let shell = &group0.tabs[0];
-        assert_eq!(shell.kind, PaneKind::Shell);
+        assert_eq!(shell.kind, TabKind::Shell);
         assert_eq!(shell.title, "shell");
         assert!(shell.command.is_none());
         assert_eq!(shell.cwd, PathBuf::from("/home/user"));
@@ -231,7 +231,7 @@ mod tests {
 
         let group1 = &restored.workspaces[0].groups[1];
         let server = &group1.tabs[0];
-        assert_eq!(server.kind, PaneKind::DevServer);
+        assert_eq!(server.kind, TabKind::DevServer);
         assert_eq!(server.command.as_deref(), Some("npm run dev"));
     }
 
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_empty_session() {
-        let group_id = PaneGroupId::new_v4();
+        let group_id = WindowId::new_v4();
         let session = Session {
             id: Uuid::new_v4(),
             name: "empty".to_string(),
@@ -280,7 +280,7 @@ mod tests {
             workspaces: vec![WorkspaceConfig {
                 name: "1".to_string(),
                 layout: LayoutNode::Leaf(group_id),
-                groups: vec![PaneGroupConfig {
+                groups: vec![WindowConfig {
                     id: group_id,
                     tabs: vec![],
                     active_tab: 0,
@@ -301,14 +301,14 @@ mod tests {
     #[test]
     fn test_pane_kind_serialization() {
         let kinds = vec![
-            PaneKind::Shell,
-            PaneKind::Agent,
-            PaneKind::Nvim,
-            PaneKind::DevServer,
+            TabKind::Shell,
+            TabKind::Agent,
+            TabKind::Nvim,
+            TabKind::DevServer,
         ];
         for kind in kinds {
             let json = serde_json::to_string(&kind).unwrap();
-            let restored: PaneKind = serde_json::from_str(&json).unwrap();
+            let restored: TabKind = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, kind);
         }
     }

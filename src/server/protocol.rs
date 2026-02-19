@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
-use crate::layout::{LayoutNode, PaneId};
-use crate::pane::{PaneGroupId, PaneKind};
+use crate::layout::{LayoutNode, TabId};
+use crate::window::{WindowId, TabKind};
 use crate::system_stats::SystemStats;
 
 // ---------------------------------------------------------------------------
@@ -137,13 +137,13 @@ pub enum ClientRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerResponse {
     Attached { session_name: String },
-    PaneOutput { pane_id: PaneId, data: Vec<u8> },
-    PaneExited { pane_id: PaneId },
+    PaneOutput { pane_id: TabId, data: Vec<u8> },
+    PaneExited { pane_id: TabId },
     LayoutChanged { render_state: RenderState },
     StatsUpdate(SerializableSystemStats),
     SessionEnded,
     /// Full screen dump for a pane, sent when a client attaches mid-session.
-    FullScreenDump { pane_id: PaneId, data: Vec<u8> },
+    FullScreenDump { pane_id: TabId, data: Vec<u8> },
     /// Notify clients when the number of connected clients changes.
     ClientCountChanged(u32),
     Error(String),
@@ -171,23 +171,23 @@ pub struct RenderState {
 pub struct WorkspaceSnapshot {
     pub name: String,
     pub layout: LayoutNode,
-    pub groups: Vec<GroupSnapshot>,
-    pub active_group: PaneGroupId,
+    pub groups: Vec<WindowSnapshot>,
+    pub active_group: WindowId,
     pub sync_panes: bool,
-    pub leaf_min_sizes: HashMap<PaneGroupId, (u16, u16)>,
+    pub leaf_min_sizes: HashMap<WindowId, (u16, u16)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GroupSnapshot {
-    pub id: PaneGroupId,
-    pub tabs: Vec<PaneSnapshot>,
+pub struct WindowSnapshot {
+    pub id: WindowId,
+    pub tabs: Vec<TabSnapshot>,
     pub active_tab: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PaneSnapshot {
-    pub id: PaneId,
-    pub kind: PaneKind,
+pub struct TabSnapshot {
+    pub id: TabId,
+    pub kind: TabKind,
     pub title: String,
     pub exited: bool,
     pub foreground_process: Option<String>,
@@ -242,12 +242,12 @@ impl RenderState {
                 let groups = ws
                     .groups
                     .iter()
-                    .map(|(gid, group)| GroupSnapshot {
+                    .map(|(gid, group)| WindowSnapshot {
                         id: *gid,
                         tabs: group
                             .tabs
                             .iter()
-                            .map(|pane| PaneSnapshot {
+                            .map(|pane| TabSnapshot {
                                 id: pane.id,
                                 kind: pane.kind.clone(),
                                 title: pane.title.clone(),
@@ -360,11 +360,11 @@ mod tests {
                 session_name: "default".to_string(),
             },
             ServerResponse::PaneOutput {
-                pane_id: PaneId::new_v4(),
+                pane_id: TabId::new_v4(),
                 data: vec![0x1b, b'[', b'H', b'e', b'l', b'l', b'o'],
             },
             ServerResponse::PaneExited {
-                pane_id: PaneId::new_v4(),
+                pane_id: TabId::new_v4(),
             },
             ServerResponse::SessionEnded,
             ServerResponse::Error("something failed".to_string()),
@@ -400,12 +400,12 @@ mod tests {
         let state = RenderState {
             workspaces: vec![WorkspaceSnapshot {
                 name: "ws1".to_string(),
-                layout: LayoutNode::Leaf(PaneGroupId::new_v4()),
-                groups: vec![GroupSnapshot {
-                    id: PaneGroupId::new_v4(),
-                    tabs: vec![PaneSnapshot {
-                        id: PaneId::new_v4(),
-                        kind: PaneKind::Shell,
+                layout: LayoutNode::Leaf(WindowId::new_v4()),
+                groups: vec![WindowSnapshot {
+                    id: WindowId::new_v4(),
+                    tabs: vec![TabSnapshot {
+                        id: TabId::new_v4(),
+                        kind: TabKind::Shell,
                         title: "shell".to_string(),
                         exited: false,
                         foreground_process: None,
@@ -413,7 +413,7 @@ mod tests {
                     }],
                     active_tab: 0,
                 }],
-                active_group: PaneGroupId::new_v4(),
+                active_group: WindowId::new_v4(),
                 sync_panes: false,
                 leaf_min_sizes: HashMap::new(),
             }],

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Behavior;
 
-pub type PaneId = uuid::Uuid;
+pub type TabId = uuid::Uuid;
 
 #[derive(Clone, Copy, Debug)]
 pub struct LayoutParams {
@@ -37,8 +37,8 @@ impl From<&Behavior> for LayoutParams {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolvedPane {
-    Visible { id: PaneId, rect: Rect },
-    Folded { id: PaneId, rect: Rect, direction: SplitDirection },
+    Visible { id: TabId, rect: Rect },
+    Folded { id: TabId, rect: Rect, direction: SplitDirection },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,7 +55,7 @@ pub enum Side {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum LayoutNode {
-    Leaf(PaneId),
+    Leaf(TabId),
     Split {
         direction: SplitDirection,
         ratio: f64,
@@ -65,14 +65,14 @@ pub enum LayoutNode {
 }
 
 impl LayoutNode {
-    /// Resolve the layout tree into a flat list of (PaneId, Rect) pairs.
-    pub fn resolve(&self, area: Rect) -> Vec<(PaneId, Rect)> {
+    /// Resolve the layout tree into a flat list of (TabId, Rect) pairs.
+    pub fn resolve(&self, area: Rect) -> Vec<(TabId, Rect)> {
         let mut result = Vec::new();
         self.resolve_inner(area, &mut result);
         result
     }
 
-    fn resolve_inner(&self, area: Rect, result: &mut Vec<(PaneId, Rect)>) {
+    fn resolve_inner(&self, area: Rect, result: &mut Vec<(TabId, Rect)>) {
         match self {
             LayoutNode::Leaf(id) => {
                 result.push((*id, area));
@@ -129,7 +129,7 @@ impl LayoutNode {
         &self,
         area: Rect,
         params: LayoutParams,
-        leaf_mins: &HashMap<PaneId, (u16, u16)>,
+        leaf_mins: &HashMap<TabId, (u16, u16)>,
     ) -> Vec<ResolvedPane> {
         let mut result = Vec::new();
         self.resolve_fold_inner(area, params, leaf_mins, &mut result);
@@ -140,7 +140,7 @@ impl LayoutNode {
         &self,
         area: Rect,
         params: LayoutParams,
-        leaf_mins: &HashMap<PaneId, (u16, u16)>,
+        leaf_mins: &HashMap<TabId, (u16, u16)>,
         result: &mut Vec<ResolvedPane>,
     ) {
         match self {
@@ -245,7 +245,7 @@ impl LayoutNode {
     fn subtree_min_size(
         &self,
         params: LayoutParams,
-        leaf_mins: &HashMap<PaneId, (u16, u16)>,
+        leaf_mins: &HashMap<TabId, (u16, u16)>,
     ) -> (u16, u16) {
         match self {
             LayoutNode::Leaf(id) => leaf_mins
@@ -424,7 +424,7 @@ impl LayoutNode {
     /// Unfold a pane by resetting its parent split ratio to 0.5.
     /// Returns true if the target was found and the parent ratio was reset.
     #[cfg(test)]
-    pub fn unfold(&mut self, target: PaneId) -> bool {
+    pub fn unfold(&mut self, target: TabId) -> bool {
         match self {
             LayoutNode::Leaf(_) => false,
             LayoutNode::Split {
@@ -465,7 +465,7 @@ impl LayoutNode {
     /// Unfold a pane by skewing the ratio at the split responsible for
     /// folding the target. Skews only that one split — inner ratios are
     /// preserved so subtree proportions remain stable across fold/unfold.
-    pub fn unfold_towards(&mut self, target: PaneId) -> bool {
+    pub fn unfold_towards(&mut self, target: TabId) -> bool {
         match self {
             LayoutNode::Leaf(_) => false,
             LayoutNode::Split {
@@ -511,9 +511,9 @@ impl LayoutNode {
     /// Split a target pane into two, placing the new pane in the second position.
     pub fn split_pane(
         &mut self,
-        target: PaneId,
+        target: TabId,
         direction: SplitDirection,
-        new_id: PaneId,
+        new_id: TabId,
     ) -> bool {
         match self {
             LayoutNode::Leaf(id) if *id == target => {
@@ -535,7 +535,7 @@ impl LayoutNode {
 
     /// Close a pane, replacing its parent split with the sibling.
     /// Returns the sibling's first leaf ID (for focusing).
-    pub fn close_pane(&mut self, target: PaneId) -> Option<PaneId> {
+    pub fn close_pane(&mut self, target: TabId) -> Option<TabId> {
         match self {
             LayoutNode::Leaf(_) => None,
             LayoutNode::Split { first, second, .. } => {
@@ -559,7 +559,7 @@ impl LayoutNode {
     }
 
     /// Resize the split containing the target pane by adjusting the ratio.
-    pub fn resize(&mut self, target: PaneId, delta: f64) -> bool {
+    pub fn resize(&mut self, target: TabId, delta: f64) -> bool {
         match self {
             LayoutNode::Leaf(_) => false,
             LayoutNode::Split {
@@ -593,10 +593,10 @@ impl LayoutNode {
     /// Find a neighbor pane in the given direction from the target.
     pub fn find_neighbor(
         &self,
-        target: PaneId,
+        target: TabId,
         direction: SplitDirection,
         side: Side,
-    ) -> Option<PaneId> {
+    ) -> Option<TabId> {
         self.find_neighbor_inner(target, direction, side)
             .and_then(|result| match result {
                 NeighborResult::Found(id) => Some(id),
@@ -606,7 +606,7 @@ impl LayoutNode {
 
     fn find_neighbor_inner(
         &self,
-        target: PaneId,
+        target: TabId,
         direction: SplitDirection,
         side: Side,
     ) -> Option<NeighborResult> {
@@ -658,7 +658,7 @@ impl LayoutNode {
     }
 
     /// Get the leaf at the edge of this subtree.
-    fn edge_leaf(&self, side: Side) -> PaneId {
+    fn edge_leaf(&self, side: Side) -> TabId {
         match self {
             LayoutNode::Leaf(id) => *id,
             LayoutNode::Split { first, second, .. } => match side {
@@ -692,13 +692,13 @@ impl LayoutNode {
     }
 
     /// Get all pane IDs in left-to-right, top-to-bottom order.
-    pub fn pane_ids(&self) -> Vec<PaneId> {
+    pub fn pane_ids(&self) -> Vec<TabId> {
         let mut ids = Vec::new();
         self.collect_ids(&mut ids);
         ids
     }
 
-    fn collect_ids(&self, ids: &mut Vec<PaneId>) {
+    fn collect_ids(&self, ids: &mut Vec<TabId>) {
         match self {
             LayoutNode::Leaf(id) => ids.push(*id),
             LayoutNode::Split { first, second, .. } => {
@@ -708,8 +708,8 @@ impl LayoutNode {
         }
     }
 
-    /// Alias for `pane_ids` — leaves now semantically represent PaneGroupIds.
-    pub fn group_ids(&self) -> Vec<PaneId> {
+    /// Alias for `pane_ids` — leaves now semantically represent WindowIds.
+    pub fn group_ids(&self) -> Vec<TabId> {
         self.pane_ids()
     }
 
@@ -729,7 +729,7 @@ impl LayoutNode {
     }
 
     /// Check if this subtree contains the given pane.
-    pub fn contains(&self, target: PaneId) -> bool {
+    pub fn contains(&self, target: TabId) -> bool {
         match self {
             LayoutNode::Leaf(id) => *id == target,
             LayoutNode::Split { first, second, .. } => {
@@ -739,7 +739,7 @@ impl LayoutNode {
     }
 
     /// Get the first leaf in this subtree.
-    pub fn first_leaf(&self) -> PaneId {
+    pub fn first_leaf(&self) -> TabId {
         match self {
             LayoutNode::Leaf(id) => *id,
             LayoutNode::Split { first, .. } => first.first_leaf(),
@@ -748,7 +748,7 @@ impl LayoutNode {
 }
 
 enum NeighborResult {
-    Found(PaneId),
+    Found(TabId),
     NeedFromParent,
 }
 
@@ -758,7 +758,7 @@ mod tests {
 
     #[test]
     fn test_resolve_single_leaf() {
-        let id = PaneId::new_v4();
+        let id = TabId::new_v4();
         let node = LayoutNode::Leaf(id);
         let area = Rect::new(0, 0, 100, 50);
         let resolved = node.resolve(area);
@@ -769,8 +769,8 @@ mod tests {
 
     #[test]
     fn test_split_pane() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Leaf(id1);
         assert!(node.split_pane(id1, SplitDirection::Horizontal, id2));
 
@@ -782,8 +782,8 @@ mod tests {
 
     #[test]
     fn test_close_pane() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -798,8 +798,8 @@ mod tests {
 
     #[test]
     fn test_resize() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -815,8 +815,8 @@ mod tests {
 
     #[test]
     fn test_equalize() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.7,
@@ -832,8 +832,8 @@ mod tests {
 
     #[test]
     fn test_find_neighbor() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -858,8 +858,8 @@ mod tests {
 
     #[test]
     fn test_resolve_split() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -881,11 +881,11 @@ mod tests {
 
     /// Build the DESIGN.md example layout:
     /// root split(H) → [pane1, split(V) → [pane2, split(H) → [pane3, pane4]]]
-    fn build_design_example() -> (LayoutNode, PaneId, PaneId, PaneId, PaneId) {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
-        let id3 = PaneId::new_v4();
-        let id4 = PaneId::new_v4();
+    fn build_design_example() -> (LayoutNode, TabId, TabId, TabId, TabId) {
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
+        let id3 = TabId::new_v4();
+        let id4 = TabId::new_v4();
 
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
@@ -936,7 +936,7 @@ mod tests {
         let (node, id1, _id2, _id3, id4) = build_design_example();
         assert!(node.contains(id1));
         assert!(node.contains(id4));
-        assert!(!node.contains(PaneId::new_v4()));
+        assert!(!node.contains(TabId::new_v4()));
     }
 
     #[test]
@@ -976,7 +976,7 @@ mod tests {
 
     #[test]
     fn test_close_returns_none_for_single_leaf() {
-        let id = PaneId::new_v4();
+        let id = TabId::new_v4();
         let mut node = LayoutNode::Leaf(id);
         assert_eq!(node.close_pane(id), None);
     }
@@ -984,21 +984,21 @@ mod tests {
     #[test]
     fn test_close_nonexistent_pane() {
         let (mut node, _, _, _, _) = build_design_example();
-        let result = node.close_pane(PaneId::new_v4());
+        let result = node.close_pane(TabId::new_v4());
         assert_eq!(result, None);
     }
 
     #[test]
     fn test_split_nonexistent_target() {
-        let id = PaneId::new_v4();
+        let id = TabId::new_v4();
         let mut node = LayoutNode::Leaf(id);
-        assert!(!node.split_pane(PaneId::new_v4(), SplitDirection::Horizontal, PaneId::new_v4()));
+        assert!(!node.split_pane(TabId::new_v4(), SplitDirection::Horizontal, TabId::new_v4()));
     }
 
     #[test]
     fn test_split_in_nested_tree() {
         let (mut node, _id1, id2, _id3, _id4) = build_design_example();
-        let new_id = PaneId::new_v4();
+        let new_id = TabId::new_v4();
         assert!(node.split_pane(id2, SplitDirection::Vertical, new_id));
         let ids = node.pane_ids();
         assert_eq!(ids.len(), 5);
@@ -1007,8 +1007,8 @@ mod tests {
 
     #[test]
     fn test_resize_clamp_min() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.15,
@@ -1025,8 +1025,8 @@ mod tests {
 
     #[test]
     fn test_resize_clamp_max() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.85,
@@ -1042,21 +1042,21 @@ mod tests {
 
     #[test]
     fn test_resize_nonexistent_returns_false() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
             first: Box::new(LayoutNode::Leaf(id1)),
             second: Box::new(LayoutNode::Leaf(id2)),
         };
-        assert!(!node.resize(PaneId::new_v4(), 0.1));
+        assert!(!node.resize(TabId::new_v4(), 0.1));
     }
 
     #[test]
     fn test_resize_second_child() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -1099,8 +1099,8 @@ mod tests {
 
     #[test]
     fn test_resolve_vertical_split() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Vertical,
             ratio: 0.5,
@@ -1171,8 +1171,8 @@ mod tests {
 
     #[test]
     fn test_fold_both_fit() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -1189,8 +1189,8 @@ mod tests {
 
     #[test]
     fn test_fold_second_too_narrow() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         // Ratio 0.9 on 120 wide: second gets ~12 cols, which is < MIN_PANE_WIDTH(100)
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
@@ -1209,8 +1209,8 @@ mod tests {
 
     #[test]
     fn test_fold_first_too_narrow() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         // Ratio 0.1 on 120 wide: first gets ~12 cols, which is < MIN_PANE_WIDTH(100)
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
@@ -1229,8 +1229,8 @@ mod tests {
 
     #[test]
     fn test_fold_both_too_small_keeps_one_visible() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         // Total width 80 with 50/50 split → each gets ~40, both < MIN_PANE_WIDTH(80)
         // Neither fits alone with fold bar (80 < 81). Fallback: fold second, keep first.
         let node = LayoutNode::Split {
@@ -1251,9 +1251,9 @@ mod tests {
 
     #[test]
     fn test_fold_nested_subtree() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
-        let id3 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
+        let id3 = TabId::new_v4();
         // Right subtree is a split of id2/id3. With ratio 0.9 on 150 wide,
         // right gets ~15 cols which is < MIN_PANE_WIDTH(80), so entire subtree folds.
         let node = LayoutNode::Split {
@@ -1283,7 +1283,7 @@ mod tests {
 
     #[test]
     fn test_single_leaf_never_folds() {
-        let id = PaneId::new_v4();
+        let id = TabId::new_v4();
         let node = LayoutNode::Leaf(id);
         // Even with very small area, a lone leaf is always Visible
         let area = Rect::new(0, 0, 3, 2);
@@ -1294,8 +1294,8 @@ mod tests {
 
     #[test]
     fn test_unfold_resets_ratio() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.9,
@@ -1314,8 +1314,8 @@ mod tests {
     fn test_unfold_towards_skews_ratio() {
         // Two panes in horizontal split, ratio=0.9 means id1 is big, id2 is folded.
         // Clicking id2 should skew ratio to 0.1 so id2 gets the space.
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.9,
@@ -1333,8 +1333,8 @@ mod tests {
     #[test]
     fn test_unfold_towards_first_child() {
         // id1 is folded (ratio=0.1), clicking it should set ratio to 0.9
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.1,
@@ -1354,9 +1354,9 @@ mod tests {
         // [id1 | [id2 | id3]] both horizontal. Inner ratio 0.9 causes id3 to fold.
         // unfold_towards(id3) recurses into the same-direction child and skews
         // the inner ratio to 0.1 (give space to id3). Outer ratio is preserved.
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
-        let id3 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
+        let id3 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -1386,9 +1386,9 @@ mod tests {
         // The vertical subtree is cross-direction, folds as a unit at outer level.
         // Clicking id3 should skew outer ratio to 0.1 (give space to second),
         // preserving inner vertical ratio at 0.3.
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
-        let id3 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
+        let id3 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.9,
@@ -1414,8 +1414,8 @@ mod tests {
 
     #[test]
     fn test_fold_vertical_split() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         // Ratio 0.9 vertical on 30 rows: first=27, second=3.
         // 3 < min_pane_height(20), total 30 < 20+21=41 → case 3.
         // first_fits_alone: 30 >= 20+1 → true. second_fits_alone: 30 >= 20+1 → true.
@@ -1439,8 +1439,8 @@ mod tests {
 
     #[test]
     fn test_leaf_min_prevents_fold() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         // 140 wide, ratio 0.7: first=98, second=42
         // Without leaf_mins: total 140 < 80+80=160 → fold. ratio 0.7 → fold second.
         // With leaf_min(id2)=(50,4): total 140 >= 80+50=130 → clamp. Both visible!
@@ -1468,8 +1468,8 @@ mod tests {
 
     #[test]
     fn test_clamping_respects_minimums() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         // 200 wide, ratio 0.8 → first=160, second=40
         // leaf_min for id2=60: total 200 >= 80+60=140, case 2 (clamp)
         // second should get at least 60
@@ -1490,8 +1490,8 @@ mod tests {
 
     #[test]
     fn test_fold_prefers_second_at_equal_ratio() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         // 120 wide, ratio 0.5 → each gets 60, both < 80
         // Both could fit alone (119 >= 80). ratio == 0.5 → fold second (right)
         let node = LayoutNode::Split {
@@ -1514,9 +1514,9 @@ mod tests {
         // Layout: horizontal split, right child is a vertical split with 2 leaves.
         // When the right subtree folds horizontally, the cross-direction vertical split
         // is preserved: both leaves share a single column, split vertically by ratio.
-        let id_left = PaneId::new_v4();
-        let id_top_right = PaneId::new_v4();
-        let id_bot_right = PaneId::new_v4();
+        let id_left = TabId::new_v4();
+        let id_top_right = TabId::new_v4();
+        let id_bot_right = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -1566,7 +1566,7 @@ mod tests {
 
     #[test]
     fn test_subtree_min_size_leaf() {
-        let id = PaneId::new_v4();
+        let id = TabId::new_v4();
         let node = LayoutNode::Leaf(id);
         let params = LayoutParams::default();
 
@@ -1585,8 +1585,8 @@ mod tests {
 
     #[test]
     fn test_subtree_min_size_split() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -1605,8 +1605,8 @@ mod tests {
 
     #[test]
     fn test_resolve_ratio_boundary_0_1() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.1,
@@ -1625,8 +1625,8 @@ mod tests {
 
     #[test]
     fn test_resolve_ratio_boundary_0_9() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.9,
@@ -1643,8 +1643,8 @@ mod tests {
 
     #[test]
     fn test_resolve_ratio_boundary_vertical() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Vertical,
             ratio: 0.1,
@@ -1662,8 +1662,8 @@ mod tests {
 
     #[test]
     fn test_resolve_1x1_area() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -1679,8 +1679,8 @@ mod tests {
 
     #[test]
     fn test_resolve_2x2_area() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -1698,8 +1698,8 @@ mod tests {
 
     #[test]
     fn test_resolve_3x3_area() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Vertical,
             ratio: 0.5,
@@ -1716,7 +1716,7 @@ mod tests {
 
     #[test]
     fn test_resolve_with_fold_tiny_1x1() {
-        let id = PaneId::new_v4();
+        let id = TabId::new_v4();
         let node = LayoutNode::Leaf(id);
         let area = Rect::new(0, 0, 1, 1);
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
@@ -1726,8 +1726,8 @@ mod tests {
 
     #[test]
     fn test_resolve_with_fold_split_in_tiny_area() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -1748,8 +1748,8 @@ mod tests {
 
     #[test]
     fn test_fold_case2_asymmetric_leaf_mins_first_undersized() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         // 100 wide, ratio 0.3 → first=30, second=70
         // leaf_mins: id1=(50,4), id2=(40,4) → total needed=90 <= 100 → case 2 (clamp)
         // first_size(30) < first_min(50) → clamp first to 50, second gets 50
@@ -1772,8 +1772,8 @@ mod tests {
 
     #[test]
     fn test_fold_case2_asymmetric_leaf_mins_second_undersized() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         // 100 wide, ratio 0.8 → first=80, second=20
         // leaf_mins: id1=(40,4), id2=(50,4) → total needed=90 <= 100 → case 2
         // second_size(20) < second_min(50) → clamp second to 50, first gets 50
@@ -1799,7 +1799,7 @@ mod tests {
     fn test_large_fold_cell_count_nested() {
         // Build a deeply nested same-direction split tree (4 leaves in horizontal chain)
         // fold_cell_count = 4 for this subtree
-        let ids: Vec<PaneId> = (0..4).map(|_| PaneId::new_v4()).collect();
+        let ids: Vec<TabId> = (0..4).map(|_| TabId::new_v4()).collect();
         let right_subtree = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -1834,7 +1834,7 @@ mod tests {
     fn test_fold_cell_count_exceeds_available_space() {
         // 8 leaves in same-direction split chain → fold_cell_count = 8
         // Available width is only 5 → fold bar capped at available space
-        fn chain(ids: &[PaneId]) -> LayoutNode {
+        fn chain(ids: &[TabId]) -> LayoutNode {
             if ids.len() == 1 {
                 return LayoutNode::Leaf(ids[0]);
             }
@@ -1845,12 +1845,12 @@ mod tests {
                 second: Box::new(chain(&ids[1..])),
             }
         }
-        let ids: Vec<PaneId> = (0..8).map(|_| PaneId::new_v4()).collect();
+        let ids: Vec<TabId> = (0..8).map(|_| TabId::new_v4()).collect();
         let subtree = chain(&ids);
         assert_eq!(subtree.fold_cell_count(SplitDirection::Horizontal), 8);
 
         // Put it as second child of a split with tiny total area
-        let main_id = PaneId::new_v4();
+        let main_id = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.9,
@@ -1874,10 +1874,10 @@ mod tests {
     #[test]
     fn test_resize_3_levels_deep() {
         // root(H) → [id1 | inner(V) → [id2 | deep(H) → [id3 | id4]]]
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
-        let id3 = PaneId::new_v4();
-        let id4 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
+        let id3 = TabId::new_v4();
+        let id4 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -1914,7 +1914,7 @@ mod tests {
 
     #[test]
     fn test_resize_4_levels_deep() {
-        let ids: Vec<PaneId> = (0..5).map(|_| PaneId::new_v4()).collect();
+        let ids: Vec<TabId> = (0..5).map(|_| TabId::new_v4()).collect();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -1961,15 +1961,15 @@ mod tests {
 
     #[test]
     fn test_unfold_towards_nonexistent_pane() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.9,
             first: Box::new(LayoutNode::Leaf(id1)),
             second: Box::new(LayoutNode::Leaf(id2)),
         };
-        let nonexistent = PaneId::new_v4();
+        let nonexistent = TabId::new_v4();
         assert!(!node.unfold_towards(nonexistent));
         // Ratio should be unchanged
         if let LayoutNode::Split { ratio, .. } = &node {
@@ -1979,7 +1979,7 @@ mod tests {
 
     #[test]
     fn test_unfold_towards_on_leaf() {
-        let id = PaneId::new_v4();
+        let id = TabId::new_v4();
         let mut node = LayoutNode::Leaf(id);
         assert!(!node.unfold_towards(id));
     }
@@ -1987,8 +1987,8 @@ mod tests {
     #[test]
     fn test_unfold_towards_already_unfolded() {
         // ratio is 0.5, pane is not folded, but unfold_towards still sets ratio
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -2004,15 +2004,15 @@ mod tests {
 
     #[test]
     fn test_unfold_nonexistent_pane() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.9,
             first: Box::new(LayoutNode::Leaf(id1)),
             second: Box::new(LayoutNode::Leaf(id2)),
         };
-        assert!(!node.unfold(PaneId::new_v4()));
+        assert!(!node.unfold(TabId::new_v4()));
         if let LayoutNode::Split { ratio, .. } = &node {
             assert!((*ratio - 0.9).abs() < f64::EPSILON);
         }
@@ -2023,10 +2023,10 @@ mod tests {
     #[test]
     fn test_neighbor_deep_same_direction_chain() {
         // 4 panes in a horizontal chain: [id1 | [id2 | [id3 | id4]]]
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
-        let id3 = PaneId::new_v4();
-        let id4 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
+        let id3 = TabId::new_v4();
+        let id4 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.25,
@@ -2079,9 +2079,9 @@ mod tests {
         // Start: H[id1 | id2]
         // Split id1 → H[H[id1 | id3] | id2]
         // Close id3 → H[id1 | id2]
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
-        let id3 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
+        let id3 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -2123,10 +2123,10 @@ mod tests {
     fn test_split_both_children_are_splits() {
         // H[H[id1 | id2] | H[id3 | id4]]
         // Close id2 → H[id1 | H[id3 | id4]]
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
-        let id3 = PaneId::new_v4();
-        let id4 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
+        let id3 = TabId::new_v4();
+        let id4 = TabId::new_v4();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -2159,7 +2159,7 @@ mod tests {
     #[test]
     fn test_equalize_5_pane_layout() {
         // Build 5-pane layout: H[id1 | V[id2 | H[id3 | V[id4 | id5]]]]
-        let ids: Vec<PaneId> = (0..5).map(|_| PaneId::new_v4()).collect();
+        let ids: Vec<TabId> = (0..5).map(|_| TabId::new_v4()).collect();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.3,
@@ -2198,7 +2198,7 @@ mod tests {
     #[test]
     fn test_equalize_6_pane_layout() {
         // Balanced binary tree: H[V[id1|id2] | V[H[id3|id4] | H[id5|id6]]]
-        let ids: Vec<PaneId> = (0..6).map(|_| PaneId::new_v4()).collect();
+        let ids: Vec<TabId> = (0..6).map(|_| TabId::new_v4()).collect();
         let mut node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.3,
@@ -2250,8 +2250,8 @@ mod tests {
     #[test]
     fn test_fold_cell_count_cross_direction() {
         // V[id1 | id2] folded horizontally → max(1, 1) = 1
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Vertical,
             ratio: 0.5,
@@ -2270,7 +2270,7 @@ mod tests {
         // V[a|b] folded H → max(1,1) = 1
         // V[c|d] folded H → max(1,1) = 1
         // total = 1+1 = 2
-        let ids: Vec<PaneId> = (0..4).map(|_| PaneId::new_v4()).collect();
+        let ids: Vec<TabId> = (0..4).map(|_| TabId::new_v4()).collect();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -2316,8 +2316,8 @@ mod tests {
 
     #[test]
     fn test_resolve_with_nonzero_origin() {
-        let id1 = PaneId::new_v4();
-        let id2 = PaneId::new_v4();
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,

@@ -1,5 +1,5 @@
 use crate::event::AppEvent;
-use crate::layout::PaneId;
+use crate::layout::TabId;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use tokio::sync::mpsc;
@@ -23,7 +23,7 @@ pub fn spawn_pty(
     args: &[&str],
     size: PtySize,
     event_tx: mpsc::UnboundedSender<AppEvent>,
-    pane_id: PaneId,
+    pane_id: TabId,
     cwd: Option<&std::path::Path>,
     tmux_env: Option<TmuxEnv>,
 ) -> anyhow::Result<PtyHandle> {
