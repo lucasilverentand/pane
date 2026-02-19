@@ -27,7 +27,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
 
     // Workspace bar
     {
-        let names: Vec<String> = client.render_state.workspaces.iter().map(|ws| ws.name.clone()).collect();
+        let names: Vec<&str> = client.render_state.workspaces.iter().map(|ws| ws.name.as_str()).collect();
         workspace_bar::render(
             &names,
             client.render_state.active_workspace,

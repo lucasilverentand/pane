@@ -283,7 +283,7 @@ impl Client {
                 } else if self.mode == Mode::Normal || self.mode == Mode::Select {
                     // Check workspace bar clicks (client-side)
                     if y == 0 && !self.render_state.workspaces.is_empty() {
-                        let names: Vec<String> = self.render_state.workspaces.iter().map(|ws| ws.name.clone()).collect();
+                        let names: Vec<&str> = self.render_state.workspaces.iter().map(|ws| ws.name.as_str()).collect();
                         let bar_area = Rect::new(0, 0, tui.size()?.width, 1);
                         if let Some(click) = crate::ui::workspace_bar::hit_test(
                             &names, self.render_state.active_workspace, bar_area, x, y,
