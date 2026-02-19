@@ -219,16 +219,17 @@ pub fn render_group_from_snapshot(
             Mode::Copy => " COPY ",
             Mode::Scroll => " SCROLL ",
             Mode::Select => " SELECT ",
-            Mode::Normal => " NORMAL ",
             Mode::Interact => " INTERACT ",
-            _ => " ACTIVE ",
+            _ => "",
         };
-        block = block.title_bottom(Line::styled(
-            indicator,
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        ));
+        if !indicator.is_empty() {
+            block = block.title_bottom(Line::styled(
+                indicator,
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
     }
 
     let inner = block.inner(area);

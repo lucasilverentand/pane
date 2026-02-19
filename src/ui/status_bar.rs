@@ -32,10 +32,7 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
     let (left, right) = match &client.mode {
         Mode::Normal => {
             let vars = build_client_vars(client);
-            let left = format!(
-                "[NORMAL] {}",
-                format_string(&client.config.status_bar.left, &vars)
-            );
+            let left = format!("NORMAL {}", format_string(&client.config.status_bar.left, &vars));
             let right = format_string(&client.config.status_bar.right, &vars);
             (left, right)
         }
@@ -47,7 +44,7 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
         }
         Mode::Scroll => {
             let title = client_pane_title(client);
-            let mode_left = format!("[SCROLL] {}", title);
+            let mode_left = format!("SCROLL {}", title);
             let right = "j/k up/down  u/d page  g/G top/end  esc quit ".to_string();
             (mode_left, right)
         }
@@ -58,19 +55,19 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
         Mode::Select => {
             let title = client_pane_title(client);
             (
-                format!("[SELECT] {}", title),
+                format!("SELECT {}", title),
                 "hjkl nav  n tab  d split  w close  1-9 pane  esc back ".to_string(),
             )
         }
         Mode::Copy => {
             let title = client_pane_title(client);
             (
-                format!("[COPY] {}", title),
+                format!("COPY {}", title),
                 "hjkl move  v select  y yank  / search  esc quit ".to_string(),
             )
         }
         Mode::CommandPalette => (
-            "[CMD] ".to_string(),
+            "CMD ".to_string(),
             "type to filter  enter run  esc cancel ".to_string(),
         ),
         Mode::Confirm => (String::new(), "enter/y confirm  esc/n cancel ".to_string()),
@@ -85,10 +82,10 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
             } else {
                 "\\".to_string()
             };
-            (format!("[LEADER] {}", path_str), "esc cancel ".to_string())
+            (format!("LEADER {}", path_str), "esc cancel ".to_string())
         }
         Mode::TabPicker => (
-            "[NEW TAB] ".to_string(),
+            "NEW TAB ".to_string(),
             "type to filter  enter spawn  esc cancel ".to_string(),
         ),
     };
