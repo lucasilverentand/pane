@@ -439,6 +439,10 @@ fn default_leader_tree() -> LeaderNode {
         root.insert(key, LeaderNode::Group { label: "Resize".into(), children });
     }
 
+    // Quick splits at root level (2-keystroke access)
+    insert_leaf(&mut root, "d", Action::SplitHorizontal, "Split H");
+    insert_leaf(&mut root, "shift+d", Action::SplitVertical, "Split V");
+
     // \y → Paste
     insert_leaf(&mut root, "y", Action::PasteClipboard, "Paste");
     // \/ → Help
