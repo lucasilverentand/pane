@@ -353,6 +353,9 @@ async fn handle_client(
                         Ok(crate::server::command::CommandResult::SessionEnded) => {
                             ServerResponse::CommandOutput { output: String::new(), pane_id: None, window_id: None, success: true }
                         }
+                        Ok(crate::server::command::CommandResult::DetachRequested) => {
+                            ServerResponse::CommandOutput { output: String::new(), pane_id: None, window_id: None, success: true }
+                        }
                         Err(e) => {
                             ServerResponse::CommandOutput { output: e.to_string(), pane_id: None, window_id: None, success: false }
                         }
@@ -499,7 +502,9 @@ async fn handle_client(
                 }
             }
             ClientRequest::Command(cmd) => {
-                handle_command(&cmd, &state, &id_map, &broadcast_tx).await;
+                if handle_command(&cmd, &state, &id_map, &broadcast_tx).await {
+                    break;
+                }
             }
             ClientRequest::Attach { .. } => {
                 // Already attached, ignore
@@ -619,12 +624,13 @@ fn handle_mouse_drag_server(state: &mut ServerState, _x: u16, _y: u16) {
 }
 
 /// Handle string commands from the command protocol.
+/// Returns `true` if the client should detach (break the read loop).
 async fn handle_command(
     cmd: &str,
     state: &Arc<Mutex<ServerState>>,
     id_map: &Arc<Mutex<IdMap>>,
     broadcast_tx: &broadcast::Sender<ServerResponse>,
-) {
+) -> bool {
     match command_parser::parse(cmd) {
         Ok(parsed_cmd) => {
             let mut state = state.lock().await;
@@ -647,6 +653,9 @@ async fn handle_command(
                 Ok(crate::server::command::CommandResult::SessionEnded) => {
                     // SessionEnded already broadcast by execute()
                 }
+                Ok(crate::server::command::CommandResult::DetachRequested) => {
+                    return true;
+                }
                 Err(e) => {
                     let _ = broadcast_tx.send(ServerResponse::Error(e.to_string()));
                 }
@@ -656,6 +665,7 @@ async fn handle_command(
             let _ = broadcast_tx.send(ServerResponse::Error(format!("parse error: {}", e)));
         }
     }
+    false
 }
 
 /// Start a daemon in the background for the given session.

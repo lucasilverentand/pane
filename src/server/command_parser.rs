@@ -49,6 +49,7 @@ pub fn parse(input: &str) -> Result<Command> {
         "equalize-layout" | "equalize" => Ok(Command::EqualizeLayout),
         "toggle-sync" => Ok(Command::ToggleSync),
         "paste-buffer" | "pasteb" => parse_paste_buffer(args),
+        "detach-client" | "detach" => Ok(Command::DetachClient),
         _ => bail!("unknown command: {}", cmd_name),
     }
 }

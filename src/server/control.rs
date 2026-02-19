@@ -141,6 +141,9 @@ pub async fn run_control_mode(
                         out.flush()?;
                         break;
                     }
+                    Ok(command::CommandResult::DetachRequested) => {
+                        writeln!(out, "%end {} {} 0", chrono::Utc::now().timestamp(), cmd_num)?;
+                    }
                     Err(e) => {
                         writeln!(out, "%error {}", e)?;
                         writeln!(out, "%end {} {} 1", chrono::Utc::now().timestamp(), cmd_num)?;

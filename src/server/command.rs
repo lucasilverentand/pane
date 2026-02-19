@@ -58,6 +58,9 @@ pub enum Command {
     ToggleSync,
     PasteBuffer { text: String },
 
+    // Client commands
+    DetachClient,
+
     // Misc commands
     DisplayMessage { message: String, to_stdout: bool },
 }
@@ -110,6 +113,8 @@ pub enum CommandResult {
     LayoutChanged,
     /// Command requires the server to shut down.
     SessionEnded,
+    /// Command requests the client to detach.
+    DetachRequested,
 }
 
 /// Execute a command against the server state.
@@ -479,6 +484,10 @@ pub fn execute(
                 }
             }
             Ok(CommandResult::Ok(String::new()))
+        }
+
+        Command::DetachClient => {
+            Ok(CommandResult::DetachRequested)
         }
 
         Command::DisplayMessage { message, .. } => {
