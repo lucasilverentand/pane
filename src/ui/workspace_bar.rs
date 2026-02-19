@@ -100,14 +100,20 @@ fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
 pub fn render(
     workspace_names: &[&str],
     active_idx: usize,
+    highlight_border: bool,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
+    let border_style = if highlight_border {
+        Style::default().fg(theme.accent)
+    } else {
+        Style::default().fg(theme.border_inactive)
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.border_inactive));
+        .border_style(border_style);
     let tab_area = tab_line_area(area);
     let layout = compute_layout(workspace_names, active_idx, tab_area);
     let sep = " \u{B7} "; // " · "

@@ -46,6 +46,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
         workspace_bar::render(
             &names,
             client.render_state.active_workspace,
+            client.workspace_bar_has_focus(),
             theme,
             frame,
             header,
@@ -63,6 +64,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
         } else {
             None
         };
+        let panes_focused = !client.workspace_bar_has_focus();
 
         // Check for zoom mode
         if let Some(zoomed_id) = ws.zoomed_window {
@@ -73,7 +75,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                 window_view::render_group_from_snapshot(
                     group,
                     screen,
-                    true,
+                    panes_focused,
                     &client.mode,
                     copy_mode_state,
                     &client.config,
@@ -83,6 +85,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
 
                 // Cursor for zoomed window
                 if client.mode == Mode::Interact || client.mode == Mode::Normal {
+                    if panes_focused {
                     if let Some(pane) = group.tabs.get(group.active_tab) {
                         if let Some(screen) = client.pane_screen(pane.id) {
                             if !screen.hide_cursor() {
@@ -100,6 +103,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                             }
                         }
                     }
+                    }
                 }
             }
         } else {
@@ -110,8 +114,8 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
             // First pass: visible panes
             for rp in &resolved {
                 if let crate::layout::ResolvedPane::Visible { id: group_id, rect } = rp {
-                    if let Some(group) = ws.groups.iter().find(|g| g.id == *group_id) {
-                        let is_active = *group_id == ws.active_group;
+                if let Some(group) = ws.groups.iter().find(|g| g.id == *group_id) {
+                        let is_active = panes_focused && *group_id == ws.active_group;
                         let pane = group.tabs.get(group.active_tab);
                         let screen = pane.and_then(|p| client.pane_screen(p.id));
                         window_view::render_group_from_snapshot(
@@ -139,13 +143,14 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                     if rect.width == 0 || rect.height == 0 {
                         continue;
                     }
-                    let is_active = *group_id == ws.active_group;
+                    let is_active = panes_focused && *group_id == ws.active_group;
                     window_view::render_folded(is_active, *direction, theme, frame, *rect);
                 }
             }
 
             // Cursor position
             if client.mode == Mode::Interact || client.mode == Mode::Normal {
+                if panes_focused {
                 if let Some(group) = ws.groups.iter().find(|g| g.id == ws.active_group) {
                     if let Some(pane) = group.tabs.get(group.active_tab) {
                         if let Some(screen) = client.pane_screen(pane.id) {
@@ -176,13 +181,14 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                         }
                     }
                 }
+                }
             }
         }
 
         // Render floating windows on top of tiled layout
         for fw in &ws.floating_windows {
             if let Some(group) = ws.groups.iter().find(|g| g.id == fw.id) {
-                let is_active = fw.id == ws.active_group;
+                let is_active = panes_focused && fw.id == ws.active_group;
                 let pane = group.tabs.get(group.active_tab);
                 let screen = pane.and_then(|p| client.pane_screen(p.id));
                 let fw_rect = ratatui::layout::Rect::new(fw.x, fw.y, fw.width, fw.height);

@@ -12,7 +12,7 @@ use crate::app::{LeaderState, Mode};
 use crate::clipboard;
 use crate::config::{self, Action, Config};
 use crate::copy_mode::{CopyModeAction, CopyModeState};
-use crate::layout::TabId;
+use crate::layout::{SplitDirection, Side, TabId};
 use crate::server::daemon;
 use crate::server::framing;
 use crate::server::protocol::{
@@ -42,7 +42,14 @@ pub struct Client {
     pub command_palette_state: Option<CommandPaletteState>,
     pub copy_mode_state: Option<CopyModeState>,
     pub tab_picker_state: Option<TabPickerState>,
+    pub ui_focus: UiFocus,
     pub should_quit: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UiFocus {
+    WorkspaceBar,
+    Panes,
 }
 
 impl Client {
@@ -65,8 +72,22 @@ impl Client {
             command_palette_state: None,
             copy_mode_state: None,
             tab_picker_state: None,
+            ui_focus: UiFocus::Panes,
             should_quit: false,
         }
+    }
+
+    pub(crate) fn workspace_bar_has_focus(&self) -> bool {
+        self.ui_focus == UiFocus::WorkspaceBar
+    }
+
+    fn has_pane_neighbor_up(&self) -> bool {
+        let Some(ws) = self.active_workspace() else {
+            return false;
+        };
+        ws.layout
+            .find_neighbor(ws.active_group, SplitDirection::Vertical, Side::First)
+            .is_some()
     }
 
     /// Connect to a daemon and run the TUI event loop.
@@ -311,12 +332,14 @@ impl Client {
                         }
                     }
                 } else if self.mode == Mode::Normal
-                    || self.mode == Mode::Interact
-                    || self.mode == Mode::Select
-                {
+            || self.mode == Mode::Interact
+            || self.mode == Mode::Select
+        {
                     // Check workspace bar clicks (client-side)
                     let show_workspace_bar = !self.render_state.workspaces.is_empty();
-                    if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
+                    let workspace_bar_hit = show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT;
+                    if workspace_bar_hit {
+                        self.ui_focus = UiFocus::WorkspaceBar;
                         let names: Vec<&str> = self
                             .render_state
                             .workspaces
@@ -334,6 +357,7 @@ impl Client {
                         ) {
                             match click {
                                 crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
+                                    self.ui_focus = UiFocus::WorkspaceBar;
                                     let mut w = writer.lock().await;
                                     let _ = send_request(
                                         &mut *w,
@@ -345,6 +369,7 @@ impl Client {
                                     .await;
                                 }
                                 crate::ui::workspace_bar::WorkspaceBarClick::NewWorkspace => {
+                                    self.ui_focus = UiFocus::WorkspaceBar;
                                     let mut w = writer.lock().await;
                                     let _ = send_request(
                                         &mut *w,
@@ -357,6 +382,10 @@ impl Client {
                             }
                             return Ok(());
                         }
+                    }
+
+                    if !workspace_bar_hit {
+                        self.ui_focus = UiFocus::Panes;
                     }
 
                     // Forward mouse to server
@@ -490,113 +519,330 @@ impl Client {
             return Ok(());
         }
 
-        // Global keymap (ctrl+q, shift+pageup, etc.)
-        if let Some(action) = self.config.keys.lookup(&normalized).cloned() {
-            return self.execute_action(action, tui, writer).await;
-        }
-
-        // Normal mode plain-key bindings
-        match normalized.code {
-            KeyCode::Char('i') if normalized.modifiers == KeyModifiers::NONE => {
-                self.mode = Mode::Interact;
+        let mut highlight_workspace_bar = false;
+        let action = match normalized.code {
+            KeyCode::Char('[') if normalized.modifiers == KeyModifiers::NONE => {
+                let next_workspace = if self.render_state.active_workspace > 0 {
+                    Some(Action::SwitchWorkspace(self.render_state.active_workspace as u8))
+                } else {
+                    None
+                };
+                next_workspace
             }
-            KeyCode::Char('h') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::FocusLeft, tui, writer).await;
-            }
-            KeyCode::Char('j') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::FocusDown, tui, writer).await;
-            }
-            KeyCode::Char('k') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::FocusUp, tui, writer).await;
-            }
-            KeyCode::Char('l') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::FocusRight, tui, writer).await;
-            }
-            KeyCode::Char('d') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::SplitHorizontal, tui, writer)
-                    .await;
-            }
-            KeyCode::Char('D') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::SplitVertical, tui, writer)
-                    .await;
-            }
-            KeyCode::Char('x') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::CloseTab, tui, writer).await;
-            }
-            KeyCode::Char('n') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::NewTab, tui, writer).await;
-            }
-            KeyCode::Char('m') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::MaximizeFocused, tui, writer)
-                    .await;
-            }
-            KeyCode::Char('z') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::ToggleZoom, tui, writer).await;
-            }
-            KeyCode::Char('f') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::ToggleFloat, tui, writer).await;
-            }
-            KeyCode::Char('F') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::NewFloat, tui, writer).await;
-            }
-            KeyCode::Char('s') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::ScrollMode, tui, writer).await;
-            }
-            KeyCode::Char('c') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::CopyMode, tui, writer).await;
-            }
-            KeyCode::Char('p') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::PasteClipboard, tui, writer)
-                    .await;
-            }
-            KeyCode::Char('/') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::CommandPalette, tui, writer)
-                    .await;
-            }
-            KeyCode::Char('?') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::Help, tui, writer).await;
-            }
-            KeyCode::Char('=') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::Equalize, tui, writer).await;
-            }
-            KeyCode::Char('H') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::ResizeShrinkH, tui, writer)
-                    .await;
-            }
-            KeyCode::Char('L') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::ResizeGrowH, tui, writer).await;
-            }
-            KeyCode::Char('J') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::ResizeGrowV, tui, writer).await;
-            }
-            KeyCode::Char('K') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::ResizeShrinkV, tui, writer)
-                    .await;
-            }
-            KeyCode::Tab if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::NextTab, tui, writer).await;
-            }
-            KeyCode::BackTab => {
-                return self.execute_action(Action::PrevTab, tui, writer).await;
-            }
-            KeyCode::Char(c)
-                if c.is_ascii_digit() && c != '0' && normalized.modifiers == KeyModifiers::NONE =>
-            {
-                let n = c as u8 - b'0';
-                return self
-                    .execute_action(Action::FocusGroupN(n), tui, writer)
-                    .await;
+            KeyCode::Char(']') if normalized.modifiers == KeyModifiers::NONE => {
+                let next_workspace = if self.render_state.active_workspace + 1
+                    < self.render_state.workspaces.len()
+                {
+                    Some(Action::SwitchWorkspace(
+                        (self.render_state.active_workspace + 2) as u8,
+                    ))
+                } else {
+                    None
+                };
+                next_workspace
             }
             _ => {
-                // No PTY fallback in Normal mode — keys are consumed
+                let config_action = self.config.keys.lookup(&normalized).cloned();
+                match self.ui_focus {
+                    UiFocus::WorkspaceBar => match normalized.code {
+                        KeyCode::Left if normalized.modifiers == KeyModifiers::NONE => {
+                            highlight_workspace_bar = true;
+                            if self.render_state.active_workspace > 0 {
+                                Some(Action::SwitchWorkspace(self.render_state.active_workspace as u8))
+                            } else {
+                                None
+                            }
+                        }
+                        KeyCode::Right if normalized.modifiers == KeyModifiers::NONE => {
+                            highlight_workspace_bar = true;
+                            if self.render_state.active_workspace + 1 < self.render_state.workspaces.len() {
+                                Some(Action::SwitchWorkspace(
+                                    (self.render_state.active_workspace + 2) as u8,
+                                ))
+                            } else {
+                                None
+                            }
+                        }
+                        KeyCode::Char('h') if normalized.modifiers == KeyModifiers::NONE => {
+                            highlight_workspace_bar = true;
+                            if self.render_state.active_workspace > 0 {
+                                Some(Action::SwitchWorkspace(self.render_state.active_workspace as u8))
+                            } else {
+                                None
+                            }
+                        }
+                        KeyCode::Char('l') if normalized.modifiers == KeyModifiers::NONE => {
+                            highlight_workspace_bar = true;
+                            if self.render_state.active_workspace + 1
+                                < self.render_state.workspaces.len()
+                            {
+                                Some(Action::SwitchWorkspace(
+                                    (self.render_state.active_workspace + 2) as u8,
+                                ))
+                            } else {
+                                None
+                            }
+                        }
+                        KeyCode::Char('j') if normalized.modifiers == KeyModifiers::NONE => {
+                            self.ui_focus = UiFocus::Panes;
+                            None
+                        }
+                        KeyCode::Char('k') if normalized.modifiers == KeyModifiers::NONE => None,
+                        KeyCode::Char(c)
+                            if c.is_ascii_digit()
+                                && c != '0'
+                                && normalized.modifiers == KeyModifiers::NONE =>
+                        {
+                            highlight_workspace_bar = true;
+                            let n = c as u8 - b'0';
+                            if (n as usize) <= self.render_state.workspaces.len() {
+                                Some(Action::SwitchWorkspace(n))
+                            } else {
+                                None
+                            }
+                        }
+                        _ => match config_action {
+                            Some(action) => match action {
+                                Action::EnterInteract => {
+                                    self.mode = Mode::Interact;
+                                    None
+                                }
+                                _ => Some(action),
+                            },
+                            None => match normalized.code {
+                                KeyCode::Tab if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::NextTab)
+                                }
+                                KeyCode::BackTab => Some(Action::PrevTab),
+                                KeyCode::Char('i') if normalized.modifiers == KeyModifiers::NONE => {
+                                    self.mode = Mode::Interact;
+                                    None
+                                }
+                                KeyCode::Char('d') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::SplitHorizontal)
+                                }
+                                KeyCode::Char('D') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::SplitVertical)
+                                }
+                                KeyCode::Char('x') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::CloseTab)
+                                }
+                                KeyCode::Char('n') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::NewTab)
+                                }
+                                KeyCode::Char('m') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::MaximizeFocused)
+                                }
+                                KeyCode::Char('z') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::ToggleZoom)
+                                }
+                                KeyCode::Char('f') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::ToggleFloat)
+                                }
+                                KeyCode::Char('F') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::NewFloat)
+                                }
+                                KeyCode::Char('s') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::ScrollMode)
+                                }
+                                KeyCode::Char('c') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::CopyMode)
+                                }
+                                KeyCode::Char('p') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::PasteClipboard)
+                                }
+                                KeyCode::Char('/') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::CommandPalette)
+                                }
+                                KeyCode::Char('?') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::Help)
+                                }
+                                KeyCode::Char('=') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::Equalize)
+                                }
+                                KeyCode::Char('H') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::ResizeShrinkH)
+                                }
+                                KeyCode::Char('L') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::ResizeGrowH)
+                                }
+                                KeyCode::Char('J') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::ResizeGrowV)
+                                }
+                                KeyCode::Char('K') if normalized.modifiers == KeyModifiers::NONE => {
+                                    Some(Action::ResizeShrinkV)
+                                }
+                                _ => {
+                                    // No PTY fallback in Normal mode — keys are consumed
+                                    None
+                                }
+                            },
+                        },
+                    },
+                    UiFocus::Panes => {
+                        match normalized.code {
+                            KeyCode::Char('h') if normalized.modifiers == KeyModifiers::NONE => {
+                                Some(Action::FocusLeft)
+                            }
+                            KeyCode::Char('j') if normalized.modifiers == KeyModifiers::NONE => {
+                                Some(Action::FocusDown)
+                            }
+                            KeyCode::Char('k') if normalized.modifiers == KeyModifiers::NONE => {
+                                if self.has_pane_neighbor_up() {
+                                    Some(Action::FocusUp)
+                                } else {
+                                    self.ui_focus = UiFocus::WorkspaceBar;
+                                    None
+                                }
+                            }
+                            KeyCode::Char('l') if normalized.modifiers == KeyModifiers::NONE => {
+                                Some(Action::FocusRight)
+                            }
+                            KeyCode::Left if normalized.modifiers == KeyModifiers::NONE => {
+                                Some(Action::FocusLeft)
+                            }
+                            KeyCode::Right if normalized.modifiers == KeyModifiers::NONE => {
+                                Some(Action::FocusRight)
+                            }
+                            _ => {
+                                if let Some(action) = config_action {
+                                    match action {
+                                        Action::EnterInteract => {
+                                            self.mode = Mode::Interact;
+                                            None
+                                        }
+                                        _ => Some(action),
+                                    }
+                                } else {
+                                    match normalized.code {
+                                        KeyCode::Tab if normalized.modifiers == KeyModifiers::NONE => {
+                                            Some(Action::NextTab)
+                                        }
+                                        KeyCode::BackTab => Some(Action::PrevTab),
+                                        KeyCode::Char('i')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            self.mode = Mode::Interact;
+                                            None
+                                        }
+                                        KeyCode::Char('d')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::SplitHorizontal)
+                                        }
+                                        KeyCode::Char('D')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::SplitVertical)
+                                        }
+                                        KeyCode::Char('x')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::CloseTab)
+                                        }
+                                        KeyCode::Char('n')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::NewTab)
+                                        }
+                                        KeyCode::Char('m')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::MaximizeFocused)
+                                        }
+                                        KeyCode::Char('z')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::ToggleZoom)
+                                        }
+                                        KeyCode::Char('f')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::ToggleFloat)
+                                        }
+                                        KeyCode::Char('F')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::NewFloat)
+                                        }
+                                        KeyCode::Char('s')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::ScrollMode)
+                                        }
+                                        KeyCode::Char('c')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::CopyMode)
+                                        }
+                                        KeyCode::Char('p')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::PasteClipboard)
+                                        }
+                                        KeyCode::Char('/')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::CommandPalette)
+                                        }
+                                        KeyCode::Char('?')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::Help)
+                                        }
+                                        KeyCode::Char('=')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::Equalize)
+                                        }
+                                        KeyCode::Char('H')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::ResizeShrinkH)
+                                        }
+                                        KeyCode::Char('L')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::ResizeGrowH)
+                                        }
+                                        KeyCode::Char('J')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::ResizeGrowV)
+                                        }
+                                        KeyCode::Char('K')
+                                            if normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::ResizeShrinkV)
+                                        }
+                                        KeyCode::Char(c)
+                                            if c.is_ascii_digit()
+                                                && c != '0'
+                                                && normalized.modifiers == KeyModifiers::NONE =>
+                                        {
+                                            Some(Action::FocusGroupN(c as u8 - b'0'))
+                                        }
+                                        _ => {
+                                            // No PTY fallback in Normal mode — keys are consumed
+                                            None
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
+        };
+        if self.ui_focus == UiFocus::Panes || highlight_workspace_bar {
+            self.ui_focus = if highlight_workspace_bar {
+                UiFocus::WorkspaceBar
+            } else {
+                self.ui_focus
+            };
+        }
+        if let Some(action) = action {
+            return self.execute_action(action, tui, writer).await;
         }
         Ok(())
     }
