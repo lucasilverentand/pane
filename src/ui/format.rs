@@ -55,10 +55,7 @@ fn expand_token(token: &str, vars: &HashMap<String, String>) -> String {
             let condition = parts[0];
             let true_val = parts[1];
             let false_val = parts[2];
-            let is_truthy = vars
-                .get(condition)
-                .map(|v| !v.is_empty())
-                .unwrap_or(false);
+            let is_truthy = vars.get(condition).map(|v| !v.is_empty()).unwrap_or(false);
             let chosen = if is_truthy { true_val } else { false_val };
             // Recursively expand #{...} tokens in the chosen branch
             format_string(chosen, vars)
@@ -134,28 +131,19 @@ mod tests {
     #[test]
     fn test_conditional_true() {
         let vars = make_vars(&[("mode", "copy")]);
-        assert_eq!(
-            format_string("#{?mode,[#{mode}],}", &vars),
-            "[copy]"
-        );
+        assert_eq!(format_string("#{?mode,[#{mode}],}", &vars), "[copy]");
     }
 
     #[test]
     fn test_conditional_false() {
         let vars = make_vars(&[]);
-        assert_eq!(
-            format_string("#{?mode,[#{mode}],normal}", &vars),
-            "normal"
-        );
+        assert_eq!(format_string("#{?mode,[#{mode}],normal}", &vars), "normal");
     }
 
     #[test]
     fn test_conditional_empty_string_is_falsy() {
         let vars = make_vars(&[("mode", "")]);
-        assert_eq!(
-            format_string("#{?mode,yes,no}", &vars),
-            "no"
-        );
+        assert_eq!(format_string("#{?mode,yes,no}", &vars), "no");
     }
 
     #[test]
@@ -190,28 +178,19 @@ mod tests {
     #[test]
     fn test_nested_conditional_both_true() {
         let vars = make_vars(&[("a", "1"), ("b", "2")]);
-        assert_eq!(
-            format_string("#{?a,#{?b,x,y},z}", &vars),
-            "x"
-        );
+        assert_eq!(format_string("#{?a,#{?b,x,y},z}", &vars), "x");
     }
 
     #[test]
     fn test_nested_conditional_outer_true_inner_false() {
         let vars = make_vars(&[("a", "1")]);
-        assert_eq!(
-            format_string("#{?a,#{?b,x,y},z}", &vars),
-            "y"
-        );
+        assert_eq!(format_string("#{?a,#{?b,x,y},z}", &vars), "y");
     }
 
     #[test]
     fn test_nested_conditional_outer_false() {
         let vars = make_vars(&[("b", "2")]);
-        assert_eq!(
-            format_string("#{?a,#{?b,x,y},z}", &vars),
-            "z"
-        );
+        assert_eq!(format_string("#{?a,#{?b,x,y},z}", &vars), "z");
     }
 
     // --- Malformed templates ---
@@ -282,18 +261,12 @@ mod tests {
     #[test]
     fn test_conditional_with_nested_var_in_true_branch() {
         let vars = make_vars(&[("flag", "1"), ("val", "hello")]);
-        assert_eq!(
-            format_string("#{?flag,#{val},default}", &vars),
-            "hello"
-        );
+        assert_eq!(format_string("#{?flag,#{val},default}", &vars), "hello");
     }
 
     #[test]
     fn test_conditional_with_nested_var_in_false_branch() {
         let vars = make_vars(&[("val", "hello")]);
-        assert_eq!(
-            format_string("#{?flag,default,#{val}}", &vars),
-            "hello"
-        );
+        assert_eq!(format_string("#{?flag,default,#{val}}", &vars), "hello");
     }
 }

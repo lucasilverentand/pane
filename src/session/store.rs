@@ -106,8 +106,8 @@ pub fn list_from_dir(dir: &Path) -> Result<Vec<SessionSummary>> {
 mod tests {
     use super::*;
     use crate::layout::{LayoutNode, TabId};
-    use crate::window::{WindowId, TabKind};
     use crate::session::{TabConfig, WindowConfig, WorkspaceConfig};
+    use crate::window::{TabKind, WindowId};
     use std::collections::HashMap;
 
     fn test_tempdir() -> tempfile::TempDir {

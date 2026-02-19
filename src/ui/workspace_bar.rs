@@ -2,11 +2,13 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
 };
 
 use crate::config::Theme;
+
+pub const HEIGHT: u16 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceBarClick {
@@ -21,6 +23,28 @@ struct TabLayout {
     plus_range: Option<(u16, u16)>,
 }
 
+fn tab_line_area(area: Rect) -> Rect {
+    if area.width == 0 || area.height == 0 {
+        return area;
+    }
+
+    // For bordered bars (HEIGHT=3), render/hit-test on the inner text row.
+    let has_border = area.width > 2 && area.height > 2;
+    let x = if has_border { area.x + 1 } else { area.x };
+    let width = if has_border {
+        area.width - 2
+    } else {
+        area.width
+    };
+    let y = if has_border {
+        area.y + (area.height / 2)
+    } else {
+        area.y
+    };
+
+    Rect::new(x, y, width, 1)
+}
+
 fn truncate_name(name: &str, max: usize) -> String {
     if name.len() <= max {
         name.to_string()
@@ -29,11 +53,7 @@ fn truncate_name(name: &str, max: usize) -> String {
     }
 }
 
-fn compute_layout(
-    names: &[&str],
-    active_idx: usize,
-    area: Rect,
-) -> TabLayout {
+fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
     let mut tab_ranges: Vec<(u16, u16)> = Vec::new();
     let max_x = area.x + area.width;
     let plus_reserve = 3u16; // " + "
@@ -84,7 +104,12 @@ pub fn render(
     frame: &mut Frame,
     area: Rect,
 ) {
-    let layout = compute_layout(workspace_names, active_idx, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border_inactive));
+    let tab_area = tab_line_area(area);
+    let layout = compute_layout(workspace_names, active_idx, tab_area);
     let sep = " \u{B7} "; // " · "
 
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -127,7 +152,10 @@ pub fn render(
     }
 
     let line = Line::from(spans);
-    frame.render_widget(Paragraph::new(line), area);
+    frame.render_widget(block, area);
+    if tab_area.width > 0 && tab_area.height > 0 {
+        frame.render_widget(Paragraph::new(line), tab_area);
+    }
 }
 
 pub fn hit_test(
@@ -137,11 +165,16 @@ pub fn hit_test(
     x: u16,
     y: u16,
 ) -> Option<WorkspaceBarClick> {
-    if y < area.y || y >= area.y + area.height {
+    let tab_area = tab_line_area(area);
+
+    if y < tab_area.y || y >= tab_area.y + tab_area.height {
+        return None;
+    }
+    if x < tab_area.x || x >= tab_area.x + tab_area.width {
         return None;
     }
 
-    let layout = compute_layout(workspace_names, active_idx, area);
+    let layout = compute_layout(workspace_names, active_idx, tab_area);
 
     // Check + button first
     if let Some((start, end)) = layout.plus_range {
@@ -265,11 +298,20 @@ mod tests {
         assert_eq!(start, 7);
         assert_eq!(end, 11);
         // Click at start of second tab
-        assert_eq!(hit_test(&ws, 0, area, 7, 0), Some(WorkspaceBarClick::Tab(1)));
+        assert_eq!(
+            hit_test(&ws, 0, area, 7, 0),
+            Some(WorkspaceBarClick::Tab(1))
+        );
         // Click at end-1 of second tab
-        assert_eq!(hit_test(&ws, 0, area, 10, 0), Some(WorkspaceBarClick::Tab(1)));
+        assert_eq!(
+            hit_test(&ws, 0, area, 10, 0),
+            Some(WorkspaceBarClick::Tab(1))
+        );
         // Click at end is outside
-        assert_ne!(hit_test(&ws, 0, area, 11, 0), Some(WorkspaceBarClick::Tab(1)));
+        assert_ne!(
+            hit_test(&ws, 0, area, 11, 0),
+            Some(WorkspaceBarClick::Tab(1))
+        );
     }
 
     // --- Many workspaces (overflow behavior) ---
@@ -287,8 +329,15 @@ mod tests {
         let area = Rect::new(0, 0, 40, 1);
         let layout = compute_layout(&ws, 0, area);
         // Some tabs should be skipped (0,0 ranges)
-        let skipped = layout.tab_ranges.iter().filter(|&&(s, e)| s == 0 && e == 0).count();
-        assert!(skipped > 0, "expected some tabs to be skipped in narrow area");
+        let skipped = layout
+            .tab_ranges
+            .iter()
+            .filter(|&&(s, e)| s == 0 && e == 0)
+            .count();
+        assert!(
+            skipped > 0,
+            "expected some tabs to be skipped in narrow area"
+        );
     }
 
     #[test]
@@ -377,12 +426,30 @@ mod tests {
         let ws = vec!["ab"];
         let area = Rect::new(10, 5, 80, 1);
         // " ab " = 4 chars, tab at [10, 14)
-        assert_eq!(hit_test(&ws, 0, area, 10, 5), Some(WorkspaceBarClick::Tab(0)));
-        assert_eq!(hit_test(&ws, 0, area, 13, 5), Some(WorkspaceBarClick::Tab(0)));
+        assert_eq!(
+            hit_test(&ws, 0, area, 10, 5),
+            Some(WorkspaceBarClick::Tab(0))
+        );
+        assert_eq!(
+            hit_test(&ws, 0, area, 13, 5),
+            Some(WorkspaceBarClick::Tab(0))
+        );
         // Outside area y
         assert_eq!(hit_test(&ws, 0, area, 10, 4), None);
         assert_eq!(hit_test(&ws, 0, area, 10, 6), None);
         // Before area x — should be None
         assert_eq!(hit_test(&ws, 0, area, 9, 5), None);
+    }
+
+    #[test]
+    fn test_hit_test_bordered_bar_uses_inner_row() {
+        let ws = vec!["alpha"];
+        let area = Rect::new(0, 0, 80, HEIGHT);
+        assert_eq!(
+            hit_test(&ws, 0, area, 1, 1),
+            Some(WorkspaceBarClick::Tab(0))
+        );
+        assert_eq!(hit_test(&ws, 0, area, 1, 0), None);
+        assert_eq!(hit_test(&ws, 0, area, 1, 2), None);
     }
 }

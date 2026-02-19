@@ -14,7 +14,7 @@ pub enum Action {
     Quit,
     NewWorkspace,
     CloseWorkspace,
-    SwitchWorkspace(u8),  // 1-indexed
+    SwitchWorkspace(u8), // 1-indexed
     NewTab,
     DevServerInput,
     NextTab,
@@ -27,7 +27,7 @@ pub enum Action {
     FocusDown,
     FocusUp,
     FocusRight,
-    FocusGroupN(u8),  // 1-indexed
+    FocusGroupN(u8), // 1-indexed
     MoveTabLeft,
     MoveTabDown,
     MoveTabUp,
@@ -357,8 +357,14 @@ fn action_name_map() -> HashMap<&'static str, Action> {
 
 #[derive(Clone, Debug)]
 pub enum LeaderNode {
-    Leaf { action: Action, label: String },
-    Group { label: String, children: HashMap<KeyEvent, LeaderNode> },
+    Leaf {
+        action: Action,
+        label: String,
+    },
+    Group {
+        label: String,
+        children: HashMap<KeyEvent, LeaderNode>,
+    },
     PassThrough,
 }
 
@@ -392,10 +398,13 @@ fn default_leader_tree() -> LeaderNode {
         for n in 1..=9u8 {
             let ch = (b'0' + n) as char;
             let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
-            children.insert(key, LeaderNode::Leaf {
-                action: Action::FocusGroupN(n),
-                label: format!("Focus {}", n),
-            });
+            children.insert(
+                key,
+                LeaderNode::Leaf {
+                    action: Action::FocusGroupN(n),
+                    label: format!("Focus {}", n),
+                },
+            );
         }
         insert_leaf(&mut children, "d", Action::SplitHorizontal, "Split H");
         insert_leaf(&mut children, "shift+d", Action::SplitVertical, "Split V");
@@ -407,7 +416,13 @@ fn default_leader_tree() -> LeaderNode {
         insert_leaf(&mut children, "f", Action::ToggleFloat, "Float");
         insert_leaf(&mut children, "F", Action::NewFloat, "New Float");
         let key = parse_key("w").unwrap();
-        root.insert(key, LeaderNode::Group { label: "Window".into(), children });
+        root.insert(
+            key,
+            LeaderNode::Group {
+                label: "Window".into(),
+                children,
+            },
+        );
     }
 
     // \t → +Tab
@@ -422,7 +437,13 @@ fn default_leader_tree() -> LeaderNode {
         insert_leaf(&mut children, "k", Action::MoveTabUp, "Move Up");
         insert_leaf(&mut children, "l", Action::MoveTabRight, "Move Right");
         let key = parse_key("t").unwrap();
-        root.insert(key, LeaderNode::Group { label: "Tab".into(), children });
+        root.insert(
+            key,
+            LeaderNode::Group {
+                label: "Tab".into(),
+                children,
+            },
+        );
     }
 
     // \s → +Session
@@ -432,7 +453,13 @@ fn default_leader_tree() -> LeaderNode {
         insert_leaf(&mut children, "p", Action::CommandPalette, "Palette");
         insert_leaf(&mut children, "d", Action::Detach, "Detach");
         let key = parse_key("s").unwrap();
-        root.insert(key, LeaderNode::Group { label: "Session".into(), children });
+        root.insert(
+            key,
+            LeaderNode::Group {
+                label: "Session".into(),
+                children,
+            },
+        );
     }
 
     // \W → +Workspace
@@ -443,13 +470,22 @@ fn default_leader_tree() -> LeaderNode {
         for n in 1..=9u8 {
             let ch = (b'0' + n) as char;
             let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
-            children.insert(key, LeaderNode::Leaf {
-                action: Action::SwitchWorkspace(n),
-                label: format!("Switch {}", n),
-            });
+            children.insert(
+                key,
+                LeaderNode::Leaf {
+                    action: Action::SwitchWorkspace(n),
+                    label: format!("Switch {}", n),
+                },
+            );
         }
         let key = parse_key("shift+w").unwrap();
-        root.insert(key, LeaderNode::Group { label: "Workspace".into(), children });
+        root.insert(
+            key,
+            LeaderNode::Group {
+                label: "Workspace".into(),
+                children,
+            },
+        );
     }
 
     // \r → +Resize
@@ -461,7 +497,13 @@ fn default_leader_tree() -> LeaderNode {
         insert_leaf(&mut children, "k", Action::ResizeShrinkV, "Shrink V");
         insert_leaf(&mut children, "=", Action::Equalize, "Equalize");
         let key = parse_key("r").unwrap();
-        root.insert(key, LeaderNode::Group { label: "Resize".into(), children });
+        root.insert(
+            key,
+            LeaderNode::Group {
+                label: "Resize".into(),
+                children,
+            },
+        );
     }
 
     // Quick splits at root level (2-keystroke access)
@@ -477,12 +519,26 @@ fn default_leader_tree() -> LeaderNode {
     let bs_key = KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE);
     root.insert(bs_key, LeaderNode::PassThrough);
 
-    LeaderNode::Group { label: "Leader".into(), children: root }
+    LeaderNode::Group {
+        label: "Leader".into(),
+        children: root,
+    }
 }
 
-fn insert_leaf(map: &mut HashMap<KeyEvent, LeaderNode>, key_str: &str, action: Action, label: &str) {
+fn insert_leaf(
+    map: &mut HashMap<KeyEvent, LeaderNode>,
+    key_str: &str,
+    action: Action,
+    label: &str,
+) {
     if let Some(key) = parse_key(key_str) {
-        map.insert(key, LeaderNode::Leaf { action, label: label.to_string() });
+        map.insert(
+            key,
+            LeaderNode::Leaf {
+                action,
+                label: label.to_string(),
+            },
+        );
     }
 }
 
@@ -508,7 +564,10 @@ fn build_leader_tree(raw_keys: &HashMap<String, String>, defaults: LeaderNode) -
             }
         } else if let Some(action) = name_to_action.get(value.as_str()) {
             let label = value.replace('_', " ");
-            let node = LeaderNode::Leaf { action: action.clone(), label };
+            let node = LeaderNode::Leaf {
+                action: action.clone(),
+                label,
+            };
             insert_into_tree(&mut root, &parsed_keys, node);
         }
     }
@@ -516,13 +575,20 @@ fn build_leader_tree(raw_keys: &HashMap<String, String>, defaults: LeaderNode) -
     root
 }
 
-fn get_or_create_group<'a>(tree: &'a mut LeaderNode, key: &KeyEvent, label: &str) -> &'a mut HashMap<KeyEvent, LeaderNode> {
+fn get_or_create_group<'a>(
+    tree: &'a mut LeaderNode,
+    key: &KeyEvent,
+    label: &str,
+) -> &'a mut HashMap<KeyEvent, LeaderNode> {
     if let LeaderNode::Group { children, .. } = tree {
         children.entry(*key).or_insert_with(|| LeaderNode::Group {
             label: label.to_string(),
             children: HashMap::new(),
         });
-        if let Some(LeaderNode::Group { children: inner, .. }) = children.get_mut(key) {
+        if let Some(LeaderNode::Group {
+            children: inner, ..
+        }) = children.get_mut(key)
+        {
             return inner;
         }
     }
@@ -542,10 +608,12 @@ fn insert_into_tree(tree: &mut LeaderNode, keys: &[KeyEvent], node: LeaderNode) 
     }
     // Descend
     if let LeaderNode::Group { children, .. } = tree {
-        let child = children.entry(keys[0]).or_insert_with(|| LeaderNode::Group {
-            label: String::new(),
-            children: HashMap::new(),
-        });
+        let child = children
+            .entry(keys[0])
+            .or_insert_with(|| LeaderNode::Group {
+                label: String::new(),
+                children: HashMap::new(),
+            });
         insert_into_tree(child, &keys[1..], node);
     }
 }
@@ -612,31 +680,99 @@ impl Config {
 
         // Theme
         if let Some(t) = raw.theme {
-            if let Some(s) = t.accent { if let Some(c) = parse_color(&s) { config.theme.accent = c; } }
-            if let Some(s) = t.border_active { if let Some(c) = parse_color(&s) { config.theme.border_active = c; } }
-            if let Some(s) = t.border_inactive { if let Some(c) = parse_color(&s) { config.theme.border_inactive = c; } }
-            if let Some(s) = t.border_normal { if let Some(c) = parse_color(&s) { config.theme.border_normal = c; } }
-            if let Some(s) = t.border_interact { if let Some(c) = parse_color(&s) { config.theme.border_interact = c; } }
-            if let Some(s) = t.border_scroll { if let Some(c) = parse_color(&s) { config.theme.border_scroll = c; } }
-            if let Some(s) = t.bg { if let Some(c) = parse_color(&s) { config.theme.bg = c; } }
-            if let Some(s) = t.fg { if let Some(c) = parse_color(&s) { config.theme.fg = c; } }
-            if let Some(s) = t.dim { if let Some(c) = parse_color(&s) { config.theme.dim = c; } }
-            if let Some(s) = t.tab_active { if let Some(c) = parse_color(&s) { config.theme.tab_active = c; } }
-            if let Some(s) = t.tab_inactive { if let Some(c) = parse_color(&s) { config.theme.tab_inactive = c; } }
-            if let Some(s) = t.fold_bar_bg { if let Some(c) = parse_color(&s) { config.theme.fold_bar_bg = c; } }
-            if let Some(s) = t.fold_bar_active_bg { if let Some(c) = parse_color(&s) { config.theme.fold_bar_active_bg = c; } }
+            if let Some(s) = t.accent {
+                if let Some(c) = parse_color(&s) {
+                    config.theme.accent = c;
+                }
+            }
+            if let Some(s) = t.border_active {
+                if let Some(c) = parse_color(&s) {
+                    config.theme.border_active = c;
+                }
+            }
+            if let Some(s) = t.border_inactive {
+                if let Some(c) = parse_color(&s) {
+                    config.theme.border_inactive = c;
+                }
+            }
+            if let Some(s) = t.border_normal {
+                if let Some(c) = parse_color(&s) {
+                    config.theme.border_normal = c;
+                }
+            }
+            if let Some(s) = t.border_interact {
+                if let Some(c) = parse_color(&s) {
+                    config.theme.border_interact = c;
+                }
+            }
+            if let Some(s) = t.border_scroll {
+                if let Some(c) = parse_color(&s) {
+                    config.theme.border_scroll = c;
+                }
+            }
+            if let Some(s) = t.bg {
+                if let Some(c) = parse_color(&s) {
+                    config.theme.bg = c;
+                }
+            }
+            if let Some(s) = t.fg {
+                if let Some(c) = parse_color(&s) {
+                    config.theme.fg = c;
+                }
+            }
+            if let Some(s) = t.dim {
+                if let Some(c) = parse_color(&s) {
+                    config.theme.dim = c;
+                }
+            }
+            if let Some(s) = t.tab_active {
+                if let Some(c) = parse_color(&s) {
+                    config.theme.tab_active = c;
+                }
+            }
+            if let Some(s) = t.tab_inactive {
+                if let Some(c) = parse_color(&s) {
+                    config.theme.tab_inactive = c;
+                }
+            }
+            if let Some(s) = t.fold_bar_bg {
+                if let Some(c) = parse_color(&s) {
+                    config.theme.fold_bar_bg = c;
+                }
+            }
+            if let Some(s) = t.fold_bar_active_bg {
+                if let Some(c) = parse_color(&s) {
+                    config.theme.fold_bar_active_bg = c;
+                }
+            }
         }
 
         // Behavior
         if let Some(b) = raw.behavior {
-            if let Some(v) = b.min_pane_width { config.behavior.min_pane_width = v; }
-            if let Some(v) = b.min_pane_height { config.behavior.min_pane_height = v; }
-            if let Some(v) = b.fold_bar_size { config.behavior.fold_bar_size = v; }
-            if let Some(v) = b.vim_navigator { config.behavior.vim_navigator = v; }
-            if let Some(v) = b.mouse { config.behavior.mouse = v; }
-            if b.default_shell.is_some() { config.behavior.default_shell = b.default_shell; }
-            if let Some(v) = b.auto_suspend_secs { config.behavior.auto_suspend_secs = v; }
-            if b.terminal_title_format.is_some() { config.behavior.terminal_title_format = b.terminal_title_format; }
+            if let Some(v) = b.min_pane_width {
+                config.behavior.min_pane_width = v;
+            }
+            if let Some(v) = b.min_pane_height {
+                config.behavior.min_pane_height = v;
+            }
+            if let Some(v) = b.fold_bar_size {
+                config.behavior.fold_bar_size = v;
+            }
+            if let Some(v) = b.vim_navigator {
+                config.behavior.vim_navigator = v;
+            }
+            if let Some(v) = b.mouse {
+                config.behavior.mouse = v;
+            }
+            if b.default_shell.is_some() {
+                config.behavior.default_shell = b.default_shell;
+            }
+            if let Some(v) = b.auto_suspend_secs {
+                config.behavior.auto_suspend_secs = v;
+            }
+            if b.terminal_title_format.is_some() {
+                config.behavior.terminal_title_format = b.terminal_title_format;
+            }
         }
 
         // Keys
@@ -651,13 +787,27 @@ impl Config {
 
         // Status bar
         if let Some(sb) = raw.status_bar {
-            if let Some(v) = sb.show_cpu { config.status_bar.show_cpu = v; }
-            if let Some(v) = sb.show_memory { config.status_bar.show_memory = v; }
-            if let Some(v) = sb.show_load { config.status_bar.show_load = v; }
-            if let Some(v) = sb.show_disk { config.status_bar.show_disk = v; }
-            if let Some(v) = sb.update_interval_secs { config.status_bar.update_interval_secs = v; }
-            if let Some(v) = sb.left { config.status_bar.left = v; }
-            if let Some(v) = sb.right { config.status_bar.right = v; }
+            if let Some(v) = sb.show_cpu {
+                config.status_bar.show_cpu = v;
+            }
+            if let Some(v) = sb.show_memory {
+                config.status_bar.show_memory = v;
+            }
+            if let Some(v) = sb.show_load {
+                config.status_bar.show_load = v;
+            }
+            if let Some(v) = sb.show_disk {
+                config.status_bar.show_disk = v;
+            }
+            if let Some(v) = sb.update_interval_secs {
+                config.status_bar.update_interval_secs = v;
+            }
+            if let Some(v) = sb.left {
+                config.status_bar.left = v;
+            }
+            if let Some(v) = sb.right {
+                config.status_bar.right = v;
+            }
         }
 
         // Leader
@@ -698,7 +848,11 @@ impl Config {
                 .into_iter()
                 .map(|rp| crate::plugin::PluginConfig {
                     command: rp.command,
-                    events: if rp.events.is_empty() { vec!["*".to_string()] } else { rp.events },
+                    events: if rp.events.is_empty() {
+                        vec!["*".to_string()]
+                    } else {
+                        rp.events
+                    },
                     refresh_interval_secs: rp.refresh_interval_secs,
                 })
                 .collect();
@@ -1147,7 +1301,10 @@ min_pane_width = 80
     #[test]
     fn test_leader_config_default_key_and_timeout() {
         let leader = LeaderConfig::default();
-        assert_eq!(leader.key, make_key(KeyCode::Char('\\'), KeyModifiers::NONE));
+        assert_eq!(
+            leader.key,
+            make_key(KeyCode::Char('\\'), KeyModifiers::NONE)
+        );
         assert_eq!(leader.timeout_ms, 300);
     }
 
@@ -1443,19 +1600,17 @@ min_pane_width = 80
         };
         insert_into_tree(&mut tree, &[key_a, key_b], node);
         match &tree {
-            LeaderNode::Group { children, .. } => {
-                match children.get(&key_a) {
-                    Some(LeaderNode::Group { children: inner, .. }) => {
-                        match inner.get(&key_b) {
-                            Some(LeaderNode::Leaf { action, .. }) => {
-                                assert_eq!(*action, Action::Help);
-                            }
-                            _ => panic!("expected Help leaf"),
-                        }
+            LeaderNode::Group { children, .. } => match children.get(&key_a) {
+                Some(LeaderNode::Group {
+                    children: inner, ..
+                }) => match inner.get(&key_b) {
+                    Some(LeaderNode::Leaf { action, .. }) => {
+                        assert_eq!(*action, Action::Help);
                     }
-                    _ => panic!("expected intermediate group"),
-                }
-            }
+                    _ => panic!("expected Help leaf"),
+                },
+                _ => panic!("expected intermediate group"),
+            },
             _ => panic!("root should be a Group"),
         }
     }
@@ -1486,12 +1641,10 @@ min_pane_width = 80
         assert!(group.is_empty());
         // Verify the group was actually created
         match &tree {
-            LeaderNode::Group { children, .. } => {
-                match children.get(&key) {
-                    Some(LeaderNode::Group { label, .. }) => assert_eq!(label, "Custom"),
-                    _ => panic!("expected Custom group"),
-                }
-            }
+            LeaderNode::Group { children, .. } => match children.get(&key) {
+                Some(LeaderNode::Group { label, .. }) => assert_eq!(label, "Custom"),
+                _ => panic!("expected Custom group"),
+            },
             _ => panic!("root should be a Group"),
         }
     }
@@ -1500,16 +1653,22 @@ min_pane_width = 80
     fn test_get_or_create_group_existing() {
         let mut inner = HashMap::new();
         let q_key = parse_key("q").unwrap();
-        inner.insert(q_key, LeaderNode::Leaf {
-            action: Action::Quit,
-            label: "Quit".into(),
-        });
+        inner.insert(
+            q_key,
+            LeaderNode::Leaf {
+                action: Action::Quit,
+                label: "Quit".into(),
+            },
+        );
         let g_key = parse_key("g").unwrap();
         let mut root_children = HashMap::new();
-        root_children.insert(g_key, LeaderNode::Group {
-            label: "Existing".into(),
-            children: inner,
-        });
+        root_children.insert(
+            g_key,
+            LeaderNode::Group {
+                label: "Existing".into(),
+                children: inner,
+            },
+        );
         let mut tree = LeaderNode::Group {
             label: "root".into(),
             children: root_children,
@@ -1519,12 +1678,10 @@ min_pane_width = 80
         assert!(group.contains_key(&q_key));
         // Label should remain "Existing", not overwritten
         match &tree {
-            LeaderNode::Group { children, .. } => {
-                match children.get(&g_key) {
-                    Some(LeaderNode::Group { label, .. }) => assert_eq!(label, "Existing"),
-                    _ => panic!("expected group"),
-                }
-            }
+            LeaderNode::Group { children, .. } => match children.get(&g_key) {
+                Some(LeaderNode::Group { label, .. }) => assert_eq!(label, "Existing"),
+                _ => panic!("expected group"),
+            },
             _ => panic!("root should be a Group"),
         }
     }

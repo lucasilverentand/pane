@@ -83,5 +83,9 @@ pub fn spawn_pty(
         }
     });
 
-    Ok(PtyHandle { writer, child, master })
+    Ok(PtyHandle {
+        writer,
+        child,
+        master,
+    })
 }

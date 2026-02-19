@@ -30,10 +30,7 @@ impl SystemStats {
     }
 }
 
-pub fn start_stats_collector(
-    event_tx: mpsc::UnboundedSender<AppEvent>,
-    interval_secs: u64,
-) {
+pub fn start_stats_collector(event_tx: mpsc::UnboundedSender<AppEvent>, interval_secs: u64) {
     tokio::spawn(async move {
         let mut sys = System::new();
         let mut disks = sysinfo::Disks::new_with_refreshed_list();

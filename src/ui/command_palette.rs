@@ -90,10 +90,7 @@ pub fn build_command_list(keymap: &KeyMap) -> Vec<CommandEntry> {
 }
 
 /// Filter commands by substring match on display name or description (case-insensitive).
-pub fn filter_commands(
-    commands: &[CommandEntry],
-    query: &str,
-) -> Vec<CommandEntry> {
+pub fn filter_commands(commands: &[CommandEntry], query: &str) -> Vec<CommandEntry> {
     if query.is_empty() {
         return commands.to_vec();
     }
@@ -211,46 +208,202 @@ pub fn action_display_name(action: &Action) -> &str {
 /// Returns (Action, display_name, description).
 fn all_actions() -> Vec<(Action, String, String)> {
     vec![
-        (Action::Quit, "Quit".into(), "Exit pane and close the session".into()),
-        (Action::NewWorkspace, "New Workspace".into(), "Create a new workspace".into()),
-        (Action::CloseWorkspace, "Close Workspace".into(), "Close the current workspace".into()),
-        (Action::NewTab, "New Tab".into(), "Open a new tab in the current window".into()),
-        (Action::DevServerInput, "New Dev Server Tab".into(), "Open a dev server tab".into()),
-        (Action::NextTab, "Next Tab".into(), "Switch to the next tab".into()),
-        (Action::PrevTab, "Previous Tab".into(), "Switch to the previous tab".into()),
-        (Action::CloseTab, "Close Tab".into(), "Close the current tab".into()),
-        (Action::SplitHorizontal, "Split Right".into(), "Split the focused window horizontally".into()),
-        (Action::SplitVertical, "Split Down".into(), "Split the focused window vertically".into()),
-        (Action::RestartPane, "Restart Pane".into(), "Restart the exited pane process".into()),
-        (Action::FocusLeft, "Focus Left".into(), "Move focus to the left window".into()),
-        (Action::FocusDown, "Focus Down".into(), "Move focus to the window below".into()),
-        (Action::FocusUp, "Focus Up".into(), "Move focus to the window above".into()),
-        (Action::FocusRight, "Focus Right".into(), "Move focus to the right window".into()),
-        (Action::MoveTabLeft, "Move Tab Left".into(), "Move the current tab to the left window".into()),
-        (Action::MoveTabDown, "Move Tab Down".into(), "Move the current tab to the window below".into()),
-        (Action::MoveTabUp, "Move Tab Up".into(), "Move the current tab to the window above".into()),
-        (Action::MoveTabRight, "Move Tab Right".into(), "Move the current tab to the right window".into()),
-        (Action::ResizeShrinkH, "Shrink Horizontally".into(), "Decrease the focused window width".into()),
-        (Action::ResizeGrowH, "Grow Horizontally".into(), "Increase the focused window width".into()),
-        (Action::ResizeGrowV, "Grow Vertically".into(), "Increase the focused window height".into()),
-        (Action::ResizeShrinkV, "Shrink Vertically".into(), "Decrease the focused window height".into()),
-        (Action::Equalize, "Equalize Panes".into(), "Reset all split ratios to equal".into()),
-        (Action::MaximizeFocused, "Maximize Focused".into(), "Toggle maximize the focused window".into()),
-        (Action::ToggleZoom, "Toggle Zoom".into(), "Toggle full-screen zoom on the focused window".into()),
-        (Action::ToggleFloat, "Toggle Float".into(), "Toggle floating mode for the focused window".into()),
-        (Action::NewFloat, "New Float".into(), "Create a new floating window".into()),
-        (Action::SessionPicker, "Session Picker".into(), "Open the session picker".into()),
+        (
+            Action::Quit,
+            "Quit".into(),
+            "Exit pane and close the session".into(),
+        ),
+        (
+            Action::NewWorkspace,
+            "New Workspace".into(),
+            "Create a new workspace".into(),
+        ),
+        (
+            Action::CloseWorkspace,
+            "Close Workspace".into(),
+            "Close the current workspace".into(),
+        ),
+        (
+            Action::NewTab,
+            "New Tab".into(),
+            "Open a new tab in the current window".into(),
+        ),
+        (
+            Action::DevServerInput,
+            "New Dev Server Tab".into(),
+            "Open a dev server tab".into(),
+        ),
+        (
+            Action::NextTab,
+            "Next Tab".into(),
+            "Switch to the next tab".into(),
+        ),
+        (
+            Action::PrevTab,
+            "Previous Tab".into(),
+            "Switch to the previous tab".into(),
+        ),
+        (
+            Action::CloseTab,
+            "Close Tab".into(),
+            "Close the current tab".into(),
+        ),
+        (
+            Action::SplitHorizontal,
+            "Split Right".into(),
+            "Split the focused window horizontally".into(),
+        ),
+        (
+            Action::SplitVertical,
+            "Split Down".into(),
+            "Split the focused window vertically".into(),
+        ),
+        (
+            Action::RestartPane,
+            "Restart Pane".into(),
+            "Restart the exited pane process".into(),
+        ),
+        (
+            Action::FocusLeft,
+            "Focus Left".into(),
+            "Move focus to the left window".into(),
+        ),
+        (
+            Action::FocusDown,
+            "Focus Down".into(),
+            "Move focus to the window below".into(),
+        ),
+        (
+            Action::FocusUp,
+            "Focus Up".into(),
+            "Move focus to the window above".into(),
+        ),
+        (
+            Action::FocusRight,
+            "Focus Right".into(),
+            "Move focus to the right window".into(),
+        ),
+        (
+            Action::MoveTabLeft,
+            "Move Tab Left".into(),
+            "Move the current tab to the left window".into(),
+        ),
+        (
+            Action::MoveTabDown,
+            "Move Tab Down".into(),
+            "Move the current tab to the window below".into(),
+        ),
+        (
+            Action::MoveTabUp,
+            "Move Tab Up".into(),
+            "Move the current tab to the window above".into(),
+        ),
+        (
+            Action::MoveTabRight,
+            "Move Tab Right".into(),
+            "Move the current tab to the right window".into(),
+        ),
+        (
+            Action::ResizeShrinkH,
+            "Shrink Horizontally".into(),
+            "Decrease the focused window width".into(),
+        ),
+        (
+            Action::ResizeGrowH,
+            "Grow Horizontally".into(),
+            "Increase the focused window width".into(),
+        ),
+        (
+            Action::ResizeGrowV,
+            "Grow Vertically".into(),
+            "Increase the focused window height".into(),
+        ),
+        (
+            Action::ResizeShrinkV,
+            "Shrink Vertically".into(),
+            "Decrease the focused window height".into(),
+        ),
+        (
+            Action::Equalize,
+            "Equalize Panes".into(),
+            "Reset all split ratios to equal".into(),
+        ),
+        (
+            Action::MaximizeFocused,
+            "Maximize Focused".into(),
+            "Toggle maximize the focused window".into(),
+        ),
+        (
+            Action::ToggleZoom,
+            "Toggle Zoom".into(),
+            "Toggle full-screen zoom on the focused window".into(),
+        ),
+        (
+            Action::ToggleFloat,
+            "Toggle Float".into(),
+            "Toggle floating mode for the focused window".into(),
+        ),
+        (
+            Action::NewFloat,
+            "New Float".into(),
+            "Create a new floating window".into(),
+        ),
+        (
+            Action::SessionPicker,
+            "Session Picker".into(),
+            "Open the session picker".into(),
+        ),
         (Action::Help, "Help".into(), "Show keybinding help".into()),
-        (Action::ScrollMode, "Scroll Mode".into(), "Enter scroll mode for the focused pane".into()),
-        (Action::CopyMode, "Copy Mode".into(), "Enter copy mode with vim-style selection".into()),
-        (Action::PasteClipboard, "Paste from Clipboard".into(), "Paste system clipboard into the focused pane".into()),
-        (Action::ToggleSyncPanes, "Toggle Sync Panes".into(), "Broadcast input to all panes in workspace".into()),
-        (Action::RenameWindow, "Rename Window".into(), "Rename the current window".into()),
-        (Action::RenamePane, "Rename Pane".into(), "Rename the current pane".into()),
-        (Action::Detach, "Detach".into(), "Detach from the session".into()),
-        (Action::SelectMode, "Select Mode".into(), "Toggle select mode for window navigation".into()),
-        (Action::EnterInteract, "Enter Interact Mode".into(), "Switch to interact mode (forward keys to PTY)".into()),
-        (Action::EnterNormal, "Enter Normal Mode".into(), "Switch to normal mode (vim-style navigation)".into()),
+        (
+            Action::ScrollMode,
+            "Scroll Mode".into(),
+            "Enter scroll mode for the focused pane".into(),
+        ),
+        (
+            Action::CopyMode,
+            "Copy Mode".into(),
+            "Enter copy mode with vim-style selection".into(),
+        ),
+        (
+            Action::PasteClipboard,
+            "Paste from Clipboard".into(),
+            "Paste system clipboard into the focused pane".into(),
+        ),
+        (
+            Action::ToggleSyncPanes,
+            "Toggle Sync Panes".into(),
+            "Broadcast input to all panes in workspace".into(),
+        ),
+        (
+            Action::RenameWindow,
+            "Rename Window".into(),
+            "Rename the current window".into(),
+        ),
+        (
+            Action::RenamePane,
+            "Rename Pane".into(),
+            "Rename the current pane".into(),
+        ),
+        (
+            Action::Detach,
+            "Detach".into(),
+            "Detach from the session".into(),
+        ),
+        (
+            Action::SelectMode,
+            "Select Mode".into(),
+            "Toggle select mode for window navigation".into(),
+        ),
+        (
+            Action::EnterInteract,
+            "Enter Interact Mode".into(),
+            "Switch to interact mode (forward keys to PTY)".into(),
+        ),
+        (
+            Action::EnterNormal,
+            "Enter Normal Mode".into(),
+            "Switch to normal mode (vim-style navigation)".into(),
+        ),
     ]
 }
 
@@ -312,7 +465,8 @@ pub fn render(state: &CommandPaletteState, theme: &Theme, frame: &mut Frame, are
             } else {
                 Style::default().fg(Color::White)
             };
-            let hint_text = entry.keybind
+            let hint_text = entry
+                .keybind
                 .as_ref()
                 .map(|h| format!("  {}", h))
                 .unwrap_or_default();
@@ -459,6 +613,9 @@ mod tests {
         state.input = "tab".to_string();
         state.update_filter();
         assert!(state.filtered.len() < total);
-        assert!(state.filtered.iter().all(|e| e.name.to_lowercase().contains("tab")));
+        assert!(state
+            .filtered
+            .iter()
+            .all(|e| e.name.to_lowercase().contains("tab")));
     }
 }

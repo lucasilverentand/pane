@@ -46,7 +46,14 @@ impl ClientRegistry {
     }
 
     async fn register(&self, id: u64, width: u16, height: u16, active_workspace: usize) {
-        self.inner.lock().await.insert(id, ClientInfo { width, height, active_workspace });
+        self.inner.lock().await.insert(
+            id,
+            ClientInfo {
+                width,
+                height,
+                active_workspace,
+            },
+        );
     }
 
     async fn update_size(&self, id: u64, width: u16, height: u16) {
@@ -222,9 +229,16 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
                         let clients = clients.clone();
                         let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
                         tokio::spawn(async move {
-                            if let Err(e) =
-                                handle_client(stream, state, id_map, broadcast_tx, broadcast_rx, clients, client_id)
-                                    .await
+                            if let Err(e) = handle_client(
+                                stream,
+                                state,
+                                id_map,
+                                broadcast_tx,
+                                broadcast_rx,
+                                clients,
+                                client_id,
+                            )
+                            .await
                             {
                                 eprintln!("pane: client error: {}", e);
                             }
@@ -243,9 +257,8 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
     let broadcast_tx_term = broadcast_tx.clone();
     let sock_path_clone = sock_path.clone();
     tokio::spawn(async move {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to register SIGTERM handler");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
             _ = sigterm.recv() => {}
@@ -262,9 +275,8 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
     // Set up SIGHUP handler for config reload
     let state_clone = Arc::clone(&state);
     tokio::spawn(async move {
-        let mut sighup =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-                .expect("failed to register SIGHUP handler");
+        let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+            .expect("failed to register SIGHUP handler");
         loop {
             sighup.recv().await;
             let new_config = Config::load();
@@ -396,33 +408,72 @@ async fn handle_client(
                 Ok(parsed_cmd) => {
                     let mut state_guard = state.lock().await;
                     let mut id_map_guard = id_map.lock().await;
-                    match crate::server::command::execute(&parsed_cmd, &mut state_guard, &mut id_map_guard, &broadcast_tx) {
+                    match crate::server::command::execute(
+                        &parsed_cmd,
+                        &mut state_guard,
+                        &mut id_map_guard,
+                        &broadcast_tx,
+                    ) {
                         Ok(crate::server::command::CommandResult::Ok(output)) => {
-                            ServerResponse::CommandOutput { output, pane_id: None, window_id: None, success: true }
+                            ServerResponse::CommandOutput {
+                                output,
+                                pane_id: None,
+                                window_id: None,
+                                success: true,
+                            }
                         }
-                        Ok(crate::server::command::CommandResult::OkWithId { output, pane_id, window_id }) => {
-                            ServerResponse::CommandOutput { output, pane_id, window_id, success: true }
-                        }
+                        Ok(crate::server::command::CommandResult::OkWithId {
+                            output,
+                            pane_id,
+                            window_id,
+                        }) => ServerResponse::CommandOutput {
+                            output,
+                            pane_id,
+                            window_id,
+                            success: true,
+                        },
                         Ok(crate::server::command::CommandResult::LayoutChanged) => {
                             // Also broadcast the layout change to connected TUI clients
                             let render_state = RenderState::from_server_state(&state_guard);
-                            let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
-                            ServerResponse::CommandOutput { output: String::new(), pane_id: None, window_id: None, success: true }
+                            let _ =
+                                broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
+                            ServerResponse::CommandOutput {
+                                output: String::new(),
+                                pane_id: None,
+                                window_id: None,
+                                success: true,
+                            }
                         }
                         Ok(crate::server::command::CommandResult::SessionEnded) => {
-                            ServerResponse::CommandOutput { output: String::new(), pane_id: None, window_id: None, success: true }
+                            ServerResponse::CommandOutput {
+                                output: String::new(),
+                                pane_id: None,
+                                window_id: None,
+                                success: true,
+                            }
                         }
                         Ok(crate::server::command::CommandResult::DetachRequested) => {
-                            ServerResponse::CommandOutput { output: String::new(), pane_id: None, window_id: None, success: true }
+                            ServerResponse::CommandOutput {
+                                output: String::new(),
+                                pane_id: None,
+                                window_id: None,
+                                success: true,
+                            }
                         }
-                        Err(e) => {
-                            ServerResponse::CommandOutput { output: e.to_string(), pane_id: None, window_id: None, success: false }
-                        }
+                        Err(e) => ServerResponse::CommandOutput {
+                            output: e.to_string(),
+                            pane_id: None,
+                            window_id: None,
+                            success: false,
+                        },
                     }
                 }
-                Err(e) => {
-                    ServerResponse::CommandOutput { output: format!("parse error: {}", e), pane_id: None, window_id: None, success: false }
-                }
+                Err(e) => ServerResponse::CommandOutput {
+                    output: format!("parse error: {}", e),
+                    pane_id: None,
+                    window_id: None,
+                    success: false,
+                },
             }
         };
         framing::send(&mut stream, &result).await?;
@@ -448,7 +499,9 @@ async fn handle_client(
     {
         let state_guard = state.lock().await;
         let (w, h) = state_guard.last_size;
-        clients.register(client_id, w, h, state_guard.active_workspace).await;
+        clients
+            .register(client_id, w, h, state_guard.active_workspace)
+            .await;
         let count = clients.count().await as u32;
         let _ = broadcast_tx.send(ServerResponse::ClientCountChanged(count));
     }
@@ -458,11 +511,7 @@ async fn handle_client(
         let state = state.lock().await;
         let client_ws = clients.get_active_workspace(client_id).await.unwrap_or(0);
         let render_state = RenderState::for_client(&state, client_ws);
-        framing::send(
-            &mut stream,
-            &ServerResponse::LayoutChanged { render_state },
-        )
-        .await?;
+        framing::send(&mut stream, &ServerResponse::LayoutChanged { render_state }).await?;
     }
 
     // Split the stream for bidirectional communication
@@ -658,9 +707,7 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
     // Check fold bar clicks
     for rp in &resolved {
         if let crate::layout::ResolvedPane::Folded {
-            id: group_id,
-            rect,
-            ..
+            id: group_id, rect, ..
         } = rp
         {
             if rect.width == 0 || rect.height == 0 {
@@ -683,28 +730,22 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
             if x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height {
                 // Check tab bar click before focusing the group
                 if let Some(group) = state.active_workspace().groups.get(group_id) {
-                    if let Some(tab_area) =
-                        crate::ui::window_view::tab_bar_area(group, *rect)
-                    {
+                    if let Some(tab_area) = crate::ui::window_view::tab_bar_area(group, *rect) {
                         let layout = crate::ui::window_view::tab_bar_layout(
                             group,
                             &state.config.theme,
                             tab_area,
                         );
-                        if let Some(click) =
-                            crate::ui::window_view::tab_bar_hit_test(&layout, x, y)
+                        if let Some(click) = crate::ui::window_view::tab_bar_hit_test(&layout, x, y)
                         {
                             state.active_workspace_mut().active_group = *group_id;
                             match click {
                                 crate::ui::window_view::TabBarClick::Tab(i) => {
-                                    state
-                                        .active_workspace_mut()
-                                        .active_group_mut()
-                                        .active_tab = i;
+                                    state.active_workspace_mut().active_group_mut().active_tab = i;
                                 }
                                 crate::ui::window_view::TabBarClick::NewTab => {
                                     let cols = w.saturating_sub(4);
-                                    let rows = h.saturating_sub(3);
+                                    let rows = h.saturating_sub(2 + bar_h + 1);
                                     let _ = state.add_tab_to_active_group(
                                         crate::window::TabKind::Shell,
                                         None,
@@ -734,11 +775,15 @@ fn handle_mouse_drag_server(state: &mut ServerState, x: u16, y: u16) {
     let body = drag.body;
     let new_ratio = match drag.direction {
         crate::layout::SplitDirection::Horizontal => {
-            if body.width == 0 { return; }
+            if body.width == 0 {
+                return;
+            }
             ((x.saturating_sub(body.x)) as f64) / (body.width as f64)
         }
         crate::layout::SplitDirection::Vertical => {
-            if body.height == 0 { return; }
+            if body.height == 0 {
+                return;
+            }
             ((y.saturating_sub(body.y)) as f64) / (body.height as f64)
         }
     };
@@ -766,19 +811,24 @@ async fn handle_command(
                 state.active_workspace = cws;
             }
             let mut id_map = id_map.lock().await;
-            let result = crate::server::command::execute(&parsed_cmd, &mut state, &mut id_map, broadcast_tx);
+            let result =
+                crate::server::command::execute(&parsed_cmd, &mut state, &mut id_map, broadcast_tx);
             // Sync back: command may have changed active_workspace (e.g. new-workspace, next-workspace)
-            clients.set_active_workspace(client_id, state.active_workspace).await;
+            clients
+                .set_active_workspace(client_id, state.active_workspace)
+                .await;
             match result {
                 Ok(crate::server::command::CommandResult::Ok(output)) => {
                     if !output.is_empty() {
                         // Send output as a display message response
-                        let _ = broadcast_tx.send(ServerResponse::Error(format!("[cmd] {}", output)));
+                        let _ =
+                            broadcast_tx.send(ServerResponse::Error(format!("[cmd] {}", output)));
                     }
                 }
                 Ok(crate::server::command::CommandResult::OkWithId { output, .. }) => {
                     if !output.is_empty() {
-                        let _ = broadcast_tx.send(ServerResponse::Error(format!("[cmd] {}", output)));
+                        let _ =
+                            broadcast_tx.send(ServerResponse::Error(format!("[cmd] {}", output)));
                     }
                 }
                 Ok(crate::server::command::CommandResult::LayoutChanged) => {
@@ -841,7 +891,10 @@ pub fn start_daemon(session_name: &str) -> Result<()> {
         }
     }
 
-    anyhow::bail!("timed out waiting for daemon to start for session '{}'", session_name)
+    anyhow::bail!(
+        "timed out waiting for daemon to start for session '{}'",
+        session_name
+    )
 }
 
 fn cleanup_stale_socket(path: &Path) {
@@ -926,9 +979,8 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let config = Config::default();
 
-        let state =
-            ServerState::new_session("test-session".to_string(), &event_tx, 80, 24, config)
-                .unwrap();
+        let state = ServerState::new_session("test-session".to_string(), &event_tx, 80, 24, config)
+            .unwrap();
         let state = Arc::new(Mutex::new(state));
         let id_map = Arc::new(Mutex::new(IdMap::new()));
         let clients = ClientRegistry::new();
@@ -950,7 +1002,10 @@ mod tests {
                                 pane.process_output(&bytes);
                             }
                         }
-                        let _ = btx_clone.send(ServerResponse::PaneOutput { pane_id, data: bytes });
+                        let _ = btx_clone.send(ServerResponse::PaneOutput {
+                            pane_id,
+                            data: bytes,
+                        });
                     }
                     AppEvent::PtyExited { pane_id } => {
                         let _ = btx_clone.send(ServerResponse::PaneExited { pane_id });
@@ -997,7 +1052,10 @@ mod tests {
             let resp: ServerResponse = framing::recv_required(stream).await.unwrap();
             match resp {
                 ServerResponse::LayoutChanged { .. } | ServerResponse::ClientCountChanged(_) => {}
-                other => panic!("expected LayoutChanged or ClientCountChanged, got {:?}", other),
+                other => panic!(
+                    "expected LayoutChanged or ClientCountChanged, got {:?}",
+                    other
+                ),
             }
         }
     }
@@ -1219,9 +1277,15 @@ mod tests {
         .unwrap()
         .unwrap();
         match resp {
-            ServerResponse::CommandOutput { output, success, .. } => {
+            ServerResponse::CommandOutput {
+                output, success, ..
+            } => {
                 assert!(success, "expected success, got output: {}", output);
-                assert!(output.contains("@0"), "expected window @0 in output: {}", output);
+                assert!(
+                    output.contains("@0"),
+                    "expected window @0 in output: {}",
+                    output
+                );
             }
             other => panic!("expected CommandOutput, got {:?}", other),
         }
@@ -1283,9 +1347,15 @@ mod tests {
         .unwrap()
         .unwrap();
         match resp {
-            ServerResponse::CommandOutput { success, output, .. } => {
+            ServerResponse::CommandOutput {
+                success, output, ..
+            } => {
                 assert!(!success, "expected failure for unknown command");
-                assert!(output.contains("parse error"), "expected parse error, got: {}", output);
+                assert!(
+                    output.contains("parse error"),
+                    "expected parse error, got: {}",
+                    output
+                );
             }
             other => panic!("expected CommandOutput, got {:?}", other),
         }
@@ -1314,10 +1384,18 @@ mod tests {
         .unwrap()
         .unwrap();
         match resp {
-            ServerResponse::CommandOutput { success, pane_id, window_id, .. } => {
+            ServerResponse::CommandOutput {
+                success,
+                pane_id,
+                window_id,
+                ..
+            } => {
                 assert!(success, "split-window should succeed");
                 assert!(pane_id.is_some(), "split-window should return a pane_id");
-                assert!(window_id.is_some(), "split-window should return a window_id");
+                assert!(
+                    window_id.is_some(),
+                    "split-window should return a window_id"
+                );
             }
             other => panic!("expected CommandOutput, got {:?}", other),
         }
@@ -1344,7 +1422,12 @@ mod tests {
         .unwrap()
         .unwrap();
         match resp {
-            ServerResponse::CommandOutput { success, pane_id, window_id, .. } => {
+            ServerResponse::CommandOutput {
+                success,
+                pane_id,
+                window_id,
+                ..
+            } => {
                 assert!(success, "new-window should succeed");
                 assert!(pane_id.is_some(), "new-window should return a pane_id");
                 assert!(window_id.is_some(), "new-window should return a window_id");
@@ -1374,7 +1457,12 @@ mod tests {
         .unwrap()
         .unwrap();
         match resp {
-            ServerResponse::CommandOutput { success, pane_id, window_id, .. } => {
+            ServerResponse::CommandOutput {
+                success,
+                pane_id,
+                window_id,
+                ..
+            } => {
                 assert!(success, "new-session should succeed");
                 assert!(pane_id.is_some(), "new-session should return a pane_id");
                 assert!(window_id.is_some(), "new-session should return a window_id");
@@ -1404,7 +1492,9 @@ mod tests {
         .unwrap()
         .unwrap();
         match resp {
-            ServerResponse::CommandOutput { success, output, .. } => {
+            ServerResponse::CommandOutput {
+                success, output, ..
+            } => {
                 assert!(success);
                 assert_eq!(output, "test-session", "should expand session name");
             }

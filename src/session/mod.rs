@@ -1,7 +1,7 @@
 pub mod store;
 
 use crate::layout::{LayoutNode, TabId};
-use crate::window::{WindowId, TabKind};
+use crate::window::{TabKind, WindowId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -70,8 +70,7 @@ impl Session {
                         let mut scrollback = Vec::new();
                         let rows = screen.size().0;
                         for row in 0..rows {
-                            let line =
-                                screen.contents_between(row, 0, row + 1, screen.size().1);
+                            let line = screen.contents_between(row, 0, row + 1, screen.size().1);
                             scrollback.push(line);
                         }
                         while scrollback

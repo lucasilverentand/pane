@@ -6,11 +6,10 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::event::AppEvent;
-use crate::layout::{LayoutParams, TabId, ResolvedPane, Side, SplitDirection};
-use crate::window::{Tab, Window, WindowId, TabKind};
+use crate::layout::{LayoutParams, ResolvedPane, Side, SplitDirection, TabId};
 use crate::system_stats::SystemStats;
+use crate::window::{Tab, TabKind, Window, WindowId};
 use crate::workspace::Workspace;
-
 
 /// Active drag state for mouse-driven split resizing.
 #[derive(Clone, Debug)]
@@ -41,7 +40,8 @@ pub struct ServerState {
 
 /// Auto-name a workspace: git repo basename → cwd basename → incremental number.
 fn auto_workspace_name(existing: &[Workspace]) -> String {
-    let used: std::collections::HashSet<&str> = existing.iter().map(|ws| ws.name.as_str()).collect();
+    let used: std::collections::HashSet<&str> =
+        existing.iter().map(|ws| ws.name.as_str()).collect();
 
     // Try git repo basename
     if let Ok(output) = std::process::Command::new("git")
@@ -151,7 +151,15 @@ impl ServerState {
             tmux_pane: "%0".to_string(),
         };
 
-        let pane = match Tab::spawn_with_env(pane_id, TabKind::Shell, cols, rows, event_tx.clone(), None, Some(tmux_env)) {
+        let pane = match Tab::spawn_with_env(
+            pane_id,
+            TabKind::Shell,
+            cols,
+            rows,
+            event_tx.clone(),
+            None,
+            Some(tmux_env),
+        ) {
             Ok(p) => p,
             Err(e) => Tab::spawn_error(pane_id, TabKind::Shell, &e.to_string()),
         };
@@ -267,11 +275,18 @@ impl ServerState {
                 tmux_pane: format!("%{}", pane_counter),
             };
             pane_counter += 1;
-            let pane =
-                match Tab::spawn_with_env(pane_id, TabKind::Shell, 80, 24, event_tx.clone(), None, Some(tmux_env)) {
-                    Ok(p) => p,
-                    Err(e) => Tab::spawn_error(pane_id, TabKind::Shell, &e.to_string()),
-                };
+            let pane = match Tab::spawn_with_env(
+                pane_id,
+                TabKind::Shell,
+                80,
+                24,
+                event_tx.clone(),
+                None,
+                Some(tmux_env),
+            ) {
+                Ok(p) => p,
+                Err(e) => Tab::spawn_error(pane_id, TabKind::Shell, &e.to_string()),
+            };
             let group = Window::new(group_id, pane);
             workspaces.push(Workspace::new("1".to_string(), group_id, group));
         }
@@ -338,7 +353,7 @@ impl ServerState {
         if w == 0 || h == 0 {
             return;
         }
-        let bar_h = 1u16;
+        let bar_h = self.workspace_bar_height();
         let body_height = h.saturating_sub(1 + bar_h);
         let body = ratatui::layout::Rect::new(0, bar_h, w, body_height);
         let min_pw = self.config.behavior.min_pane_width;
@@ -364,10 +379,12 @@ impl ServerState {
         let params = LayoutParams::from(&self.config.behavior);
 
         let ws = &self.workspaces[self.active_workspace];
-        let resolved = ws.layout.resolve_with_fold(body, params, &ws.leaf_min_sizes);
-        let is_folded = resolved.iter().any(|rp| {
-            matches!(rp, ResolvedPane::Folded { id: fid, .. } if *fid == id)
-        });
+        let resolved = ws
+            .layout
+            .resolve_with_fold(body, params, &ws.leaf_min_sizes);
+        let is_folded = resolved
+            .iter()
+            .any(|rp| matches!(rp, ResolvedPane::Folded { id: fid, .. } if *fid == id));
 
         let ws = &mut self.workspaces[self.active_workspace];
         ws.active_group = id;
@@ -417,11 +434,18 @@ impl ServerState {
     ) -> anyhow::Result<TabId> {
         let pane_id = TabId::new_v4();
         let tmux_env = self.next_tmux_env();
-        let pane =
-            match Tab::spawn_with_env(pane_id, kind.clone(), cols, rows, self.event_tx.clone(), command, Some(tmux_env)) {
-                Ok(p) => p,
-                Err(e) => Tab::spawn_error(pane_id, kind, &e.to_string()),
-            };
+        let pane = match Tab::spawn_with_env(
+            pane_id,
+            kind.clone(),
+            cols,
+            rows,
+            self.event_tx.clone(),
+            command,
+            Some(tmux_env),
+        ) {
+            Ok(p) => p,
+            Err(e) => Tab::spawn_error(pane_id, kind, &e.to_string()),
+        };
 
         let ws = self.active_workspace_mut();
         if let Some(group) = ws.groups.get_mut(&ws.active_group) {
@@ -445,11 +469,18 @@ impl ServerState {
         let pane_id = TabId::new_v4();
         let tmux_env = self.next_tmux_env();
 
-        let pane =
-            match Tab::spawn_with_env(pane_id, kind.clone(), cols, rows, self.event_tx.clone(), None, Some(tmux_env)) {
-                Ok(p) => p,
-                Err(e) => Tab::spawn_error(pane_id, kind, &e.to_string()),
-            };
+        let pane = match Tab::spawn_with_env(
+            pane_id,
+            kind.clone(),
+            cols,
+            rows,
+            self.event_tx.clone(),
+            None,
+            Some(tmux_env),
+        ) {
+            Ok(p) => p,
+            Err(e) => Tab::spawn_error(pane_id, kind, &e.to_string()),
+        };
 
         let group = Window::new(new_group_id, pane);
         let ws = self.active_workspace_mut();
@@ -510,7 +541,12 @@ impl ServerState {
             let ws = self.active_workspace();
             if let Some(group) = ws.groups.get(&active_group_id) {
                 let pane = group.active_tab();
-                (pane.exited, pane.kind.clone(), pane.command.clone(), pane.id)
+                (
+                    pane.exited,
+                    pane.kind.clone(),
+                    pane.command.clone(),
+                    pane.id,
+                )
             } else {
                 return Ok(());
             }
@@ -521,11 +557,18 @@ impl ServerState {
         }
 
         let tmux_env = self.next_tmux_env();
-        let new_pane =
-            match Tab::spawn_with_env(id, kind.clone(), cols, rows, self.event_tx.clone(), command, Some(tmux_env)) {
-                Ok(p) => p,
-                Err(e) => Tab::spawn_error(id, kind, &e.to_string()),
-            };
+        let new_pane = match Tab::spawn_with_env(
+            id,
+            kind.clone(),
+            cols,
+            rows,
+            self.event_tx.clone(),
+            command,
+            Some(tmux_env),
+        ) {
+            Ok(p) => p,
+            Err(e) => Tab::spawn_error(id, kind, &e.to_string()),
+        };
 
         let ws = self.active_workspace_mut();
         if let Some(group) = ws.groups.get_mut(&active_group_id) {
@@ -570,7 +613,11 @@ impl ServerState {
     }
 
     pub fn workspace_bar_height(&self) -> u16 {
-        if self.workspaces.len() <= 1 { 0 } else { 1 }
+        if self.workspaces.is_empty() {
+            0
+        } else {
+            3
+        }
     }
 
     pub fn scroll_active_tab(&mut self, f: impl FnOnce(&mut Tab)) {
@@ -579,15 +626,14 @@ impl ServerState {
             f(group.active_tab_mut());
         }
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::layout::{TabId, SplitDirection};
-    use crate::window::{Tab, Window, WindowId, TabKind};
+    use crate::layout::{SplitDirection, TabId};
+    use crate::window::{Tab, TabKind, Window, WindowId};
 
     /// Build a ServerState without PTY spawning. Uses `Tab::spawn_error` for all panes.
     fn make_test_state() -> (ServerState, mpsc::UnboundedReceiver<AppEvent>) {
@@ -614,7 +660,12 @@ mod tests {
     }
 
     /// Build a ServerState with two groups in a horizontal split.
-    fn make_split_state() -> (ServerState, WindowId, WindowId, mpsc::UnboundedReceiver<AppEvent>) {
+    fn make_split_state() -> (
+        ServerState,
+        WindowId,
+        WindowId,
+        mpsc::UnboundedReceiver<AppEvent>,
+    ) {
         let (event_tx, rx) = mpsc::unbounded_channel();
         let gid1 = WindowId::new_v4();
         let gid2 = WindowId::new_v4();
@@ -776,7 +827,11 @@ mod tests {
         // Add a second tab
         let pid2 = TabId::new_v4();
         let p2 = Tab::spawn_error(pid2, TabKind::Shell, "tab2");
-        state.workspaces[0].groups.get_mut(&gid).unwrap().add_tab(p2);
+        state.workspaces[0]
+            .groups
+            .get_mut(&gid)
+            .unwrap()
+            .add_tab(p2);
         assert_eq!(state.workspaces[0].groups[&gid].tab_count(), 2);
 
         let should_quit = state.handle_pty_exited(pid2);
@@ -820,7 +875,11 @@ mod tests {
         // Add a second tab so the pane survives (multi-tab removes tab, doesn't quit)
         let pid2 = TabId::new_v4();
         let p2 = Tab::spawn_error(pid2, TabKind::Shell, "tab2");
-        state.workspaces[0].groups.get_mut(&gid).unwrap().add_tab(p2);
+        state.workspaces[0]
+            .groups
+            .get_mut(&gid)
+            .unwrap()
+            .add_tab(p2);
         // Reset exited flag on the first pane
         state.workspaces[0].groups.get_mut(&gid).unwrap().tabs[0].exited = false;
         let pane_id = state.workspaces[0].groups[&gid].tabs[0].id;
@@ -881,7 +940,11 @@ mod tests {
         // Add a second tab to gid1 so we can move one
         let pid_extra = TabId::new_v4();
         let p_extra = Tab::spawn_error(pid_extra, TabKind::Shell, "extra");
-        state.workspaces[0].groups.get_mut(&gid1).unwrap().add_tab(p_extra);
+        state.workspaces[0]
+            .groups
+            .get_mut(&gid1)
+            .unwrap()
+            .add_tab(p_extra);
         assert_eq!(state.workspaces[0].groups[&gid1].tab_count(), 2);
         assert_eq!(state.workspaces[0].groups[&gid2].tab_count(), 1);
 
@@ -910,7 +973,10 @@ mod tests {
         let gid = state.workspaces[0].active_group;
         let tab_count_before = state.workspaces[0].groups[&gid].tab_count();
         state.move_tab_to_neighbor(SplitDirection::Horizontal, crate::layout::Side::Second);
-        assert_eq!(state.workspaces[0].groups[&gid].tab_count(), tab_count_before);
+        assert_eq!(
+            state.workspaces[0].groups[&gid].tab_count(),
+            tab_count_before
+        );
     }
 
     // ---- add_tab_to_active_group / split_active_group ----
@@ -918,32 +984,24 @@ mod tests {
     #[tokio::test]
     async fn test_add_tab_to_active_group() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
-        let mut state = ServerState::new_session(
-            "test".to_string(),
-            &event_tx,
-            80,
-            24,
-            Config::default(),
-        )
-        .unwrap();
+        let mut state =
+            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+                .unwrap();
         let gid = state.active_workspace().active_group;
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 1);
 
-        state.add_tab_to_active_group(TabKind::Shell, None, 78, 22).unwrap();
+        state
+            .add_tab_to_active_group(TabKind::Shell, None, 78, 22)
+            .unwrap();
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 2);
     }
 
     #[tokio::test]
     async fn test_split_active_group() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
-        let mut state = ServerState::new_session(
-            "test".to_string(),
-            &event_tx,
-            80,
-            24,
-            Config::default(),
-        )
-        .unwrap();
+        let mut state =
+            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+                .unwrap();
         assert_eq!(state.active_workspace().groups.len(), 1);
 
         let (new_gid, _new_pid) = state
@@ -960,14 +1018,9 @@ mod tests {
     #[tokio::test]
     async fn test_new_workspace_names_increment() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
-        let mut state = ServerState::new_session(
-            "test".to_string(),
-            &event_tx,
-            80,
-            24,
-            Config::default(),
-        )
-        .unwrap();
+        let mut state =
+            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+                .unwrap();
         // First workspace gets an auto-generated name
         let first_name = state.workspaces[0].name.clone();
         assert!(!first_name.is_empty());
@@ -985,14 +1038,9 @@ mod tests {
     #[tokio::test]
     async fn test_close_workspace_adjusts_active_index() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
-        let mut state = ServerState::new_session(
-            "test".to_string(),
-            &event_tx,
-            80,
-            24,
-            Config::default(),
-        )
-        .unwrap();
+        let mut state =
+            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+                .unwrap();
         state.new_workspace(80, 24).unwrap();
         state.new_workspace(80, 24).unwrap();
         assert_eq!(state.workspaces.len(), 3);
@@ -1054,14 +1102,9 @@ mod tests {
     #[tokio::test]
     async fn test_server_state_new_session() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
-        let state = ServerState::new_session(
-            "test".to_string(),
-            &event_tx,
-            80,
-            24,
-            Config::default(),
-        )
-        .unwrap();
+        let state =
+            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+                .unwrap();
         assert_eq!(state.session_name, "test");
         assert_eq!(state.workspaces.len(), 1);
         assert_eq!(state.active_workspace, 0);
@@ -1070,14 +1113,9 @@ mod tests {
     #[tokio::test]
     async fn test_server_state_workspace_accessors() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
-        let state = ServerState::new_session(
-            "test".to_string(),
-            &event_tx,
-            80,
-            24,
-            Config::default(),
-        )
-        .unwrap();
+        let state =
+            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+                .unwrap();
         let ws = state.active_workspace();
         assert_eq!(ws.groups.len(), 1);
     }
@@ -1085,14 +1123,9 @@ mod tests {
     #[tokio::test]
     async fn test_server_state_close_workspace_single() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
-        let mut state = ServerState::new_session(
-            "test".to_string(),
-            &event_tx,
-            80,
-            24,
-            Config::default(),
-        )
-        .unwrap();
+        let mut state =
+            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+                .unwrap();
         // Closing last workspace signals shutdown
         assert!(state.close_workspace());
         assert_eq!(state.workspaces.len(), 1);
@@ -1101,14 +1134,9 @@ mod tests {
     #[tokio::test]
     async fn test_server_state_new_workspace() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
-        let mut state = ServerState::new_session(
-            "test".to_string(),
-            &event_tx,
-            80,
-            24,
-            Config::default(),
-        )
-        .unwrap();
+        let mut state =
+            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+                .unwrap();
         state.new_workspace(80, 24).unwrap();
         assert_eq!(state.workspaces.len(), 2);
         assert_eq!(state.active_workspace, 1);
@@ -1146,14 +1174,9 @@ mod tests {
     #[tokio::test]
     async fn test_last_pane_number() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
-        let mut state = ServerState::new_session(
-            "test".to_string(),
-            &event_tx,
-            80,
-            24,
-            Config::default(),
-        )
-        .unwrap();
+        let mut state =
+            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+                .unwrap();
         // new_session uses pane 0, so last_pane_number = 0 initially
         assert_eq!(state.last_pane_number(), 0);
 

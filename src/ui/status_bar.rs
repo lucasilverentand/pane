@@ -32,7 +32,10 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
     let (left, right) = match &client.mode {
         Mode::Normal => {
             let vars = build_client_vars(client);
-            let left = format!("[NORMAL] {}", format_string(&client.config.status_bar.left, &vars));
+            let left = format!(
+                "[NORMAL] {}",
+                format_string(&client.config.status_bar.left, &vars)
+            );
             let right = format_string(&client.config.status_bar.right, &vars);
             (left, right)
         }
@@ -48,7 +51,10 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
             let right = "j/k up/down  u/d page  g/G top/end  esc quit ".to_string();
             (mode_left, right)
         }
-        Mode::Help => (String::new(), "esc close  / search  j/k scroll ".to_string()),
+        Mode::Help => (
+            String::new(),
+            "esc close  / search  j/k scroll ".to_string(),
+        ),
         Mode::Select => {
             let title = client_pane_title(client);
             (
@@ -67,10 +73,7 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
             "[CMD] ".to_string(),
             "type to filter  enter run  esc cancel ".to_string(),
         ),
-        Mode::Confirm => (
-            String::new(),
-            "enter/y confirm  esc/n cancel ".to_string(),
-        ),
+        Mode::Confirm => (String::new(), "enter/y confirm  esc/n cancel ".to_string()),
         Mode::Leader => {
             let path_str = if let Some(ref ls) = client.leader_state {
                 let keys: Vec<String> = ls.path.iter().map(|k| format_leader_key(k)).collect();
@@ -82,10 +85,7 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
             } else {
                 "\\".to_string()
             };
-            (
-                format!("[LEADER] {}", path_str),
-                "esc cancel ".to_string(),
-            )
+            (format!("[LEADER] {}", path_str), "esc cancel ".to_string())
         }
         Mode::TabPicker => (
             "[NEW TAB] ".to_string(),
@@ -94,7 +94,9 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
     };
 
     // Build plugin segment string
-    let plugin_text: String = client.plugin_segments.iter()
+    let plugin_text: String = client
+        .plugin_segments
+        .iter()
         .flat_map(|segs| segs.iter())
         .map(|s| s.text.as_str())
         .collect::<Vec<_>>()
@@ -102,17 +104,19 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
 
     let left_len = left.len();
     let right_len = right.len();
-    let plugin_len = if plugin_text.is_empty() { 0 } else { plugin_text.len() + 2 }; // " │ " prefix
+    let plugin_len = if plugin_text.is_empty() {
+        0
+    } else {
+        plugin_text.len() + 2
+    }; // " │ " prefix
     let padding = (area.width as usize).saturating_sub(left_len + plugin_len + right_len);
 
-    let mut spans = vec![
-        Span::styled(
-            left,
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ];
+    let mut spans = vec![Span::styled(
+        left,
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD),
+    )];
     if !plugin_text.is_empty() {
         spans.push(Span::styled(
             format!(" │ {}", plugin_text),
@@ -146,7 +150,10 @@ fn build_client_vars(client: &Client) -> HashMap<String, String> {
     vars.insert("pane_title".to_string(), title);
 
     if let Some(ws) = client.active_workspace() {
-        vars.insert("session_name".to_string(), client.render_state.session_name.clone());
+        vars.insert(
+            "session_name".to_string(),
+            client.render_state.session_name.clone(),
+        );
         vars.insert("window_name".to_string(), ws.name.clone());
 
         let group_ids = ws.layout.group_ids();

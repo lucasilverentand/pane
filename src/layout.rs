@@ -37,8 +37,15 @@ impl From<&Behavior> for LayoutParams {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolvedPane {
-    Visible { id: TabId, rect: Rect },
-    Folded { id: TabId, rect: Rect, direction: SplitDirection },
+    Visible {
+        id: TabId,
+        rect: Rect,
+    },
+    Folded {
+        id: TabId,
+        rect: Rect,
+        direction: SplitDirection,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,7 +152,10 @@ impl LayoutNode {
     ) {
         match self {
             LayoutNode::Leaf(id) => {
-                result.push(ResolvedPane::Visible { id: *id, rect: area });
+                result.push(ResolvedPane::Visible {
+                    id: *id,
+                    rect: area,
+                });
             }
             LayoutNode::Split {
                 direction,
@@ -159,18 +169,12 @@ impl LayoutNode {
                 let (second_min_w, second_min_h) = second.subtree_min_size(params, leaf_mins);
 
                 let (total, first_size, first_min, second_min) = match direction {
-                    SplitDirection::Horizontal => (
-                        area.width,
-                        first_rect.width,
-                        first_min_w,
-                        second_min_w,
-                    ),
-                    SplitDirection::Vertical => (
-                        area.height,
-                        first_rect.height,
-                        first_min_h,
-                        second_min_h,
-                    ),
+                    SplitDirection::Horizontal => {
+                        (area.width, first_rect.width, first_min_w, second_min_w)
+                    }
+                    SplitDirection::Vertical => {
+                        (area.height, first_rect.height, first_min_h, second_min_h)
+                    }
                 };
                 let second_size = total.saturating_sub(first_size);
 
@@ -412,8 +416,7 @@ impl LayoutNode {
                     Self::fold_subtree(second, second_bar, fold_direction, result);
                 } else {
                     // Cross direction: split bar_rect perpendicular using ratio
-                    let (first_bar, second_bar) =
-                        Self::split_rects(direction, *ratio, bar_rect);
+                    let (first_bar, second_bar) = Self::split_rects(direction, *ratio, bar_rect);
                     Self::fold_subtree(first, first_bar, fold_direction, result);
                     Self::fold_subtree(second, second_bar, fold_direction, result);
                 }
@@ -437,9 +440,8 @@ impl LayoutNode {
                 let in_second = second.contains(target);
                 if in_first || in_second {
                     // Check if target is a direct child
-                    let is_direct =
-                        matches!(first.as_ref(), LayoutNode::Leaf(id) if *id == target)
-                            || matches!(second.as_ref(), LayoutNode::Leaf(id) if *id == target);
+                    let is_direct = matches!(first.as_ref(), LayoutNode::Leaf(id) if *id == target)
+                        || matches!(second.as_ref(), LayoutNode::Leaf(id) if *id == target);
                     if is_direct {
                         *ratio = 0.5;
                         return true;
@@ -509,12 +511,7 @@ impl LayoutNode {
     }
 
     /// Split a target pane into two, placing the new pane in the second position.
-    pub fn split_pane(
-        &mut self,
-        target: TabId,
-        direction: SplitDirection,
-        new_id: TabId,
-    ) -> bool {
+    pub fn split_pane(&mut self, target: TabId, direction: SplitDirection, new_id: TabId) -> bool {
         match self {
             LayoutNode::Leaf(id) if *id == target => {
                 *self = LayoutNode::Split {
@@ -553,7 +550,9 @@ impl LayoutNode {
                     return Some(focus);
                 }
                 // Recurse
-                first.close_pane(target).or_else(|| second.close_pane(target))
+                first
+                    .close_pane(target)
+                    .or_else(|| second.close_pane(target))
             }
         }
     }
@@ -644,9 +643,7 @@ impl LayoutNode {
                         NeighborResult::NeedFromParent => {
                             if *split_dir == direction && side == Side::First {
                                 // The neighbor is in the first subtree
-                                return Some(NeighborResult::Found(
-                                    first.edge_leaf(Side::Second),
-                                ));
+                                return Some(NeighborResult::Found(first.edge_leaf(Side::Second)));
                             }
                             return Some(NeighborResult::NeedFromParent);
                         }
@@ -753,7 +750,12 @@ impl LayoutNode {
 
     /// Hit-test split borders. Returns the path to the split node and direction
     /// if (x, y) is within 1 cell of a split border.
-    pub fn hit_test_split_border(&self, area: Rect, x: u16, y: u16) -> Option<(Vec<Side>, SplitDirection)> {
+    pub fn hit_test_split_border(
+        &self,
+        area: Rect,
+        x: u16,
+        y: u16,
+    ) -> Option<(Vec<Side>, SplitDirection)> {
         self.hit_test_border_inner(area, x, y, &mut Vec::new())
     }
 
@@ -764,20 +766,31 @@ impl LayoutNode {
         y: u16,
         path: &mut Vec<Side>,
     ) -> Option<(Vec<Side>, SplitDirection)> {
-        if let LayoutNode::Split { direction, ratio, first, second, .. } = self {
+        if let LayoutNode::Split {
+            direction,
+            ratio,
+            first,
+            second,
+            ..
+        } = self
+        {
             let (first_rect, second_rect) = Self::split_rects(direction, *ratio, area);
 
             // Check if the click is on the border between the two children
             let on_border = match direction {
                 SplitDirection::Horizontal => {
                     let border_x = first_rect.x + first_rect.width;
-                    x >= border_x.saturating_sub(1) && x <= border_x + 1
-                        && y >= area.y && y < area.y + area.height
+                    x >= border_x.saturating_sub(1)
+                        && x <= border_x + 1
+                        && y >= area.y
+                        && y < area.y + area.height
                 }
                 SplitDirection::Vertical => {
                     let border_y = first_rect.y + first_rect.height;
-                    y >= border_y.saturating_sub(1) && y <= border_y + 1
-                        && x >= area.x && x < area.x + area.width
+                    y >= border_y.saturating_sub(1)
+                        && y <= border_y + 1
+                        && x >= area.x
+                        && x < area.x + area.width
                 }
             };
 
@@ -1333,8 +1346,12 @@ mod tests {
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
         assert_eq!(resolved.len(), 2);
         // (false,false) case: fold_subtree pushes second first, then first resolves
-        let second_folded = resolved.iter().any(|rp| matches!(rp, ResolvedPane::Folded { id, .. } if *id == id2));
-        let first_visible = resolved.iter().any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id1));
+        let second_folded = resolved
+            .iter()
+            .any(|rp| matches!(rp, ResolvedPane::Folded { id, .. } if *id == id2));
+        let first_visible = resolved
+            .iter()
+            .any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id1));
         assert!(first_visible, "first (left) should be visible");
         assert!(second_folded, "second (right) should be folded");
     }
@@ -1464,7 +1481,10 @@ mod tests {
             // Outer ratio preserved — the inner split handled the unfold
             assert!((*ratio - 0.5).abs() < f64::EPSILON);
             // Inner ratio skewed to give id3 space
-            if let LayoutNode::Split { ratio: inner_ratio, .. } = second.as_ref() {
+            if let LayoutNode::Split {
+                ratio: inner_ratio, ..
+            } = second.as_ref()
+            {
                 assert!((*inner_ratio - 0.1).abs() < f64::EPSILON);
             }
         }
@@ -1496,7 +1516,10 @@ mod tests {
             // Outer ratio skewed to give space to right subtree
             assert!((*ratio - 0.1).abs() < f64::EPSILON);
             // Inner vertical ratio preserved at 0.3
-            if let LayoutNode::Split { ratio: inner_ratio, .. } = second.as_ref() {
+            if let LayoutNode::Split {
+                ratio: inner_ratio, ..
+            } = second.as_ref()
+            {
                 assert!((*inner_ratio - 0.3).abs() < f64::EPSILON);
             }
         }
@@ -1544,7 +1567,9 @@ mod tests {
 
         // Without leaf_mins: second folds
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-        let second_folded = resolved.iter().any(|rp| matches!(rp, ResolvedPane::Folded { id, .. } if *id == id2));
+        let second_folded = resolved
+            .iter()
+            .any(|rp| matches!(rp, ResolvedPane::Folded { id, .. } if *id == id2));
         assert!(second_folded, "second should fold without leaf_mins");
 
         // With leaf_min for id2: no fold (clamping works)
@@ -1575,7 +1600,9 @@ mod tests {
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &leaf_mins);
         assert_eq!(resolved.len(), 2);
         assert!(matches!(resolved[0], ResolvedPane::Visible { id, .. } if id == id1));
-        assert!(matches!(resolved[1], ResolvedPane::Visible { id, rect, .. } if id == id2 && rect.width >= 60));
+        assert!(
+            matches!(resolved[1], ResolvedPane::Visible { id, rect, .. } if id == id2 && rect.width >= 60)
+        );
     }
 
     #[test]
@@ -1593,8 +1620,12 @@ mod tests {
         let area = Rect::new(0, 0, 120, 10);
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
         // First visible, second folded (right/bottom folds at equal ratio)
-        let first_visible = resolved.iter().any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id1));
-        let second_folded = resolved.iter().any(|rp| matches!(rp, ResolvedPane::Folded { id, .. } if *id == id2));
+        let first_visible = resolved
+            .iter()
+            .any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id1));
+        let second_folded = resolved
+            .iter()
+            .any(|rp| matches!(rp, ResolvedPane::Folded { id, .. } if *id == id2));
         assert!(first_visible, "first (left) should be visible");
         assert!(second_folded, "second (right) should be folded");
     }
@@ -1623,26 +1654,32 @@ mod tests {
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
 
         // Left should be visible
-        let left_visible = resolved.iter().any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id_left));
+        let left_visible = resolved
+            .iter()
+            .any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id_left));
         assert!(left_visible, "left pane should be visible");
 
         // Both right panes should be folded
-        let right_folded: Vec<_> = resolved.iter().filter(|rp| matches!(rp, ResolvedPane::Folded { .. })).collect();
+        let right_folded: Vec<_> = resolved
+            .iter()
+            .filter(|rp| matches!(rp, ResolvedPane::Folded { .. }))
+            .collect();
         assert_eq!(right_folded.len(), 2, "both right panes should be folded");
 
         // Both fold bars should be 1 cell wide (same column) and fold direction = Horizontal
         for bar in &right_folded {
-            if let ResolvedPane::Folded { rect, direction, .. } = bar {
+            if let ResolvedPane::Folded {
+                rect, direction, ..
+            } = bar
+            {
                 assert_eq!(rect.width, 1, "fold bar should be 1 cell wide");
                 assert_eq!(*direction, SplitDirection::Horizontal);
             }
         }
 
         // Bars should share the same x (single column), split vertically
-        if let (
-            ResolvedPane::Folded { rect: r1, .. },
-            ResolvedPane::Folded { rect: r2, .. },
-        ) = (right_folded[0], right_folded[1])
+        if let (ResolvedPane::Folded { rect: r1, .. }, ResolvedPane::Folded { rect: r2, .. }) =
+            (right_folded[0], right_folded[1])
         {
             assert_eq!(r1.x, r2.x, "bars should share the same column");
             assert_eq!(r1.y + r1.height, r2.y, "bars should be stacked vertically");
@@ -1811,7 +1848,9 @@ mod tests {
         let area = Rect::new(0, 0, 1, 1);
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
         assert_eq!(resolved.len(), 1);
-        assert!(matches!(resolved[0], ResolvedPane::Visible { id: rid, rect } if rid == id && rect.width == 1 && rect.height == 1));
+        assert!(
+            matches!(resolved[0], ResolvedPane::Visible { id: rid, rect } if rid == id && rect.width == 1 && rect.height == 1)
+        );
     }
 
     #[test]
@@ -1828,8 +1867,14 @@ mod tests {
         let area = Rect::new(0, 0, 3, 3);
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
         assert_eq!(resolved.len(), 2);
-        let visible_count = resolved.iter().filter(|rp| matches!(rp, ResolvedPane::Visible { .. })).count();
-        let folded_count = resolved.iter().filter(|rp| matches!(rp, ResolvedPane::Folded { .. })).count();
+        let visible_count = resolved
+            .iter()
+            .filter(|rp| matches!(rp, ResolvedPane::Visible { .. }))
+            .count();
+        let folded_count = resolved
+            .iter()
+            .filter(|rp| matches!(rp, ResolvedPane::Folded { .. }))
+            .count();
         assert_eq!(visible_count, 1);
         assert_eq!(folded_count, 1);
     }
@@ -1856,8 +1901,12 @@ mod tests {
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &leaf_mins);
         assert_eq!(resolved.len(), 2);
         // Both should be visible (case 2 clamping)
-        assert!(matches!(resolved[0], ResolvedPane::Visible { id, rect, .. } if id == id1 && rect.width >= 50));
-        assert!(matches!(resolved[1], ResolvedPane::Visible { id, rect, .. } if id == id2 && rect.width >= 40));
+        assert!(
+            matches!(resolved[0], ResolvedPane::Visible { id, rect, .. } if id == id1 && rect.width >= 50)
+        );
+        assert!(
+            matches!(resolved[1], ResolvedPane::Visible { id, rect, .. } if id == id2 && rect.width >= 40)
+        );
     }
 
     #[test]
@@ -1879,8 +1928,12 @@ mod tests {
         leaf_mins.insert(id2, (50u16, 4u16));
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &leaf_mins);
         assert_eq!(resolved.len(), 2);
-        assert!(matches!(resolved[0], ResolvedPane::Visible { id, rect, .. } if id == id1 && rect.width >= 40));
-        assert!(matches!(resolved[1], ResolvedPane::Visible { id, rect, .. } if id == id2 && rect.width >= 50));
+        assert!(
+            matches!(resolved[0], ResolvedPane::Visible { id, rect, .. } if id == id1 && rect.width >= 40)
+        );
+        assert!(
+            matches!(resolved[1], ResolvedPane::Visible { id, rect, .. } if id == id2 && rect.width >= 50)
+        );
     }
 
     // --- Large fold_cell_count tests ---
@@ -1914,8 +1967,14 @@ mod tests {
         let area = Rect::new(0, 0, 90, 10);
         let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
         // First should be visible, all 3 right leaves should be folded
-        let visible: Vec<_> = resolved.iter().filter(|rp| matches!(rp, ResolvedPane::Visible { .. })).collect();
-        let folded: Vec<_> = resolved.iter().filter(|rp| matches!(rp, ResolvedPane::Folded { .. })).collect();
+        let visible: Vec<_> = resolved
+            .iter()
+            .filter(|rp| matches!(rp, ResolvedPane::Visible { .. }))
+            .collect();
+        let folded: Vec<_> = resolved
+            .iter()
+            .filter(|rp| matches!(rp, ResolvedPane::Folded { .. }))
+            .collect();
         assert_eq!(visible.len(), 1);
         assert_eq!(folded.len(), 3);
     }
@@ -1990,11 +2049,28 @@ mod tests {
 
         // Verify only the deepest split ratio changed
         if let LayoutNode::Split { ratio, second, .. } = &node {
-            assert!((*ratio - 0.5).abs() < f64::EPSILON, "root ratio should be unchanged");
-            if let LayoutNode::Split { ratio: mid_ratio, second: deep, .. } = second.as_ref() {
-                assert!((*mid_ratio - 0.5).abs() < f64::EPSILON, "middle ratio should be unchanged");
-                if let LayoutNode::Split { ratio: deep_ratio, .. } = deep.as_ref() {
-                    assert!((*deep_ratio - 0.6).abs() < f64::EPSILON, "deep ratio should be 0.6");
+            assert!(
+                (*ratio - 0.5).abs() < f64::EPSILON,
+                "root ratio should be unchanged"
+            );
+            if let LayoutNode::Split {
+                ratio: mid_ratio,
+                second: deep,
+                ..
+            } = second.as_ref()
+            {
+                assert!(
+                    (*mid_ratio - 0.5).abs() < f64::EPSILON,
+                    "middle ratio should be unchanged"
+                );
+                if let LayoutNode::Split {
+                    ratio: deep_ratio, ..
+                } = deep.as_ref()
+                {
+                    assert!(
+                        (*deep_ratio - 0.6).abs() < f64::EPSILON,
+                        "deep ratio should be 0.6"
+                    );
                 } else {
                     panic!("Expected deep split");
                 }
@@ -2044,7 +2120,10 @@ mod tests {
             }
         }
         let r = get_deepest_ratio(&node);
-        assert!((r - 0.3).abs() < f64::EPSILON, "deepest ratio should be 0.3 (0.5 - 0.2)");
+        assert!(
+            (r - 0.3).abs() < f64::EPSILON,
+            "deepest ratio should be 0.3 (0.5 - 0.2)"
+        );
     }
 
     // --- Unfold edge case tests ---
@@ -2135,16 +2214,40 @@ mod tests {
         };
 
         // Right neighbors
-        assert_eq!(node.find_neighbor(id1, SplitDirection::Horizontal, Side::Second), Some(id2));
-        assert_eq!(node.find_neighbor(id2, SplitDirection::Horizontal, Side::Second), Some(id3));
-        assert_eq!(node.find_neighbor(id3, SplitDirection::Horizontal, Side::Second), Some(id4));
-        assert_eq!(node.find_neighbor(id4, SplitDirection::Horizontal, Side::Second), None);
+        assert_eq!(
+            node.find_neighbor(id1, SplitDirection::Horizontal, Side::Second),
+            Some(id2)
+        );
+        assert_eq!(
+            node.find_neighbor(id2, SplitDirection::Horizontal, Side::Second),
+            Some(id3)
+        );
+        assert_eq!(
+            node.find_neighbor(id3, SplitDirection::Horizontal, Side::Second),
+            Some(id4)
+        );
+        assert_eq!(
+            node.find_neighbor(id4, SplitDirection::Horizontal, Side::Second),
+            None
+        );
 
         // Left neighbors
-        assert_eq!(node.find_neighbor(id1, SplitDirection::Horizontal, Side::First), None);
-        assert_eq!(node.find_neighbor(id2, SplitDirection::Horizontal, Side::First), Some(id1));
-        assert_eq!(node.find_neighbor(id3, SplitDirection::Horizontal, Side::First), Some(id2));
-        assert_eq!(node.find_neighbor(id4, SplitDirection::Horizontal, Side::First), Some(id3));
+        assert_eq!(
+            node.find_neighbor(id1, SplitDirection::Horizontal, Side::First),
+            None
+        );
+        assert_eq!(
+            node.find_neighbor(id2, SplitDirection::Horizontal, Side::First),
+            Some(id1)
+        );
+        assert_eq!(
+            node.find_neighbor(id3, SplitDirection::Horizontal, Side::First),
+            Some(id2)
+        );
+        assert_eq!(
+            node.find_neighbor(id4, SplitDirection::Horizontal, Side::First),
+            Some(id3)
+        );
     }
 
     #[test]
@@ -2153,13 +2256,25 @@ mod tests {
         let (node, id1, id2, id3, id4) = build_design_example();
 
         // id4 → left = id3 (same H split)
-        assert_eq!(node.find_neighbor(id4, SplitDirection::Horizontal, Side::First), Some(id3));
+        assert_eq!(
+            node.find_neighbor(id4, SplitDirection::Horizontal, Side::First),
+            Some(id3)
+        );
         // id3 → left crosses into id1's territory
-        assert_eq!(node.find_neighbor(id3, SplitDirection::Horizontal, Side::First), Some(id1));
+        assert_eq!(
+            node.find_neighbor(id3, SplitDirection::Horizontal, Side::First),
+            Some(id1)
+        );
         // id4 → up = id2 (vertical neighbor from bottom-right)
-        assert_eq!(node.find_neighbor(id4, SplitDirection::Vertical, Side::First), Some(id2));
+        assert_eq!(
+            node.find_neighbor(id4, SplitDirection::Vertical, Side::First),
+            Some(id2)
+        );
         // id1 → down = None (id1 spans full height, no vertical split at root)
-        assert_eq!(node.find_neighbor(id1, SplitDirection::Vertical, Side::Second), None);
+        assert_eq!(
+            node.find_neighbor(id1, SplitDirection::Vertical, Side::Second),
+            None
+        );
     }
 
     // --- Split/close cascade tests ---
@@ -2275,8 +2390,18 @@ mod tests {
         node.equalize();
 
         fn verify_all_ratios_half(n: &LayoutNode) {
-            if let LayoutNode::Split { ratio, first, second, .. } = n {
-                assert!((*ratio - 0.5).abs() < f64::EPSILON, "ratio was {} instead of 0.5", ratio);
+            if let LayoutNode::Split {
+                ratio,
+                first,
+                second,
+                ..
+            } = n
+            {
+                assert!(
+                    (*ratio - 0.5).abs() < f64::EPSILON,
+                    "ratio was {} instead of 0.5",
+                    ratio
+                );
                 verify_all_ratios_half(first);
                 verify_all_ratios_half(second);
             }
@@ -2319,7 +2444,13 @@ mod tests {
         node.equalize();
 
         fn check_all(n: &LayoutNode) {
-            if let LayoutNode::Split { ratio, first, second, .. } = n {
+            if let LayoutNode::Split {
+                ratio,
+                first,
+                second,
+                ..
+            } = n
+            {
                 assert!((*ratio - 0.5).abs() < f64::EPSILON);
                 check_all(first);
                 check_all(second);
@@ -2387,9 +2518,8 @@ mod tests {
     #[test]
     fn test_split_rects_clamped_horizontal() {
         let area = Rect::new(5, 10, 100, 30);
-        let (first, second) = LayoutNode::split_rects_clamped(
-            &SplitDirection::Horizontal, area, 30, 70,
-        );
+        let (first, second) =
+            LayoutNode::split_rects_clamped(&SplitDirection::Horizontal, area, 30, 70);
         assert_eq!(first, Rect::new(5, 10, 30, 30));
         assert_eq!(second, Rect::new(35, 10, 70, 30));
     }
@@ -2397,9 +2527,8 @@ mod tests {
     #[test]
     fn test_split_rects_clamped_vertical() {
         let area = Rect::new(5, 10, 100, 40);
-        let (first, second) = LayoutNode::split_rects_clamped(
-            &SplitDirection::Vertical, area, 15, 25,
-        );
+        let (first, second) =
+            LayoutNode::split_rects_clamped(&SplitDirection::Vertical, area, 15, 25);
         assert_eq!(first, Rect::new(5, 10, 100, 15));
         assert_eq!(second, Rect::new(5, 25, 100, 25));
     }

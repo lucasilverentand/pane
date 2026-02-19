@@ -29,7 +29,12 @@ pub struct CopyModeState {
 }
 
 impl CopyModeState {
-    pub fn new(screen_rows: usize, screen_cols: usize, cursor_row: usize, cursor_col: usize) -> Self {
+    pub fn new(
+        screen_rows: usize,
+        screen_cols: usize,
+        cursor_row: usize,
+        cursor_col: usize,
+    ) -> Self {
         Self {
             cursor_row,
             cursor_col,
@@ -301,15 +306,9 @@ impl CopyModeState {
 
         match self.selection_mode {
             SelectionMode::None => String::new(),
-            SelectionMode::Char => {
-                self.extract_char_selection(screen, start_row, start_col)
-            }
-            SelectionMode::Line => {
-                self.extract_line_selection(screen, start_row)
-            }
-            SelectionMode::Block => {
-                self.extract_block_selection(screen, start_row, start_col)
-            }
+            SelectionMode::Char => self.extract_char_selection(screen, start_row, start_col),
+            SelectionMode::Line => self.extract_line_selection(screen, start_row),
+            SelectionMode::Block => self.extract_block_selection(screen, start_row, start_col),
         }
     }
 
@@ -326,8 +325,14 @@ impl CopyModeState {
             let line = self.get_line_text(screen, row);
             let chars: Vec<char> = line.chars().collect();
             let from = if row == sr { sc } else { 0 };
-            let to = if row == er { (ec + 1).min(chars.len()) } else { chars.len() };
-            let segment: String = chars[from.min(chars.len())..to.min(chars.len())].iter().collect();
+            let to = if row == er {
+                (ec + 1).min(chars.len())
+            } else {
+                chars.len()
+            };
+            let segment: String = chars[from.min(chars.len())..to.min(chars.len())]
+                .iter()
+                .collect();
             if row > sr {
                 result.push('\n');
             }
@@ -369,11 +374,7 @@ impl CopyModeState {
         lines.join("\n")
     }
 
-    fn normalize_range(
-        &self,
-        start_row: usize,
-        start_col: usize,
-    ) -> (usize, usize, usize, usize) {
+    fn normalize_range(&self, start_row: usize, start_col: usize) -> (usize, usize, usize, usize) {
         if (start_row, start_col) <= (self.cursor_row, self.cursor_col) {
             (start_row, start_col, self.cursor_row, self.cursor_col)
         } else {
@@ -545,7 +546,10 @@ mod tests {
     fn test_move_left() {
         let parser = make_screen(5, 20, "hello world");
         let mut state = CopyModeState::new(5, 20, 0, 5);
-        state.handle_key(make_key(KeyCode::Char('h'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('h'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_col, 4);
     }
 
@@ -553,7 +557,10 @@ mod tests {
     fn test_move_left_at_zero() {
         let parser = make_screen(5, 20, "hello");
         let mut state = CopyModeState::new(5, 20, 0, 0);
-        state.handle_key(make_key(KeyCode::Char('h'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('h'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_col, 0);
     }
 
@@ -561,7 +568,10 @@ mod tests {
     fn test_move_right() {
         let parser = make_screen(5, 20, "hello world");
         let mut state = CopyModeState::new(5, 20, 0, 0);
-        state.handle_key(make_key(KeyCode::Char('l'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('l'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_col, 1);
     }
 
@@ -569,7 +579,10 @@ mod tests {
     fn test_move_down() {
         let parser = make_screen(5, 20, "line1\r\nline2");
         let mut state = CopyModeState::new(5, 20, 0, 0);
-        state.handle_key(make_key(KeyCode::Char('j'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('j'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_row, 1);
     }
 
@@ -577,7 +590,10 @@ mod tests {
     fn test_move_up() {
         let parser = make_screen(5, 20, "line1\r\nline2");
         let mut state = CopyModeState::new(5, 20, 1, 0);
-        state.handle_key(make_key(KeyCode::Char('k'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('k'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_row, 0);
     }
 
@@ -585,7 +601,10 @@ mod tests {
     fn test_move_up_at_zero() {
         let parser = make_screen(5, 20, "hello");
         let mut state = CopyModeState::new(5, 20, 0, 0);
-        state.handle_key(make_key(KeyCode::Char('k'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('k'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_row, 0);
     }
 
@@ -594,7 +613,10 @@ mod tests {
     fn test_move_to_start() {
         let parser = make_screen(5, 20, "hello world");
         let mut state = CopyModeState::new(5, 20, 0, 5);
-        state.handle_key(make_key(KeyCode::Char('0'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('0'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_col, 0);
     }
 
@@ -602,7 +624,10 @@ mod tests {
     fn test_move_to_end() {
         let parser = make_screen(5, 20, "hello world");
         let mut state = CopyModeState::new(5, 20, 0, 0);
-        state.handle_key(make_key(KeyCode::Char('$'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('$'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_col, 10); // last char of "hello world"
     }
 
@@ -611,7 +636,10 @@ mod tests {
     fn test_move_to_top() {
         let parser = make_screen(5, 20, "a\r\nb\r\nc");
         let mut state = CopyModeState::new(5, 20, 2, 0);
-        state.handle_key(make_key(KeyCode::Char('g'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('g'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_row, 0);
         assert_eq!(state.cursor_col, 0);
     }
@@ -620,7 +648,10 @@ mod tests {
     fn test_move_to_bottom() {
         let parser = make_screen(5, 20, "a\r\nb\r\nc");
         let mut state = CopyModeState::new(5, 20, 0, 0);
-        state.handle_key(make_key(KeyCode::Char('G'), KeyModifiers::SHIFT), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('G'), KeyModifiers::SHIFT),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_row, 4); // screen has 5 rows (0-4)
     }
 
@@ -629,7 +660,10 @@ mod tests {
     fn test_word_forward() {
         let parser = make_screen(5, 20, "hello world foo");
         let mut state = CopyModeState::new(5, 20, 0, 0);
-        state.handle_key(make_key(KeyCode::Char('w'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('w'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_col, 6); // start of "world"
     }
 
@@ -637,7 +671,10 @@ mod tests {
     fn test_word_backward() {
         let parser = make_screen(5, 20, "hello world foo");
         let mut state = CopyModeState::new(5, 20, 0, 6);
-        state.handle_key(make_key(KeyCode::Char('b'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('b'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_col, 0); // start of "hello"
     }
 
@@ -646,12 +683,18 @@ mod tests {
     fn test_char_selection_toggle() {
         let parser = make_screen(5, 20, "hello");
         let mut state = CopyModeState::new(5, 20, 0, 0);
-        state.handle_key(make_key(KeyCode::Char('v'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('v'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.selection_mode, SelectionMode::Char);
         assert_eq!(state.selection_start, Some((0, 0)));
 
         // Toggle off
-        state.handle_key(make_key(KeyCode::Char('v'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('v'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.selection_mode, SelectionMode::None);
         assert_eq!(state.selection_start, None);
     }
@@ -660,7 +703,10 @@ mod tests {
     fn test_line_selection_toggle() {
         let parser = make_screen(5, 20, "hello");
         let mut state = CopyModeState::new(5, 20, 0, 0);
-        state.handle_key(make_key(KeyCode::Char('V'), KeyModifiers::SHIFT), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('V'), KeyModifiers::SHIFT),
+            parser.screen(),
+        );
         assert_eq!(state.selection_mode, SelectionMode::Line);
     }
 
@@ -668,7 +714,10 @@ mod tests {
     fn test_block_selection_toggle() {
         let parser = make_screen(5, 20, "hello");
         let mut state = CopyModeState::new(5, 20, 0, 0);
-        state.handle_key(make_key(KeyCode::Char('v'), KeyModifiers::CONTROL), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('v'), KeyModifiers::CONTROL),
+            parser.screen(),
+        );
         assert_eq!(state.selection_mode, SelectionMode::Block);
     }
 
@@ -677,12 +726,21 @@ mod tests {
         let parser = make_screen(5, 20, "hello world");
         let mut state = CopyModeState::new(5, 20, 0, 0);
         // Start selection at 0
-        state.handle_key(make_key(KeyCode::Char('v'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('v'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         // Move right 4 times to select "hello"
         for _ in 0..4 {
-            state.handle_key(make_key(KeyCode::Char('l'), KeyModifiers::NONE), parser.screen());
+            state.handle_key(
+                make_key(KeyCode::Char('l'), KeyModifiers::NONE),
+                parser.screen(),
+            );
         }
-        let action = state.handle_key(make_key(KeyCode::Char('y'), KeyModifiers::NONE), parser.screen());
+        let action = state.handle_key(
+            make_key(KeyCode::Char('y'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         match action {
             CopyModeAction::YankSelection(text) => assert_eq!(text, "hello"),
             _ => panic!("Expected YankSelection"),
@@ -694,10 +752,19 @@ mod tests {
         let parser = make_screen(5, 20, "hello\r\nworld\r\nfoo");
         let mut state = CopyModeState::new(5, 20, 0, 0);
         // Line selection
-        state.handle_key(make_key(KeyCode::Char('V'), KeyModifiers::SHIFT), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('V'), KeyModifiers::SHIFT),
+            parser.screen(),
+        );
         // Move down to include second line
-        state.handle_key(make_key(KeyCode::Char('j'), KeyModifiers::NONE), parser.screen());
-        let action = state.handle_key(make_key(KeyCode::Char('y'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('j'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        let action = state.handle_key(
+            make_key(KeyCode::Char('y'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         match action {
             CopyModeAction::YankSelection(text) => assert_eq!(text, "hello\nworld"),
             _ => panic!("Expected YankSelection"),
@@ -741,7 +808,10 @@ mod tests {
     fn test_search_enter_and_exit() {
         let parser = make_screen(5, 20, "hello world");
         let mut state = CopyModeState::new(5, 20, 0, 0);
-        state.handle_key(make_key(KeyCode::Char('/'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('/'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert!(state.search_active);
         state.handle_key(make_key(KeyCode::Esc, KeyModifiers::NONE), parser.screen());
         assert!(!state.search_active);
@@ -752,14 +822,35 @@ mod tests {
         let parser = make_screen(5, 40, "hello world hello");
         let mut state = CopyModeState::new(5, 40, 0, 0);
         // Enter search
-        state.handle_key(make_key(KeyCode::Char('/'), KeyModifiers::NONE), parser.screen());
-        state.handle_key(make_key(KeyCode::Char('w'), KeyModifiers::NONE), parser.screen());
-        state.handle_key(make_key(KeyCode::Char('o'), KeyModifiers::NONE), parser.screen());
-        state.handle_key(make_key(KeyCode::Char('r'), KeyModifiers::NONE), parser.screen());
-        state.handle_key(make_key(KeyCode::Char('l'), KeyModifiers::NONE), parser.screen());
-        state.handle_key(make_key(KeyCode::Char('d'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('/'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        state.handle_key(
+            make_key(KeyCode::Char('w'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        state.handle_key(
+            make_key(KeyCode::Char('o'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        state.handle_key(
+            make_key(KeyCode::Char('r'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        state.handle_key(
+            make_key(KeyCode::Char('l'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        state.handle_key(
+            make_key(KeyCode::Char('d'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         // Confirm
-        state.handle_key(make_key(KeyCode::Enter, KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Enter, KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert!(!state.search_active);
         assert_eq!(state.search_matches.len(), 1);
         assert_eq!(state.cursor_col, 6); // jumped to "world"
@@ -806,7 +897,10 @@ mod tests {
     fn test_esc_clears_selection_first() {
         let parser = make_screen(5, 20, "hello");
         let mut state = CopyModeState::new(5, 20, 0, 0);
-        state.handle_key(make_key(KeyCode::Char('v'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('v'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert_eq!(state.selection_mode, SelectionMode::Char);
         let action = state.handle_key(make_key(KeyCode::Esc, KeyModifiers::NONE), parser.screen());
         assert!(matches!(action, CopyModeAction::None));
@@ -820,7 +914,10 @@ mod tests {
     fn test_exit_with_q() {
         let parser = make_screen(5, 20, "hello");
         let mut state = CopyModeState::new(5, 20, 0, 0);
-        let action = state.handle_key(make_key(KeyCode::Char('q'), KeyModifiers::NONE), parser.screen());
+        let action = state.handle_key(
+            make_key(KeyCode::Char('q'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         assert!(matches!(action, CopyModeAction::Exit));
     }
 
@@ -828,7 +925,10 @@ mod tests {
     fn test_half_page_up() {
         let parser = make_screen(10, 20, "");
         let mut state = CopyModeState::new(10, 20, 8, 0);
-        state.handle_key(make_key(KeyCode::Char('u'), KeyModifiers::CONTROL), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_row, 3); // 8 - 10/2 = 3
     }
 
@@ -836,7 +936,10 @@ mod tests {
     fn test_half_page_down() {
         let parser = make_screen(10, 20, "");
         let mut state = CopyModeState::new(10, 20, 2, 0);
-        state.handle_key(make_key(KeyCode::Char('d'), KeyModifiers::CONTROL), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            parser.screen(),
+        );
         assert_eq!(state.cursor_row, 7); // 2 + 10/2 = 7
     }
 
@@ -845,12 +948,27 @@ mod tests {
     fn test_block_selection_yank() {
         let parser = make_screen(5, 20, "abcde\r\nfghij\r\nklmno");
         let mut state = CopyModeState::new(5, 20, 0, 1);
-        state.handle_key(make_key(KeyCode::Char('v'), KeyModifiers::CONTROL), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('v'), KeyModifiers::CONTROL),
+            parser.screen(),
+        );
         // Move to row 1, col 3
-        state.handle_key(make_key(KeyCode::Char('j'), KeyModifiers::NONE), parser.screen());
-        state.handle_key(make_key(KeyCode::Char('l'), KeyModifiers::NONE), parser.screen());
-        state.handle_key(make_key(KeyCode::Char('l'), KeyModifiers::NONE), parser.screen());
-        let action = state.handle_key(make_key(KeyCode::Char('y'), KeyModifiers::NONE), parser.screen());
+        state.handle_key(
+            make_key(KeyCode::Char('j'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        state.handle_key(
+            make_key(KeyCode::Char('l'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        state.handle_key(
+            make_key(KeyCode::Char('l'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        let action = state.handle_key(
+            make_key(KeyCode::Char('y'), KeyModifiers::NONE),
+            parser.screen(),
+        );
         match action {
             CopyModeAction::YankSelection(text) => assert_eq!(text, "bcd\nghi"),
             _ => panic!("Expected YankSelection"),

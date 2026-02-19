@@ -10,7 +10,10 @@ use crate::app::Mode;
 use crate::config::{Config, Theme};
 use crate::copy_mode::CopyModeState;
 use crate::layout::SplitDirection;
-use crate::window::{terminal::{render_screen, render_screen_copy_mode}, Window};
+use crate::window::{
+    terminal::{render_screen, render_screen_copy_mode},
+    Window,
+};
 
 fn render_content(
     screen: &vt100::Screen,
@@ -28,7 +31,12 @@ fn render_content(
 
 fn render_search_bar(cms: &CopyModeState, theme: &Theme, frame: &mut Frame, area: Rect) {
     let line = Line::from(vec![
-        Span::styled("/", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "/",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             format!("{}_", cms.search_query),
             Style::default().fg(Color::White),
@@ -54,11 +62,7 @@ pub enum TabBarClick {
     NewTab,
 }
 
-fn build_tab_bar<'a>(
-    group: &Window,
-    theme: &Theme,
-    area: Rect,
-) -> (Vec<Span<'a>>, TabBarLayout) {
+fn build_tab_bar<'a>(group: &Window, theme: &Theme, area: Rect) -> (Vec<Span<'a>>, TabBarLayout) {
     let mut spans: Vec<Span<'a>> = Vec::new();
     let mut tab_ranges: Vec<(u16, u16)> = Vec::new();
     let mut cursor_x = area.x;
@@ -158,7 +162,6 @@ pub fn tab_bar_hit_test(layout: &TabBarLayout, x: u16, y: u16) -> Option<TabBarC
     None
 }
 
-
 /// Render a pane group from a snapshot (used by the client).
 /// Receives the active tab's vt100 screen directly instead of accessing the Pane struct.
 pub fn render_group_from_snapshot(
@@ -174,7 +177,9 @@ pub fn render_group_from_snapshot(
     let theme = &config.theme;
 
     // Check if the active pane's foreground process has a decoration
-    let decoration_color = group.tabs.get(group.active_tab)
+    let decoration_color = group
+        .tabs
+        .get(group.active_tab)
         .and_then(|snap| snap.foreground_process.as_deref())
         .and_then(|proc| config.decoration_for(proc))
         .map(|d| d.border_color);
@@ -206,10 +211,7 @@ pub fn render_group_from_snapshot(
         .border_style(border_style);
 
     if !tab_info.is_empty() {
-        block = block.title_top(Line::styled(
-            tab_info,
-            Style::default().fg(theme.dim),
-        ));
+        block = block.title_top(Line::styled(tab_info, Style::default().fg(theme.dim)));
     }
 
     if is_active {
@@ -302,7 +304,9 @@ fn render_tab_bar_from_snapshot(
         }
 
         let style = if is_active_tab {
-            Style::default().fg(theme.tab_active).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme.tab_active)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.tab_inactive)
         };
@@ -329,11 +333,7 @@ pub fn render_folded(
     frame: &mut Frame,
     area: Rect,
 ) {
-    let fg = if is_active {
-        theme.accent
-    } else {
-        theme.dim
-    };
+    let fg = if is_active { theme.accent } else { theme.dim };
     let style = Style::default().fg(fg);
     let buf = frame.buffer_mut();
 

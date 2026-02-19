@@ -8,12 +8,12 @@ mod keys;
 mod layout;
 #[allow(dead_code)]
 mod plugin;
-mod window;
 mod server;
 mod session;
 mod system_stats;
 mod tui;
 mod ui;
+mod window;
 mod workspace;
 
 use clap::{Parser, Subcommand};
@@ -81,9 +81,8 @@ fn main() -> anyhow::Result<()> {
             rt.block_on(client::Client::run(session_name, config))
         }
         Some(Commands::New { name }) => {
-            let name = name.unwrap_or_else(|| {
-                format!("session-{}", chrono::Utc::now().timestamp())
-            });
+            let name =
+                name.unwrap_or_else(|| format!("session-{}", chrono::Utc::now().timestamp()));
             server::daemon::start_daemon(&name)?;
             tui::install_panic_hook();
             let rt = tokio::runtime::Runtime::new()?;

@@ -248,7 +248,9 @@ impl Tab {
             self.foreground_process = None;
             return;
         }
-        let fg_pid = self.pty_master.as_ref()
+        let fg_pid = self
+            .pty_master
+            .as_ref()
             .and_then(|m| m.process_group_leader())
             .map(|pgid| pgid as u32);
         self.foreground_process = match fg_pid {

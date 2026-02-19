@@ -2,10 +2,10 @@ pub mod command_palette;
 pub mod format;
 pub mod help;
 pub mod layout_render;
-pub mod tab_picker;
-pub mod window_view;
 pub mod status_bar;
+pub mod tab_picker;
 pub mod which_key;
+pub mod window_view;
 pub mod workspace_bar;
 
 use ratatui::layout::{Constraint, Layout};
@@ -19,28 +19,30 @@ use crate::layout::LayoutParams;
 pub fn render_client(client: &Client, frame: &mut Frame) {
     let theme = &client.config.theme;
 
-    let show_workspace_bar = client.render_state.workspaces.len() > 1;
+    let show_workspace_bar = !client.render_state.workspaces.is_empty();
 
     let (header, body, footer) = if show_workspace_bar {
         let [h, b, f] = Layout::vertical([
-            Constraint::Length(1),
+            Constraint::Length(workspace_bar::HEIGHT),
             Constraint::Fill(1),
             Constraint::Length(1),
         ])
         .areas(frame.area());
         (Some(h), b, f)
     } else {
-        let [b, f] = Layout::vertical([
-            Constraint::Fill(1),
-            Constraint::Length(1),
-        ])
-        .areas(frame.area());
+        let [b, f] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
         (None, b, f)
     };
 
-    // Workspace bar (only when >1 workspace)
+    // Workspace bar
     if let Some(header) = header {
-        let names: Vec<&str> = client.render_state.workspaces.iter().map(|ws| ws.name.as_str()).collect();
+        let names: Vec<&str> = client
+            .render_state
+            .workspaces
+            .iter()
+            .map(|ws| ws.name.as_str())
+            .collect();
         workspace_bar::render(
             &names,
             client.render_state.active_workspace,
@@ -88,7 +90,8 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                                 let tab_bar_offset: u16 = if group.tabs.len() > 1 { 1 } else { 0 };
                                 let cursor_x = body.x + 2 + vt_col;
                                 let cursor_y = body.y + 1 + tab_bar_offset + vt_row;
-                                if cursor_x < body.x + body.width && cursor_y < body.y + body.height {
+                                if cursor_x < body.x + body.width && cursor_y < body.y + body.height
+                                {
                                     frame.set_cursor_position(ratatui::layout::Position {
                                         x: cursor_x,
                                         y: cursor_y,
@@ -100,7 +103,9 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                 }
             }
         } else {
-            let resolved = ws.layout.resolve_with_fold(body, params, &ws.leaf_min_sizes);
+            let resolved = ws
+                .layout
+                .resolve_with_fold(body, params, &ws.leaf_min_sizes);
 
             // First pass: visible panes
             for rp in &resolved {
@@ -125,7 +130,12 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
 
             // Second pass: fold bars
             for rp in &resolved {
-                if let crate::layout::ResolvedPane::Folded { id: group_id, rect, direction } = rp {
+                if let crate::layout::ResolvedPane::Folded {
+                    id: group_id,
+                    rect,
+                    direction,
+                } = rp
+                {
                     if rect.width == 0 || rect.height == 0 {
                         continue;
                     }
@@ -144,14 +154,19 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                                     if let crate::layout::ResolvedPane::Visible { id, rect } = rp {
                                         if *id == ws.active_group {
                                             let (vt_row, vt_col) = screen.cursor_position();
-                                            let tab_bar_offset: u16 = if group.tabs.len() > 1 { 1 } else { 0 };
+                                            let tab_bar_offset: u16 =
+                                                if group.tabs.len() > 1 { 1 } else { 0 };
                                             let cursor_x = rect.x + 2 + vt_col;
                                             let cursor_y = rect.y + 1 + tab_bar_offset + vt_row;
-                                            if cursor_x < rect.x + rect.width && cursor_y < rect.y + rect.height {
-                                                frame.set_cursor_position(ratatui::layout::Position {
-                                                    x: cursor_x,
-                                                    y: cursor_y,
-                                                });
+                                            if cursor_x < rect.x + rect.width
+                                                && cursor_y < rect.y + rect.height
+                                            {
+                                                frame.set_cursor_position(
+                                                    ratatui::layout::Position {
+                                                        x: cursor_x,
+                                                        y: cursor_y,
+                                                    },
+                                                );
                                             }
                                             break;
                                         }
@@ -248,10 +263,7 @@ fn render_confirm_dialog(
 
     let lines = vec![
         Line::raw(""),
-        Line::styled(
-            format!("  {}", message),
-            Style::default().fg(Color::White),
-        ),
+        Line::styled(format!("  {}", message), Style::default().fg(Color::White)),
         Line::raw(""),
         Line::from(vec![
             Span::raw("  "),

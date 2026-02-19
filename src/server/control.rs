@@ -60,7 +60,9 @@ pub async fn run_control_mode(
                     let _ = writeln!(out, "%pane-exited {}", pane_id);
                 }
                 ServerResponse::LayoutChanged { render_state } => {
-                    let _ = writeln!(out, "%layout-change {} workspaces {} active",
+                    let _ = writeln!(
+                        out,
+                        "%layout-change {} workspaces {} active",
                         render_state.workspaces.len(),
                         render_state.active_workspace,
                     );
@@ -121,7 +123,12 @@ pub async fn run_control_mode(
                 let mut state = state.lock().await;
                 let mut id_map = id_map.lock().await;
 
-                writeln!(out, "%begin {} {} 0", chrono::Utc::now().timestamp(), cmd_num)?;
+                writeln!(
+                    out,
+                    "%begin {} {} 0",
+                    chrono::Utc::now().timestamp(),
+                    cmd_num
+                )?;
 
                 match command::execute(&cmd, &mut state, &mut id_map, &broadcast_tx) {
                     Ok(command::CommandResult::Ok(output)) => {
@@ -155,7 +162,12 @@ pub async fn run_control_mode(
                 cmd_num += 1;
             }
             Err(e) => {
-                writeln!(out, "%begin {} {} 0", chrono::Utc::now().timestamp(), cmd_num)?;
+                writeln!(
+                    out,
+                    "%begin {} {} 0",
+                    chrono::Utc::now().timestamp(),
+                    cmd_num
+                )?;
                 writeln!(out, "%error {}", e)?;
                 writeln!(out, "%end {} {} 1", chrono::Utc::now().timestamp(), cmd_num)?;
                 cmd_num += 1;

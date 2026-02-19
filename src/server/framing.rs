@@ -148,8 +148,8 @@ mod tests {
     async fn test_large_frame() {
         let (mut a, mut b) = UnixStream::pair().unwrap();
         let data = vec![0xABu8; 65536]; // 64 KiB
-        // Must write and read concurrently: the socket buffer may be smaller
-        // than 64 KiB, so write_all would block waiting for the reader to drain.
+                                        // Must write and read concurrently: the socket buffer may be smaller
+                                        // than 64 KiB, so write_all would block waiting for the reader to drain.
         let write_handle = tokio::spawn(async move {
             write_frame(&mut a, &data).await.unwrap();
         });

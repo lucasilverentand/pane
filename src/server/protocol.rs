@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::layout::{LayoutNode, TabId};
-use crate::window::{WindowId, TabKind};
 use crate::system_stats::SystemStats;
+use crate::window::{TabKind, WindowId};
 
 // ---------------------------------------------------------------------------
 // Serializable wrappers for crossterm types
@@ -115,15 +115,31 @@ impl From<SerializableKeyCode> for KeyCode {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ClientRequest {
-    Attach { session_name: String },
+    Attach {
+        session_name: String,
+    },
     Detach,
-    Resize { width: u16, height: u16 },
+    Resize {
+        width: u16,
+        height: u16,
+    },
     Key(SerializableKeyEvent),
-    MouseDown { x: u16, y: u16 },
-    MouseDrag { x: u16, y: u16 },
-    MouseMove { x: u16, y: u16 },
+    MouseDown {
+        x: u16,
+        y: u16,
+    },
+    MouseDrag {
+        x: u16,
+        y: u16,
+    },
+    MouseMove {
+        x: u16,
+        y: u16,
+    },
     MouseUp,
-    MouseScroll { up: bool },
+    MouseScroll {
+        up: bool,
+    },
     Command(String),
     /// Synchronous command: execute and return result on this stream, then disconnect.
     /// Used by the tmux shim for fire-and-forget commands.
@@ -136,15 +152,27 @@ pub enum ClientRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerResponse {
-    Attached { session_name: String },
-    PaneOutput { pane_id: TabId, data: Vec<u8> },
-    PaneExited { pane_id: TabId },
-    LayoutChanged { render_state: RenderState },
+    Attached {
+        session_name: String,
+    },
+    PaneOutput {
+        pane_id: TabId,
+        data: Vec<u8>,
+    },
+    PaneExited {
+        pane_id: TabId,
+    },
+    LayoutChanged {
+        render_state: RenderState,
+    },
     StatsUpdate(SerializableSystemStats),
     PluginSegments(Vec<Vec<crate::plugin::PluginSegment>>),
     SessionEnded,
     /// Full screen dump for a pane, sent when a client attaches mid-session.
-    FullScreenDump { pane_id: TabId, data: Vec<u8> },
+    FullScreenDump {
+        pane_id: TabId,
+        data: Vec<u8>,
+    },
     /// Notify clients when the number of connected clients changes.
     ClientCountChanged(u32),
     Error(String),
@@ -287,13 +315,17 @@ impl RenderState {
                     sync_panes: ws.sync_panes,
                     leaf_min_sizes: ws.leaf_min_sizes.clone(),
                     zoomed_window: ws.zoomed_window,
-                    floating_windows: ws.floating_windows.iter().map(|fw| FloatingWindowSnapshot {
-                        id: fw.id,
-                        x: fw.x,
-                        y: fw.y,
-                        width: fw.width,
-                        height: fw.height,
-                    }).collect(),
+                    floating_windows: ws
+                        .floating_windows
+                        .iter()
+                        .map(|fw| FloatingWindowSnapshot {
+                            id: fw.id,
+                            x: fw.x,
+                            y: fw.y,
+                            width: fw.width,
+                            height: fw.height,
+                        })
+                        .collect(),
                 }
             })
             .collect();

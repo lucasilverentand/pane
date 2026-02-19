@@ -73,15 +73,23 @@ impl Client {
     pub async fn run(session_name: &str, config: Config) -> Result<()> {
         let sock = daemon::socket_path(session_name);
         if !sock.exists() {
-            anyhow::bail!("no running session '{}'. Start one with: pane daemon {}", session_name, session_name);
+            anyhow::bail!(
+                "no running session '{}'. Start one with: pane daemon {}",
+                session_name,
+                session_name
+            );
         }
 
         let mut stream = UnixStream::connect(&sock).await?;
 
         // Attach
-        framing::send(&mut stream, &ClientRequest::Attach {
-            session_name: session_name.to_string(),
-        }).await?;
+        framing::send(
+            &mut stream,
+            &ClientRequest::Attach {
+                session_name: session_name.to_string(),
+            },
+        )
+        .await?;
 
         // Wait for Attached
         let resp: ServerResponse = framing::recv_required(&mut stream).await?;
@@ -105,10 +113,14 @@ impl Client {
 
         // Send initial resize
         let size = tui.size()?;
-        framing::send(&mut stream, &ClientRequest::Resize {
-            width: size.width,
-            height: size.height,
-        }).await?;
+        framing::send(
+            &mut stream,
+            &ClientRequest::Resize {
+                width: size.width,
+                height: size.height,
+            },
+        )
+        .await?;
 
         // Split stream
         let (read_half, write_half) = stream.into_split();
@@ -193,9 +205,9 @@ impl Client {
                 for pane in &group.tabs {
                     live_pane_ids.insert(pane.id);
                     // Ensure a vt100 parser exists for each pane
-                    self.screens.entry(pane.id).or_insert_with(|| {
-                        vt100::Parser::new(24, 80, 1000)
-                    });
+                    self.screens
+                        .entry(pane.id)
+                        .or_insert_with(|| vt100::Parser::new(24, 80, 1000));
                 }
             }
         }
@@ -256,7 +268,9 @@ impl Client {
             ServerResponse::PluginSegments(segments) => {
                 self.plugin_segments = segments;
             }
-            ServerResponse::Error(_) | ServerResponse::Attached { .. } | ServerResponse::CommandOutput { .. } => {}
+            ServerResponse::Error(_)
+            | ServerResponse::Attached { .. }
+            | ServerResponse::CommandOutput { .. } => {}
         }
     }
 
@@ -273,7 +287,14 @@ impl Client {
             }
             AppEvent::Resize(w, h) => {
                 let mut w_guard = writer.lock().await;
-                let _ = send_request(&mut *w_guard, &ClientRequest::Resize { width: w, height: h }).await;
+                let _ = send_request(
+                    &mut *w_guard,
+                    &ClientRequest::Resize {
+                        width: w,
+                        height: h,
+                    },
+                )
+                .await;
             }
             AppEvent::MouseDown { x, y } => {
                 if self.mode == Mode::Confirm {
@@ -289,26 +310,49 @@ impl Client {
                             }
                         }
                     }
-                } else if self.mode == Mode::Normal || self.mode == Mode::Interact || self.mode == Mode::Select {
+                } else if self.mode == Mode::Normal
+                    || self.mode == Mode::Interact
+                    || self.mode == Mode::Select
+                {
                     // Check workspace bar clicks (client-side)
-                    if y == 0 && !self.render_state.workspaces.is_empty() {
-                        let names: Vec<&str> = self.render_state.workspaces.iter().map(|ws| ws.name.as_str()).collect();
-                        let bar_area = Rect::new(0, 0, tui.size()?.width, 1);
+                    let show_workspace_bar = !self.render_state.workspaces.is_empty();
+                    if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
+                        let names: Vec<&str> = self
+                            .render_state
+                            .workspaces
+                            .iter()
+                            .map(|ws| ws.name.as_str())
+                            .collect();
+                        let bar_area =
+                            Rect::new(0, 0, tui.size()?.width, crate::ui::workspace_bar::HEIGHT);
                         if let Some(click) = crate::ui::workspace_bar::hit_test(
-                            &names, self.render_state.active_workspace, bar_area, x, y,
+                            &names,
+                            self.render_state.active_workspace,
+                            bar_area,
+                            x,
+                            y,
                         ) {
                             match click {
                                 crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
                                     let mut w = writer.lock().await;
-                                    let _ = send_request(&mut *w, &ClientRequest::Command(
-                                        format!("select-workspace -t {}", i),
-                                    )).await;
+                                    let _ = send_request(
+                                        &mut *w,
+                                        &ClientRequest::Command(format!(
+                                            "select-workspace -t {}",
+                                            i
+                                        )),
+                                    )
+                                    .await;
                                 }
                                 crate::ui::workspace_bar::WorkspaceBarClick::NewWorkspace => {
                                     let mut w = writer.lock().await;
-                                    let _ = send_request(&mut *w, &ClientRequest::Command(
-                                        "new-session -d -s workspace".to_string(),
-                                    )).await;
+                                    let _ = send_request(
+                                        &mut *w,
+                                        &ClientRequest::Command(
+                                            "new-session -d -s workspace".to_string(),
+                                        ),
+                                    )
+                                    .await;
                                 }
                             }
                             return Ok(());
@@ -422,7 +466,11 @@ impl Client {
 
         // Forward to PTY
         let mut w = writer.lock().await;
-        let _ = send_request(&mut *w, &ClientRequest::Key(SerializableKeyEvent::from(key))).await;
+        let _ = send_request(
+            &mut *w,
+            &ClientRequest::Key(SerializableKeyEvent::from(key)),
+        )
+        .await;
         Ok(())
     }
 
@@ -465,10 +513,14 @@ impl Client {
                 return self.execute_action(Action::FocusRight, tui, writer).await;
             }
             KeyCode::Char('d') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::SplitHorizontal, tui, writer).await;
+                return self
+                    .execute_action(Action::SplitHorizontal, tui, writer)
+                    .await;
             }
             KeyCode::Char('D') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::SplitVertical, tui, writer).await;
+                return self
+                    .execute_action(Action::SplitVertical, tui, writer)
+                    .await;
             }
             KeyCode::Char('x') if normalized.modifiers == KeyModifiers::NONE => {
                 return self.execute_action(Action::CloseTab, tui, writer).await;
@@ -477,7 +529,9 @@ impl Client {
                 return self.execute_action(Action::NewTab, tui, writer).await;
             }
             KeyCode::Char('m') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::MaximizeFocused, tui, writer).await;
+                return self
+                    .execute_action(Action::MaximizeFocused, tui, writer)
+                    .await;
             }
             KeyCode::Char('z') if normalized.modifiers == KeyModifiers::NONE => {
                 return self.execute_action(Action::ToggleZoom, tui, writer).await;
@@ -495,10 +549,14 @@ impl Client {
                 return self.execute_action(Action::CopyMode, tui, writer).await;
             }
             KeyCode::Char('p') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::PasteClipboard, tui, writer).await;
+                return self
+                    .execute_action(Action::PasteClipboard, tui, writer)
+                    .await;
             }
             KeyCode::Char('/') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::CommandPalette, tui, writer).await;
+                return self
+                    .execute_action(Action::CommandPalette, tui, writer)
+                    .await;
             }
             KeyCode::Char('?') if normalized.modifiers == KeyModifiers::NONE => {
                 return self.execute_action(Action::Help, tui, writer).await;
@@ -507,7 +565,9 @@ impl Client {
                 return self.execute_action(Action::Equalize, tui, writer).await;
             }
             KeyCode::Char('H') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::ResizeShrinkH, tui, writer).await;
+                return self
+                    .execute_action(Action::ResizeShrinkH, tui, writer)
+                    .await;
             }
             KeyCode::Char('L') if normalized.modifiers == KeyModifiers::NONE => {
                 return self.execute_action(Action::ResizeGrowH, tui, writer).await;
@@ -516,7 +576,9 @@ impl Client {
                 return self.execute_action(Action::ResizeGrowV, tui, writer).await;
             }
             KeyCode::Char('K') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::ResizeShrinkV, tui, writer).await;
+                return self
+                    .execute_action(Action::ResizeShrinkV, tui, writer)
+                    .await;
             }
             KeyCode::Tab if normalized.modifiers == KeyModifiers::NONE => {
                 return self.execute_action(Action::NextTab, tui, writer).await;
@@ -524,9 +586,13 @@ impl Client {
             KeyCode::BackTab => {
                 return self.execute_action(Action::PrevTab, tui, writer).await;
             }
-            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' && normalized.modifiers == KeyModifiers::NONE => {
+            KeyCode::Char(c)
+                if c.is_ascii_digit() && c != '0' && normalized.modifiers == KeyModifiers::NONE =>
+            {
                 let n = c as u8 - b'0';
-                return self.execute_action(Action::FocusGroupN(n), tui, writer).await;
+                return self
+                    .execute_action(Action::FocusGroupN(n), tui, writer)
+                    .await;
             }
             _ => {
                 // No PTY fallback in Normal mode — keys are consumed
@@ -623,9 +689,11 @@ impl Client {
                 if let Ok(text) = clipboard::paste_from_clipboard() {
                     if !text.is_empty() {
                         let mut w = writer.lock().await;
-                        let _ = send_request(&mut *w, &ClientRequest::Command(
-                            format!("paste-buffer {}", text),
-                        )).await;
+                        let _ = send_request(
+                            &mut *w,
+                            &ClientRequest::Command(format!("paste-buffer {}", text)),
+                        )
+                        .await;
                     }
                 }
                 return Ok(());
@@ -698,24 +766,34 @@ impl Client {
     fn handle_help_key(&mut self, key: KeyEvent) -> Result<()> {
         if let Some(ref mut search) = self.help_state.search_input {
             match key.code {
-                KeyCode::Esc => { self.help_state.search_input = None; }
+                KeyCode::Esc => {
+                    self.help_state.search_input = None;
+                }
                 KeyCode::Backspace => {
                     search.pop();
                     if search.is_empty() {
                         self.help_state.search_input = None;
                     }
                 }
-                KeyCode::Char(c) => { search.push(c); }
+                KeyCode::Char(c) => {
+                    search.push(c);
+                }
                 _ => {}
             }
         } else {
             match key.code {
-                KeyCode::Esc => { self.mode = Mode::Normal; }
-                KeyCode::Char('j') | KeyCode::Down => { self.help_state.scroll_offset += 1; }
+                KeyCode::Esc => {
+                    self.mode = Mode::Normal;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.help_state.scroll_offset += 1;
+                }
                 KeyCode::Char('k') | KeyCode::Up => {
                     self.help_state.scroll_offset = self.help_state.scroll_offset.saturating_sub(1);
                 }
-                KeyCode::Char('/') => { self.help_state.search_input = Some(String::new()); }
+                KeyCode::Char('/') => {
+                    self.help_state.search_input = Some(String::new());
+                }
                 _ => {}
             }
         }
@@ -724,7 +802,8 @@ impl Client {
 
     fn handle_copy_mode_key(&mut self, key: KeyEvent) -> Result<()> {
         // Get the pane_id for the active pane so we can borrow screen and cms separately
-        let pane_id = self.active_workspace()
+        let pane_id = self
+            .active_workspace()
             .and_then(|ws| ws.groups.iter().find(|g| g.id == ws.active_group))
             .and_then(|g| g.tabs.get(g.active_tab))
             .map(|p| p.id);
@@ -797,7 +876,11 @@ impl Client {
                 self.mode = Mode::Normal;
                 // Forward the key to PTY
                 let mut w = writer.lock().await;
-                let _ = send_request(&mut *w, &ClientRequest::Key(SerializableKeyEvent::from(key))).await;
+                let _ = send_request(
+                    &mut *w,
+                    &ClientRequest::Key(SerializableKeyEvent::from(key)),
+                )
+                .await;
             }
         }
         Ok(())
@@ -824,8 +907,14 @@ impl Client {
                 }
                 KeyCode::Up => cp.move_up(),
                 KeyCode::Down => cp.move_down(),
-                KeyCode::Backspace => { cp.input.pop(); cp.update_filter(); }
-                KeyCode::Char(c) => { cp.input.push(c); cp.update_filter(); }
+                KeyCode::Backspace => {
+                    cp.input.pop();
+                    cp.update_filter();
+                }
+                KeyCode::Char(c) => {
+                    cp.input.push(c);
+                    cp.update_filter();
+                }
                 _ => {}
             }
         } else {
@@ -869,7 +958,11 @@ impl Client {
                 self.mode = Mode::Normal;
                 let leader_key = self.config.leader.key;
                 let mut w = writer.lock().await;
-                let _ = send_request(&mut *w, &ClientRequest::Key(SerializableKeyEvent::from(leader_key))).await;
+                let _ = send_request(
+                    &mut *w,
+                    &ClientRequest::Key(SerializableKeyEvent::from(leader_key)),
+                )
+                .await;
             }
             Some(group @ LeaderNode::Group { .. }) => {
                 let ls = self.leader_state.as_mut().unwrap();
@@ -889,7 +982,9 @@ impl Client {
     // --- Accessors for UI rendering ---
 
     pub fn active_workspace(&self) -> Option<&WorkspaceSnapshot> {
-        self.render_state.workspaces.get(self.render_state.active_workspace)
+        self.render_state
+            .workspaces
+            .get(self.render_state.active_workspace)
     }
 
     pub fn pane_screen(&self, pane_id: TabId) -> Option<&vt100::Screen> {
@@ -899,7 +994,8 @@ impl Client {
     fn update_terminal_title(&self) {
         if let Some(ref fmt) = self.config.behavior.terminal_title_format {
             let session = &self.render_state.session_name;
-            let workspace = self.active_workspace()
+            let workspace = self
+                .active_workspace()
                 .map(|ws| ws.name.as_str())
                 .unwrap_or("");
             let title = fmt
@@ -978,10 +1074,17 @@ fn action_to_command(action: &Action) -> Option<String> {
         Action::NewFloat => Some("new-float".to_string()),
         Action::RenameWindow | Action::RenamePane => None,
         // Client-only actions handled before this function is called
-        Action::Quit | Action::Help | Action::ScrollMode | Action::CopyMode
-        | Action::CommandPalette | Action::PasteClipboard | Action::SelectMode
-        | Action::EnterInteract | Action::EnterNormal
-        | Action::Detach | Action::SessionPicker
-        | Action::NewTab => None,  // NewTab opens picker client-side
+        Action::Quit
+        | Action::Help
+        | Action::ScrollMode
+        | Action::CopyMode
+        | Action::CommandPalette
+        | Action::PasteClipboard
+        | Action::SelectMode
+        | Action::EnterInteract
+        | Action::EnterNormal
+        | Action::Detach
+        | Action::SessionPicker
+        | Action::NewTab => None, // NewTab opens picker client-side
     }
 }

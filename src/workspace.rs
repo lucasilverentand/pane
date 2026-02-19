@@ -143,7 +143,9 @@ mod tests {
         let gid2 = WindowId::new_v4();
         let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "tab");
         let group2 = Window::new(gid2, p2);
-        assert!(ws.layout.split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2));
+        assert!(ws
+            .layout
+            .split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2));
         ws.groups.insert(gid2, group2);
         ws.active_group = gid2;
 
@@ -173,7 +175,8 @@ mod tests {
 
         let gid2 = WindowId::new_v4();
         let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t2");
-        ws.layout.split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2);
+        ws.layout
+            .split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2);
         ws.groups.insert(gid2, Window::new(gid2, p2));
         ws.active_group = gid2;
 
@@ -192,7 +195,8 @@ mod tests {
         // Add gid2
         let gid2 = WindowId::new_v4();
         let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t2");
-        ws.layout.split_pane(gid1, crate::layout::SplitDirection::Vertical, gid2);
+        ws.layout
+            .split_pane(gid1, crate::layout::SplitDirection::Vertical, gid2);
         ws.groups.insert(gid2, Window::new(gid2, p2));
         ws.active_group = gid2;
 
@@ -214,7 +218,8 @@ mod tests {
         // Add a second group and set leaf_min_sizes for both
         let gid2 = WindowId::new_v4();
         let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t2");
-        ws.layout.split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2);
+        ws.layout
+            .split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2);
         ws.groups.insert(gid2, Window::new(gid2, p2));
         ws.leaf_min_sizes.insert(gid1, (50, 10));
         ws.leaf_min_sizes.insert(gid2, (60, 12));
@@ -243,14 +248,32 @@ mod tests {
         let gid3 = WindowId::new_v4();
         let gid4 = WindowId::new_v4();
 
-        ws.layout.split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2);
-        ws.groups.insert(gid2, Window::new(gid2, Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "g2")));
+        ws.layout
+            .split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2);
+        ws.groups.insert(
+            gid2,
+            Window::new(
+                gid2,
+                Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "g2"),
+            ),
+        );
 
-        ws.layout.split_pane(gid2, crate::layout::SplitDirection::Vertical, gid3);
-        ws.groups.insert(gid3, Window::new(gid3, Tab::spawn_error(TabId::new_v4(), TabKind::Agent, "g3")));
+        ws.layout
+            .split_pane(gid2, crate::layout::SplitDirection::Vertical, gid3);
+        ws.groups.insert(
+            gid3,
+            Window::new(
+                gid3,
+                Tab::spawn_error(TabId::new_v4(), TabKind::Agent, "g3"),
+            ),
+        );
 
-        ws.layout.split_pane(gid1, crate::layout::SplitDirection::Vertical, gid4);
-        ws.groups.insert(gid4, Window::new(gid4, Tab::spawn_error(TabId::new_v4(), TabKind::Nvim, "g4")));
+        ws.layout
+            .split_pane(gid1, crate::layout::SplitDirection::Vertical, gid4);
+        ws.groups.insert(
+            gid4,
+            Window::new(gid4, Tab::spawn_error(TabId::new_v4(), TabKind::Nvim, "g4")),
+        );
 
         // 4 groups total
         assert_eq!(ws.groups.len(), 4);
@@ -283,11 +306,25 @@ mod tests {
         let gid2 = WindowId::new_v4();
         let gid3 = WindowId::new_v4();
 
-        ws.layout.split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2);
-        ws.groups.insert(gid2, Window::new(gid2, Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "g2")));
+        ws.layout
+            .split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2);
+        ws.groups.insert(
+            gid2,
+            Window::new(
+                gid2,
+                Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "g2"),
+            ),
+        );
 
-        ws.layout.split_pane(gid2, crate::layout::SplitDirection::Vertical, gid3);
-        ws.groups.insert(gid3, Window::new(gid3, Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "g3")));
+        ws.layout
+            .split_pane(gid2, crate::layout::SplitDirection::Vertical, gid3);
+        ws.groups.insert(
+            gid3,
+            Window::new(
+                gid3,
+                Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "g3"),
+            ),
+        );
 
         // Resize to skew ratios
         ws.layout.resize(gid1, 0.2);
@@ -297,7 +334,13 @@ mod tests {
         ws.leaf_min_sizes.clear();
 
         fn check_ratios(n: &LayoutNode) {
-            if let LayoutNode::Split { ratio, first, second, .. } = n {
+            if let LayoutNode::Split {
+                ratio,
+                first,
+                second,
+                ..
+            } = n
+            {
                 assert!((*ratio - 0.5).abs() < f64::EPSILON);
                 check_ratios(first);
                 check_ratios(second);

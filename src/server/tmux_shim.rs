@@ -96,16 +96,42 @@ fn parse_global_flags(args: &[String]) -> Result<(Option<String>, String, Vec<St
 fn is_subcommand(s: &str) -> bool {
     matches!(
         s,
-        "has-session" | "has" | "list-sessions" | "ls" | "new-session" | "new"
-            | "kill-session" | "new-window" | "neww" | "kill-window" | "killw"
-            | "split-window" | "splitw" | "send-keys" | "send"
-            | "select-pane" | "selectp" | "select-window" | "selectw"
-            | "list-panes" | "lsp" | "list-windows" | "lsw"
-            | "kill-pane" | "killp" | "kill-server"
-            | "rename-session" | "rename-window" | "renamew"
-            | "select-layout" | "resize-pane" | "resizep"
-            | "display-message" | "display"
-            | "set-option" | "set"
+        "has-session"
+            | "has"
+            | "list-sessions"
+            | "ls"
+            | "new-session"
+            | "new"
+            | "kill-session"
+            | "new-window"
+            | "neww"
+            | "kill-window"
+            | "killw"
+            | "split-window"
+            | "splitw"
+            | "send-keys"
+            | "send"
+            | "select-pane"
+            | "selectp"
+            | "select-window"
+            | "selectw"
+            | "list-panes"
+            | "lsp"
+            | "list-windows"
+            | "lsw"
+            | "kill-pane"
+            | "killp"
+            | "kill-server"
+            | "rename-session"
+            | "rename-window"
+            | "renamew"
+            | "select-layout"
+            | "resize-pane"
+            | "resizep"
+            | "display-message"
+            | "display"
+            | "set-option"
+            | "set"
     )
 }
 
@@ -144,7 +170,8 @@ fn resolve_session(args: &[String], session_override: &Option<String>) -> Result
             if let Some(target) = args.get(i + 1) {
                 // If target contains ':', the part before ':' is the session name
                 if let Some(session) = target.split(':').next() {
-                    if !session.starts_with('%') && !session.starts_with('@') && !session.is_empty() {
+                    if !session.starts_with('%') && !session.starts_with('@') && !session.is_empty()
+                    {
                         // Check if this is actually a session name (not a pane/window target)
                         let sessions = daemon::list_sessions();
                         if sessions.iter().any(|s| s == session) {
@@ -189,12 +216,29 @@ fn handle_new_session(args: &[String], session_override: &Option<String>) -> Res
 
     while i < args.len() {
         match args[i].as_str() {
-            "-s" if i + 1 < args.len() => { name = Some(args[i + 1].clone()); i += 2; }
-            "-n" if i + 1 < args.len() => { window_name = Some(args[i + 1].clone()); i += 2; }
-            "-d" => { detached = true; i += 1; }
-            "-P" => { print_info = true; i += 1; }
-            "-F" if i + 1 < args.len() => { format = Some(args[i + 1].clone()); i += 2; }
-            _ => { i += 1; }
+            "-s" if i + 1 < args.len() => {
+                name = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "-n" if i + 1 < args.len() => {
+                window_name = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "-d" => {
+                detached = true;
+                i += 1;
+            }
+            "-P" => {
+                print_info = true;
+                i += 1;
+            }
+            "-F" if i + 1 < args.len() => {
+                format = Some(args[i + 1].clone());
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
 
@@ -233,7 +277,10 @@ fn handle_new_session(args: &[String], session_override: &Option<String>) -> Res
 
         if let Some(wname) = &window_name {
             let rt = tokio::runtime::Runtime::new()?;
-            let _ = rt.block_on(send_command_sync(&session_name, &format!("rename-window {}", wname)));
+            let _ = rt.block_on(send_command_sync(
+                &session_name,
+                &format!("rename-window {}", wname),
+            ));
         }
 
         if print_info {
@@ -257,7 +304,11 @@ fn handle_kill_session(args: &[String], session_override: &Option<String>) -> Re
 }
 
 /// Send a command through the socket and get a synchronous response.
-fn handle_socket_command(subcmd: &str, args: &[String], session_override: &Option<String>) -> Result<()> {
+fn handle_socket_command(
+    subcmd: &str,
+    args: &[String],
+    session_override: &Option<String>,
+) -> Result<()> {
     let session = resolve_session(args, session_override)?;
 
     // Check for -P (print info) and -F (format) flags
@@ -279,7 +330,12 @@ fn handle_socket_command(subcmd: &str, args: &[String], session_override: &Optio
     let result = rt.block_on(send_command_sync(&session, &cmd_str))?;
 
     match result {
-        ServerResponse::CommandOutput { output, pane_id, window_id, success } => {
+        ServerResponse::CommandOutput {
+            output,
+            pane_id,
+            window_id,
+            success,
+        } => {
             if !success {
                 eprintln!("{}", output);
                 std::process::exit(1);
@@ -288,9 +344,18 @@ fn handle_socket_command(subcmd: &str, args: &[String], session_override: &Optio
                 // Format output for -P -F
                 if let Some(fmt) = &format {
                     let formatted = fmt
-                        .replace("#{pane_id}", &pane_id.map(|n| format!("%{}", n)).unwrap_or_default())
-                        .replace("#{window_id}", &window_id.map(|n| format!("@{}", n)).unwrap_or_default())
-                        .replace("#{window_index}", &window_id.map(|n| format!("{}", n)).unwrap_or_default())
+                        .replace(
+                            "#{pane_id}",
+                            &pane_id.map(|n| format!("%{}", n)).unwrap_or_default(),
+                        )
+                        .replace(
+                            "#{window_id}",
+                            &window_id.map(|n| format!("@{}", n)).unwrap_or_default(),
+                        )
+                        .replace(
+                            "#{window_index}",
+                            &window_id.map(|n| format!("{}", n)).unwrap_or_default(),
+                        )
                         .replace("#{session_name}", &session);
                     println!("{}", formatted);
                 } else if let Some(pane_n) = pane_id {
@@ -321,7 +386,10 @@ fn build_command_string(subcmd: &str, args: &[String]) -> String {
     for arg in args {
         // Quote args containing spaces
         if arg.contains(' ') || arg.contains('"') {
-            parts.push(format!("\"{}\"", arg.replace('\\', "\\\\").replace('"', "\\\"")));
+            parts.push(format!(
+                "\"{}\"",
+                arg.replace('\\', "\\\\").replace('"', "\\\"")
+            ));
         } else {
             parts.push(arg.clone());
         }
@@ -342,12 +410,24 @@ async fn send_command_sync(session_name: &str, cmd: &str) -> Result<ServerRespon
 }
 
 fn print_formatted_output(response: &ServerResponse, format: &Option<String>, session_name: &str) {
-    if let ServerResponse::CommandOutput { pane_id, window_id, .. } = response {
+    if let ServerResponse::CommandOutput {
+        pane_id, window_id, ..
+    } = response
+    {
         if let Some(fmt) = format {
             let formatted = fmt
-                .replace("#{pane_id}", &pane_id.map(|n| format!("%{}", n)).unwrap_or_default())
-                .replace("#{window_id}", &window_id.map(|n| format!("@{}", n)).unwrap_or_default())
-                .replace("#{window_index}", &window_id.map(|n| format!("{}", n)).unwrap_or_default())
+                .replace(
+                    "#{pane_id}",
+                    &pane_id.map(|n| format!("%{}", n)).unwrap_or_default(),
+                )
+                .replace(
+                    "#{window_id}",
+                    &window_id.map(|n| format!("@{}", n)).unwrap_or_default(),
+                )
+                .replace(
+                    "#{window_index}",
+                    &window_id.map(|n| format!("{}", n)).unwrap_or_default(),
+                )
                 .replace("#{session_name}", session_name);
             println!("{}", formatted);
         } else if let Some(pane_n) = pane_id {
@@ -368,7 +448,15 @@ mod tests {
 
     #[test]
     fn test_build_command_string_with_target() {
-        let cmd = build_command_string("send-keys", &["-t".to_string(), "%0".to_string(), "echo hello".to_string(), "Enter".to_string()]);
+        let cmd = build_command_string(
+            "send-keys",
+            &[
+                "-t".to_string(),
+                "%0".to_string(),
+                "echo hello".to_string(),
+                "Enter".to_string(),
+            ],
+        );
         assert_eq!(cmd, "send-keys -t %0 \"echo hello\" Enter");
     }
 
@@ -383,7 +471,11 @@ mod tests {
 
     #[test]
     fn test_parse_global_flags_with_socket_name() {
-        let args: Vec<String> = vec!["-L".to_string(), "mysession".to_string(), "list-windows".to_string()];
+        let args: Vec<String> = vec![
+            "-L".to_string(),
+            "mysession".to_string(),
+            "list-windows".to_string(),
+        ];
         let (session, subcmd, rest) = parse_global_flags(&args).unwrap();
         assert_eq!(session, Some("mysession".to_string()));
         assert_eq!(subcmd, "list-windows");
@@ -449,7 +541,12 @@ mod tests {
     fn test_build_command_string_multiple_special_args() {
         let cmd = build_command_string(
             "send-keys",
-            &["-t".to_string(), "%0".to_string(), "ls -la".to_string(), "Enter".to_string()],
+            &[
+                "-t".to_string(),
+                "%0".to_string(),
+                "ls -la".to_string(),
+                "Enter".to_string(),
+            ],
         );
         assert_eq!(cmd, r#"send-keys -t %0 "ls -la" Enter"#);
     }
@@ -482,7 +579,8 @@ mod tests {
     #[test]
     fn test_parse_global_flags_socket_path_s() {
         let args: Vec<String> = vec![
-            "-S".to_string(), "/tmp/my.sock".to_string(),
+            "-S".to_string(),
+            "/tmp/my.sock".to_string(),
             "list-sessions".to_string(),
         ];
         let (session, subcmd, rest) = parse_global_flags(&args).unwrap();
@@ -495,8 +593,11 @@ mod tests {
     #[test]
     fn test_parse_global_flags_config_file() {
         let args: Vec<String> = vec![
-            "-f".to_string(), "/etc/tmux.conf".to_string(),
-            "new-session".to_string(), "-s".to_string(), "test".to_string(),
+            "-f".to_string(),
+            "/etc/tmux.conf".to_string(),
+            "new-session".to_string(),
+            "-s".to_string(),
+            "test".to_string(),
         ];
         let (session, subcmd, rest) = parse_global_flags(&args).unwrap();
         assert_eq!(session, None);
@@ -507,9 +608,12 @@ mod tests {
     #[test]
     fn test_parse_global_flags_multiple_flags() {
         let args: Vec<String> = vec![
-            "-L".to_string(), "mysock".to_string(),
-            "-f".to_string(), "/my/config".to_string(),
-            "split-window".to_string(), "-h".to_string(),
+            "-L".to_string(),
+            "mysock".to_string(),
+            "-f".to_string(),
+            "/my/config".to_string(),
+            "split-window".to_string(),
+            "-h".to_string(),
         ];
         let (session, subcmd, rest) = parse_global_flags(&args).unwrap();
         assert_eq!(session, Some("mysock".to_string()));
@@ -531,13 +635,18 @@ mod tests {
     fn test_parse_global_flags_subcommand_at_start() {
         // Subcommand recognized immediately without any flags
         let args: Vec<String> = vec![
-            "send-keys".to_string(), "-t".to_string(), "%0".to_string(),
+            "send-keys".to_string(),
+            "-t".to_string(),
+            "%0".to_string(),
             "hello".to_string(),
         ];
         let (session, subcmd, rest) = parse_global_flags(&args).unwrap();
         assert_eq!(session, None);
         assert_eq!(subcmd, "send-keys");
-        assert_eq!(rest, vec!["-t".to_string(), "%0".to_string(), "hello".to_string()]);
+        assert_eq!(
+            rest,
+            vec!["-t".to_string(), "%0".to_string(), "hello".to_string()]
+        );
     }
 
     // --- extract_session_name tests ---
@@ -609,31 +718,75 @@ mod tests {
     #[test]
     fn test_is_subcommand_all_valid() {
         let valid = vec![
-            "has-session", "has", "list-sessions", "ls", "new-session", "new",
-            "kill-session", "new-window", "neww", "kill-window", "killw",
-            "split-window", "splitw", "send-keys", "send",
-            "select-pane", "selectp", "select-window", "selectw",
-            "list-panes", "lsp", "list-windows", "lsw",
-            "kill-pane", "killp", "kill-server",
-            "rename-session", "rename-window", "renamew",
-            "select-layout", "resize-pane", "resizep",
-            "display-message", "display",
-            "set-option", "set",
+            "has-session",
+            "has",
+            "list-sessions",
+            "ls",
+            "new-session",
+            "new",
+            "kill-session",
+            "new-window",
+            "neww",
+            "kill-window",
+            "killw",
+            "split-window",
+            "splitw",
+            "send-keys",
+            "send",
+            "select-pane",
+            "selectp",
+            "select-window",
+            "selectw",
+            "list-panes",
+            "lsp",
+            "list-windows",
+            "lsw",
+            "kill-pane",
+            "killp",
+            "kill-server",
+            "rename-session",
+            "rename-window",
+            "renamew",
+            "select-layout",
+            "resize-pane",
+            "resizep",
+            "display-message",
+            "display",
+            "set-option",
+            "set",
         ];
         for cmd in valid {
-            assert!(is_subcommand(cmd), "expected '{}' to be a valid subcommand", cmd);
+            assert!(
+                is_subcommand(cmd),
+                "expected '{}' to be a valid subcommand",
+                cmd
+            );
         }
     }
 
     #[test]
     fn test_is_subcommand_invalid() {
         let invalid = vec![
-            "-V", "-S", "-L", "-f", "-u", "--help",
-            "nonexistent", "kill", "list", "split",
-            "", "KILL-SERVER", "Kill-Server",
+            "-V",
+            "-S",
+            "-L",
+            "-f",
+            "-u",
+            "--help",
+            "nonexistent",
+            "kill",
+            "list",
+            "split",
+            "",
+            "KILL-SERVER",
+            "Kill-Server",
         ];
         for cmd in invalid {
-            assert!(!is_subcommand(cmd), "expected '{}' to NOT be a valid subcommand", cmd);
+            assert!(
+                !is_subcommand(cmd),
+                "expected '{}' to NOT be a valid subcommand",
+                cmd
+            );
         }
     }
 }

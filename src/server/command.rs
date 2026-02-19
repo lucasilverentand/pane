@@ -2,11 +2,11 @@
 use anyhow::{bail, Result};
 use tokio::sync::broadcast;
 
-use crate::layout::{TabId, SplitDirection};
-use crate::window::{WindowId, TabKind};
+use crate::layout::{SplitDirection, TabId};
 use crate::server::id_map::IdMap;
 use crate::server::protocol::{RenderState, ServerResponse};
 use crate::server::state::ServerState;
+use crate::window::{TabKind, WindowId};
 
 /// How to size a new split.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,31 +21,74 @@ pub enum Command {
     // Session commands
     KillServer,
     ListSessions,
-    RenameSession { new_name: String },
-    HasSession { name: String },
-    NewSession { name: String, window_name: Option<String>, detached: bool },
+    RenameSession {
+        new_name: String,
+    },
+    HasSession {
+        name: String,
+    },
+    NewSession {
+        name: String,
+        window_name: Option<String>,
+        detached: bool,
+    },
 
     // Window (Window) commands
-    NewWindow { target_session: Option<String>, window_name: Option<String>, command: Option<String> },
-    KillWindow { target: Option<TargetWindow> },
-    SelectWindow { target: TargetWindow },
-    RenameWindow { target: Option<TargetWindow>, new_name: String },
-    ListWindows { format: Option<String> },
+    NewWindow {
+        target_session: Option<String>,
+        window_name: Option<String>,
+        command: Option<String>,
+    },
+    KillWindow {
+        target: Option<TargetWindow>,
+    },
+    SelectWindow {
+        target: TargetWindow,
+    },
+    RenameWindow {
+        target: Option<TargetWindow>,
+        new_name: String,
+    },
+    ListWindows {
+        format: Option<String>,
+    },
 
     // Pane commands
-    SplitWindow { horizontal: bool, target: Option<TargetPane>, size: Option<SplitSize> },
-    KillPane { target: Option<TargetPane> },
-    SelectPane { target: TargetPane, title: Option<String> },
-    ListPanes { format: Option<String> },
-    SendKeys { target: Option<TargetPane>, keys: Vec<String> },
+    SplitWindow {
+        horizontal: bool,
+        target: Option<TargetPane>,
+        size: Option<SplitSize>,
+    },
+    KillPane {
+        target: Option<TargetPane>,
+    },
+    SelectPane {
+        target: TargetPane,
+        title: Option<String>,
+    },
+    ListPanes {
+        format: Option<String>,
+    },
+    SendKeys {
+        target: Option<TargetPane>,
+        keys: Vec<String>,
+    },
 
     // Layout commands
-    SelectLayout { layout_name: String },
-    ResizePane { target: Option<TargetPane>, direction: ResizeDirection, amount: u16 },
+    SelectLayout {
+        layout_name: String,
+    },
+    ResizePane {
+        target: Option<TargetPane>,
+        direction: ResizeDirection,
+        amount: u16,
+    },
 
     // Workspace commands
     CloseWorkspace,
-    SelectWorkspaceByIndex { index: usize },
+    SelectWorkspaceByIndex {
+        index: usize,
+    },
 
     // Tab cycling
     NextWindow,
@@ -53,10 +96,14 @@ pub enum Command {
 
     // Pane management
     RestartPane,
-    MoveTab { direction: PaneDirection },
+    MoveTab {
+        direction: PaneDirection,
+    },
     EqualizeLayout,
     ToggleSync,
-    PasteBuffer { text: String },
+    PasteBuffer {
+        text: String,
+    },
 
     // Layout presets
     MaximizeFocused,
@@ -70,7 +117,10 @@ pub enum Command {
     DetachClient,
 
     // Misc commands
-    DisplayMessage { message: String, to_stdout: bool },
+    DisplayMessage {
+        message: String,
+        to_stdout: bool,
+    },
 }
 
 /// Target specifier for a window (group).
@@ -191,12 +241,17 @@ pub fn execute(
             })
         }
 
-        Command::NewWindow { window_name, command, .. } => {
+        Command::NewWindow {
+            window_name,
+            command,
+            ..
+        } => {
             let (w, h) = state.last_size;
             let bar_h = state.workspace_bar_height();
             let cols = w.saturating_sub(4);
             let rows = h.saturating_sub(2 + bar_h + 1);
-            let pane_id = state.add_tab_to_active_group(TabKind::Shell, command.clone(), cols, rows)?;
+            let pane_id =
+                state.add_tab_to_active_group(TabKind::Shell, command.clone(), cols, rows)?;
             if let Some(wname) = window_name {
                 let ws = state.active_workspace_mut();
                 if let Some(group) = ws.groups.get_mut(&ws.active_group) {
@@ -254,21 +309,41 @@ pub fn execute(
             for (gid, group) in &ws.groups {
                 let win_n = id_map.register_window(*gid);
                 let name = group.name.as_deref().unwrap_or(
-                    group.tabs.get(group.active_tab).map(|p| p.title.as_str()).unwrap_or(""),
+                    group
+                        .tabs
+                        .get(group.active_tab)
+                        .map(|p| p.title.as_str())
+                        .unwrap_or(""),
                 );
                 let active_flag = *gid == ws.active_group;
                 if let Some(fmt) = &format {
                     let pane_n = id_map.register_pane(group.active_tab().id);
-                    lines.push(expand_format(fmt, win_n, pane_n, name, group, active_flag, state));
+                    lines.push(expand_format(
+                        fmt,
+                        win_n,
+                        pane_n,
+                        name,
+                        group,
+                        active_flag,
+                        state,
+                    ));
                 } else {
                     let active = if active_flag { " (active)" } else { "" };
-                    lines.push(format!("@{}: {} [{} panes]{}", win_n, name, group.tab_count(), active));
+                    lines.push(format!(
+                        "@{}: {} [{} panes]{}",
+                        win_n,
+                        name,
+                        group.tab_count(),
+                        active
+                    ));
                 }
             }
             Ok(CommandResult::Ok(lines.join("\n")))
         }
 
-        Command::SplitWindow { horizontal, target, .. } => {
+        Command::SplitWindow {
+            horizontal, target, ..
+        } => {
             if let Some(target) = target {
                 let group_id = resolve_pane_to_group(target, state, id_map)?;
                 state.active_workspace_mut().active_group = group_id;
@@ -282,7 +357,8 @@ pub fn execute(
             let bar_h = state.workspace_bar_height();
             let cols = w.saturating_sub(4);
             let rows = h.saturating_sub(2 + bar_h + 1);
-            let (new_group_id, new_pane_id) = state.split_active_group(direction, TabKind::Shell, cols, rows)?;
+            let (new_group_id, new_pane_id) =
+                state.split_active_group(direction, TabKind::Shell, cols, rows)?;
             let pane_n = id_map.register_pane(new_pane_id);
             let win_n = id_map.register_window(new_group_id);
             broadcast_layout(state, broadcast_tx);
@@ -361,11 +437,24 @@ pub fn execute(
                     for pane in &group.tabs {
                         let pn = id_map.register_pane(pane.id);
                         if let Some(fmt) = &format {
-                            lines.push(expand_format(fmt, wn, pn, &pane.title, group, active_flag, state));
+                            lines.push(expand_format(
+                                fmt,
+                                wn,
+                                pn,
+                                &pane.title,
+                                group,
+                                active_flag,
+                                state,
+                            ));
                         } else {
                             let exited_flag = if pane.exited { " (dead)" } else { "" };
                             lines.push(format!(
-                                "%{}: @{} {} [{}]{}", pn, wn, pane.title, pane.kind.label(), exited_flag
+                                "%{}: @{} {} [{}]{}",
+                                pn,
+                                wn,
+                                pane.title,
+                                pane.kind.label(),
+                                exited_flag
                             ));
                         }
                     }
@@ -388,10 +477,16 @@ pub fn execute(
         Command::SelectLayout { layout_name } => {
             // Delegate to layout presets if available
             let _ = layout_name;
-            Ok(CommandResult::Ok("layout selection not yet implemented".to_string()))
+            Ok(CommandResult::Ok(
+                "layout selection not yet implemented".to_string(),
+            ))
         }
 
-        Command::ResizePane { target, direction, amount } => {
+        Command::ResizePane {
+            target,
+            direction,
+            amount,
+        } => {
             if let Some(target) = target {
                 let group_id = resolve_pane_to_group(target, state, id_map)?;
                 state.active_workspace_mut().active_group = group_id;
@@ -577,11 +672,20 @@ pub fn execute(
             let cols = fw_w.saturating_sub(2);
             let rows = fw_h.saturating_sub(2);
             let pane = match crate::window::Tab::spawn_with_env(
-                pane_id, crate::window::TabKind::Shell, cols, rows,
-                state.event_tx.clone(), None, Some(tmux_env),
+                pane_id,
+                crate::window::TabKind::Shell,
+                cols,
+                rows,
+                state.event_tx.clone(),
+                None,
+                Some(tmux_env),
             ) {
                 Ok(p) => p,
-                Err(e) => crate::window::Tab::spawn_error(pane_id, crate::window::TabKind::Shell, &e.to_string()),
+                Err(e) => crate::window::Tab::spawn_error(
+                    pane_id,
+                    crate::window::TabKind::Shell,
+                    &e.to_string(),
+                ),
             };
             let group = crate::window::Window::new(group_id, pane);
             let ws = state.active_workspace_mut();
@@ -605,9 +709,7 @@ pub fn execute(
             })
         }
 
-        Command::DetachClient => {
-            Ok(CommandResult::DetachRequested)
-        }
+        Command::DetachClient => Ok(CommandResult::DetachRequested),
 
         Command::DisplayMessage { message, .. } => {
             // When to_stdout is true, the shim will print this.
@@ -622,7 +724,15 @@ pub fn execute(
             };
             let group = ws.groups.get(&gid);
             let expanded = if let Some(group) = group {
-                expand_format(message, win_n, pane_n, &group.active_tab().title, group, true, state)
+                expand_format(
+                    message,
+                    win_n,
+                    pane_n,
+                    &group.active_tab().title,
+                    group,
+                    true,
+                    state,
+                )
             } else {
                 message.clone()
             };
@@ -645,13 +755,16 @@ fn resolve_window_target(
 ) -> Result<WindowId> {
     match target {
         None => Ok(state.active_workspace().active_group),
-        Some(TargetWindow::Id(n)) => {
-            id_map.window_id(*n).ok_or_else(|| anyhow::anyhow!("no window with id @{}", n))
-        }
+        Some(TargetWindow::Id(n)) => id_map
+            .window_id(*n)
+            .ok_or_else(|| anyhow::anyhow!("no window with id @{}", n)),
         Some(TargetWindow::Index(idx)) => {
             let ws = state.active_workspace();
             let group_ids = ws.layout.pane_ids();
-            group_ids.get(*idx).copied().ok_or_else(|| anyhow::anyhow!("window index {} out of range", idx))
+            group_ids
+                .get(*idx)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("window index {} out of range", idx))
         }
     }
 }
@@ -666,15 +779,19 @@ fn resolve_pane_target(
         None => {
             let ws = state.active_workspace();
             let gid = ws.active_group;
-            let pid = ws.groups.get(&gid)
+            let pid = ws
+                .groups
+                .get(&gid)
                 .map(|g| g.active_tab().id)
                 .ok_or_else(|| anyhow::anyhow!("no active pane"))?;
             Ok((gid, pid))
         }
         Some(TargetPane::Id(n)) => {
-            let pane_id = id_map.pane_id(*n)
+            let pane_id = id_map
+                .pane_id(*n)
                 .ok_or_else(|| anyhow::anyhow!("no pane with id %{}", n))?;
-            let (_, group_id) = state.find_tab_location(pane_id)
+            let (_, group_id) = state
+                .find_tab_location(pane_id)
                 .ok_or_else(|| anyhow::anyhow!("pane %{} not found in any workspace", n))?;
             Ok((group_id, pane_id))
         }
@@ -687,9 +804,13 @@ fn resolve_pane_target(
                 PaneDirection::Up => (SplitDirection::Vertical, crate::layout::Side::First),
                 PaneDirection::Down => (SplitDirection::Vertical, crate::layout::Side::Second),
             };
-            let neighbor_id = ws.layout.find_neighbor(active, split_dir, side)
+            let neighbor_id = ws
+                .layout
+                .find_neighbor(active, split_dir, side)
                 .ok_or_else(|| anyhow::anyhow!("no pane in that direction"))?;
-            let pid = ws.groups.get(&neighbor_id)
+            let pid = ws
+                .groups
+                .get(&neighbor_id)
                 .map(|g| g.active_tab().id)
                 .ok_or_else(|| anyhow::anyhow!("neighbor group has no panes"))?;
             Ok((neighbor_id, pid))
@@ -721,7 +842,10 @@ fn expand_format(
     result = result.replace("#{pane_id}", &format!("%{}", pane_id));
     result = result.replace("#{window_id}", &format!("@{}", window_id));
     result = result.replace("#{window_index}", &format!("{}", window_id));
-    result = result.replace("#{window_name}", group.name.as_deref().unwrap_or(pane_title));
+    result = result.replace(
+        "#{window_name}",
+        group.name.as_deref().unwrap_or(pane_title),
+    );
     result = result.replace("#{pane_title}", pane_title);
     result = result.replace("#{pane_index}", &format!("{}", pane_id));
     result = result.replace("#{pane_current_command}", pane_title);
@@ -729,8 +853,14 @@ fn expand_format(
     result = result.replace("#{session_id}", &format!("${}", 0)); // session id always $0 for now
     result = result.replace("#{window_active}", if is_active { "1" } else { "0" });
     result = result.replace("#{pane_active}", if is_active { "1" } else { "0" });
-    result = result.replace("#{pane_width}", &format!("{}", state.last_size.0.saturating_sub(4)));
-    result = result.replace("#{pane_height}", &format!("{}", state.last_size.1.saturating_sub(3)));
+    result = result.replace(
+        "#{pane_width}",
+        &format!("{}", state.last_size.0.saturating_sub(4)),
+    );
+    result = result.replace(
+        "#{pane_height}",
+        &format!("{}", state.last_size.1.saturating_sub(3)),
+    );
     // Handle pane_pid: not available directly, use 0 as placeholder
     result = result.replace("#{pane_pid}", "0");
     result = result.replace("#{pane_tty}", "/dev/null");
@@ -774,14 +904,19 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::layout::TabId;
-    use crate::window::{Tab, Window, WindowId, TabKind};
     use crate::server::id_map::IdMap;
+    use crate::window::{Tab, TabKind, Window, WindowId};
     use crate::workspace::Workspace;
     use std::collections::HashMap;
     use tokio::sync::mpsc;
 
     /// Build a ServerState without PTY spawning using spawn_error panes.
-    fn make_test_state() -> (ServerState, IdMap, broadcast::Sender<ServerResponse>, mpsc::UnboundedReceiver<crate::event::AppEvent>) {
+    fn make_test_state() -> (
+        ServerState,
+        IdMap,
+        broadcast::Sender<ServerResponse>,
+        mpsc::UnboundedReceiver<crate::event::AppEvent>,
+    ) {
         let (event_tx, rx) = mpsc::unbounded_channel();
         let pane_id = TabId::new_v4();
         let group_id = WindowId::new_v4();
@@ -809,7 +944,13 @@ mod tests {
     }
 
     /// Build a state with two groups in a horizontal split.
-    fn make_split_state() -> (ServerState, IdMap, broadcast::Sender<ServerResponse>, WindowId, WindowId) {
+    fn make_split_state() -> (
+        ServerState,
+        IdMap,
+        broadcast::Sender<ServerResponse>,
+        WindowId,
+        WindowId,
+    ) {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let gid1 = WindowId::new_v4();
         let gid2 = WindowId::new_v4();
@@ -907,8 +1048,12 @@ mod tests {
     fn test_command_equality() {
         assert_eq!(Command::KillServer, Command::KillServer);
         assert_eq!(
-            Command::RenameSession { new_name: "x".to_string() },
-            Command::RenameSession { new_name: "x".to_string() },
+            Command::RenameSession {
+                new_name: "x".to_string()
+            },
+            Command::RenameSession {
+                new_name: "x".to_string()
+            },
         );
         assert_ne!(Command::KillServer, Command::ListPanes { format: None });
     }
@@ -996,7 +1141,12 @@ mod tests {
         let (state, group) = make_test_state_and_group();
         let result = expand_format(
             "#{session_name}:#{window_id}.#{pane_id}",
-            2, 7, "vim", &group, true, &state,
+            2,
+            7,
+            "vim",
+            &group,
+            true,
+            &state,
         );
         assert_eq!(result, "my-session:@2.%7");
     }
@@ -1020,7 +1170,9 @@ mod tests {
     #[test]
     fn test_execute_rename_session() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
-        let cmd = Command::RenameSession { new_name: "new-name".to_string() };
+        let cmd = Command::RenameSession {
+            new_name: "new-name".to_string(),
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(matches!(result, CommandResult::Ok(_)));
         assert_eq!(state.session_name, "new-name");
@@ -1072,7 +1224,9 @@ mod tests {
         let gid2 = WindowId::new_v4();
         let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "ws2");
         let g2 = Window::new(gid2, p2);
-        state.workspaces.push(Workspace::new("workspace 2".to_string(), gid2, g2));
+        state
+            .workspaces
+            .push(Workspace::new("workspace 2".to_string(), gid2, g2));
         state.active_workspace = 1;
 
         let cmd = Command::CloseWorkspace;
@@ -1098,7 +1252,9 @@ mod tests {
     #[test]
     fn test_execute_list_windows_with_format() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
-        let cmd = Command::ListWindows { format: Some("#{window_id}:#{pane_id}".to_string()) };
+        let cmd = Command::ListWindows {
+            format: Some("#{window_id}:#{pane_id}".to_string()),
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
             CommandResult::Ok(output) => {
@@ -1127,7 +1283,9 @@ mod tests {
     #[test]
     fn test_execute_list_panes_with_format() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
-        let cmd = Command::ListPanes { format: Some("#{pane_id} #{session_name}".to_string()) };
+        let cmd = Command::ListPanes {
+            format: Some("#{pane_id} #{session_name}".to_string()),
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
             CommandResult::Ok(output) => {
@@ -1143,7 +1301,9 @@ mod tests {
         // Register windows in layout order
         let layout_ids = state.active_workspace().layout.pane_ids();
         // Window at index 0 should be the first leaf
-        let cmd = Command::SelectWindow { target: TargetWindow::Index(1) };
+        let cmd = Command::SelectWindow {
+            target: TargetWindow::Index(1),
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(matches!(result, CommandResult::LayoutChanged));
         // Active group changed to the second group
@@ -1154,7 +1314,9 @@ mod tests {
     #[test]
     fn test_execute_select_window_invalid_index() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
-        let cmd = Command::SelectWindow { target: TargetWindow::Index(99) };
+        let cmd = Command::SelectWindow {
+            target: TargetWindow::Index(99),
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx);
         assert!(result.is_err());
     }
@@ -1163,7 +1325,9 @@ mod tests {
     fn test_execute_select_window_by_id() {
         let (mut state, mut id_map, broadcast_tx, _gid1, gid2) = make_split_state();
         let win_n = id_map.register_window(gid2);
-        let cmd = Command::SelectWindow { target: TargetWindow::Id(win_n) };
+        let cmd = Command::SelectWindow {
+            target: TargetWindow::Id(win_n),
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(matches!(result, CommandResult::LayoutChanged));
         assert_eq!(state.active_workspace().active_group, gid2);
@@ -1172,7 +1336,9 @@ mod tests {
     #[test]
     fn test_execute_select_window_invalid_id() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
-        let cmd = Command::SelectWindow { target: TargetWindow::Id(999) };
+        let cmd = Command::SelectWindow {
+            target: TargetWindow::Id(999),
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx);
         assert!(result.is_err());
     }
@@ -1180,7 +1346,10 @@ mod tests {
     #[test]
     fn test_execute_rename_window() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
-        let cmd = Command::RenameWindow { target: None, new_name: "my-win".to_string() };
+        let cmd = Command::RenameWindow {
+            target: None,
+            new_name: "my-win".to_string(),
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(matches!(result, CommandResult::Ok(_)));
         let ws = state.active_workspace();
@@ -1217,7 +1386,9 @@ mod tests {
             ws.leaf_min_sizes.insert(gid2, (60, 12));
         }
         let win_n = id_map.window_number(&gid1).unwrap();
-        let cmd = Command::KillWindow { target: Some(TargetWindow::Id(win_n)) };
+        let cmd = Command::KillWindow {
+            target: Some(TargetWindow::Id(win_n)),
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
 
         assert!(matches!(result, CommandResult::LayoutChanged));
@@ -1241,7 +1412,12 @@ mod tests {
         let gid = state.active_workspace().active_group;
         let pid2 = TabId::new_v4();
         let p2 = Tab::spawn_error(pid2, TabKind::Shell, "tab2");
-        state.active_workspace_mut().groups.get_mut(&gid).unwrap().add_tab(p2);
+        state
+            .active_workspace_mut()
+            .groups
+            .get_mut(&gid)
+            .unwrap()
+            .add_tab(p2);
         id_map.register_pane(pid2);
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 2);
 
@@ -1310,7 +1486,12 @@ mod tests {
         // Add a second tab
         let pid2 = TabId::new_v4();
         let p2 = Tab::spawn_error(pid2, TabKind::Shell, "tab2");
-        state.active_workspace_mut().groups.get_mut(&gid).unwrap().add_tab(p2);
+        state
+            .active_workspace_mut()
+            .groups
+            .get_mut(&gid)
+            .unwrap()
+            .add_tab(p2);
         // active_tab is now 1 (just added)
 
         let cmd = Command::NextWindow;
@@ -1325,7 +1506,12 @@ mod tests {
         let gid = state.active_workspace().active_group;
         let pid2 = TabId::new_v4();
         let p2 = Tab::spawn_error(pid2, TabKind::Shell, "tab2");
-        state.active_workspace_mut().groups.get_mut(&gid).unwrap().add_tab(p2);
+        state
+            .active_workspace_mut()
+            .groups
+            .get_mut(&gid)
+            .unwrap()
+            .add_tab(p2);
         // active_tab = 1, prev should go to 0
         let cmd = Command::PreviousWindow;
         execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
@@ -1337,9 +1523,19 @@ mod tests {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let gid = state.active_workspace().active_group;
         let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "tab2");
-        state.active_workspace_mut().groups.get_mut(&gid).unwrap().add_tab(p2);
+        state
+            .active_workspace_mut()
+            .groups
+            .get_mut(&gid)
+            .unwrap()
+            .add_tab(p2);
         // Set to tab 0, prev should wrap to last
-        state.active_workspace_mut().groups.get_mut(&gid).unwrap().active_tab = 0;
+        state
+            .active_workspace_mut()
+            .groups
+            .get_mut(&gid)
+            .unwrap()
+            .active_tab = 0;
         let cmd = Command::PreviousWindow;
         execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert_eq!(state.active_workspace().groups[&gid].active_tab, 1);
@@ -1431,7 +1627,9 @@ mod tests {
     fn test_execute_move_tab_no_neighbor() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         // Single group, no neighbor — should be a no-op
-        let cmd = Command::MoveTab { direction: PaneDirection::Right };
+        let cmd = Command::MoveTab {
+            direction: PaneDirection::Right,
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(matches!(result, CommandResult::LayoutChanged));
     }
@@ -1441,10 +1639,17 @@ mod tests {
         let (mut state, mut id_map, broadcast_tx, gid1, gid2) = make_split_state();
         // Add extra tab to gid1
         let p_extra = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "extra");
-        state.active_workspace_mut().groups.get_mut(&gid1).unwrap().add_tab(p_extra);
+        state
+            .active_workspace_mut()
+            .groups
+            .get_mut(&gid1)
+            .unwrap()
+            .add_tab(p_extra);
         assert_eq!(state.active_workspace().groups[&gid1].tab_count(), 2);
 
-        let cmd = Command::MoveTab { direction: PaneDirection::Right };
+        let cmd = Command::MoveTab {
+            direction: PaneDirection::Right,
+        };
         execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert_eq!(state.active_workspace().groups[&gid1].tab_count(), 1);
         assert_eq!(state.active_workspace().groups[&gid2].tab_count(), 2);
@@ -1454,10 +1659,16 @@ mod tests {
     fn test_execute_split_window_horizontal() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         assert_eq!(state.active_workspace().groups.len(), 1);
-        let cmd = Command::SplitWindow { horizontal: true, target: None, size: None };
+        let cmd = Command::SplitWindow {
+            horizontal: true,
+            target: None,
+            size: None,
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
-            CommandResult::OkWithId { pane_id, window_id, .. } => {
+            CommandResult::OkWithId {
+                pane_id, window_id, ..
+            } => {
                 assert!(pane_id.is_some());
                 assert!(window_id.is_some());
             }
@@ -1469,7 +1680,11 @@ mod tests {
     #[test]
     fn test_execute_split_window_vertical() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
-        let cmd = Command::SplitWindow { horizontal: false, target: None, size: None };
+        let cmd = Command::SplitWindow {
+            horizontal: false,
+            target: None,
+            size: None,
+        };
         execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert_eq!(state.active_workspace().groups.len(), 2);
     }
@@ -1479,10 +1694,16 @@ mod tests {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let gid = state.active_workspace().active_group;
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 1);
-        let cmd = Command::NewWindow { target_session: None, window_name: None, command: None };
+        let cmd = Command::NewWindow {
+            target_session: None,
+            window_name: None,
+            command: None,
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
-            CommandResult::OkWithId { pane_id, window_id, .. } => {
+            CommandResult::OkWithId {
+                pane_id, window_id, ..
+            } => {
                 assert!(pane_id.is_some());
                 assert!(window_id.is_some());
             }
@@ -1508,7 +1729,9 @@ mod tests {
     #[test]
     fn test_execute_paste_buffer() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
-        let cmd = Command::PasteBuffer { text: "hello world".to_string() };
+        let cmd = Command::PasteBuffer {
+            text: "hello world".to_string(),
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(matches!(result, CommandResult::Ok(_)));
     }
@@ -1516,7 +1739,9 @@ mod tests {
     #[test]
     fn test_execute_paste_buffer_empty() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
-        let cmd = Command::PasteBuffer { text: String::new() };
+        let cmd = Command::PasteBuffer {
+            text: String::new(),
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(matches!(result, CommandResult::Ok(_)));
     }
@@ -1524,7 +1749,9 @@ mod tests {
     #[test]
     fn test_execute_select_layout_not_implemented() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
-        let cmd = Command::SelectLayout { layout_name: "tiled".to_string() };
+        let cmd = Command::SelectLayout {
+            layout_name: "tiled".to_string(),
+        };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
             CommandResult::Ok(output) => {
@@ -1545,7 +1772,9 @@ mod tests {
         };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
-            CommandResult::OkWithId { pane_id, window_id, .. } => {
+            CommandResult::OkWithId {
+                pane_id, window_id, ..
+            } => {
                 assert!(pane_id.is_some());
                 assert!(window_id.is_some());
             }
@@ -1573,7 +1802,9 @@ mod tests {
     fn test_execute_kill_window_by_id() {
         let (mut state, mut id_map, broadcast_tx, _gid1, gid2) = make_split_state();
         let win_n = id_map.register_window(gid2);
-        let cmd = Command::KillWindow { target: Some(TargetWindow::Id(win_n)) };
+        let cmd = Command::KillWindow {
+            target: Some(TargetWindow::Id(win_n)),
+        };
         execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(!state.active_workspace().groups.contains_key(&gid2));
         assert_eq!(state.active_workspace().groups.len(), 1);

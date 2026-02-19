@@ -86,9 +86,7 @@ struct PluginChild {
 }
 
 impl PluginManager {
-    pub fn new(
-        configs: Vec<PluginConfig>,
-    ) -> (Self, mpsc::UnboundedReceiver<PluginEvent>) {
+    pub fn new(configs: Vec<PluginConfig>) -> (Self, mpsc::UnboundedReceiver<PluginEvent>) {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let segments = vec![Vec::new(); configs.len()];
         let children: Vec<Option<PluginChild>> = (0..configs.len()).map(|_| None).collect();
@@ -199,8 +197,13 @@ impl PluginManager {
         };
 
         let event_str = event.to_string();
-        let matching: Vec<usize> = self.configs.iter().enumerate()
-            .filter(|(_, config)| config.events.contains(&event_str) || config.events.contains(&"*".to_string()))
+        let matching: Vec<usize> = self
+            .configs
+            .iter()
+            .enumerate()
+            .filter(|(_, config)| {
+                config.events.contains(&event_str) || config.events.contains(&"*".to_string())
+            })
             .map(|(i, _)| i)
             .collect();
 
@@ -212,7 +215,10 @@ impl PluginManager {
                     .await
                     .is_err()
                 {
-                    eprintln!("pane: plugin '{}' timed out on write", self.configs[*i].command);
+                    eprintln!(
+                        "pane: plugin '{}' timed out on write",
+                        self.configs[*i].command
+                    );
                     let _ = pc.child.kill().await;
                     self.children[*i] = None;
                     to_restart.push(*i);
@@ -232,7 +238,10 @@ impl PluginManager {
     /// Update segments from a PluginEvent.
     pub fn handle_event(&mut self, event: PluginEvent) -> Vec<String> {
         match event {
-            PluginEvent::SegmentsUpdated { plugin_idx, segments } => {
+            PluginEvent::SegmentsUpdated {
+                plugin_idx,
+                segments,
+            } => {
                 if plugin_idx < self.segments.len() {
                     self.segments[plugin_idx] = segments;
                 }

@@ -36,7 +36,10 @@ impl TabPickerState {
     }
 
     pub fn filtered_entries(&self) -> Vec<(usize, &TabPickerEntry)> {
-        self.filtered.iter().map(|&i| (i, &self.entries[i])).collect()
+        self.filtered
+            .iter()
+            .map(|&i| (i, &self.entries[i]))
+            .collect()
     }
 
     pub fn update_filter(&mut self) {
@@ -44,11 +47,18 @@ impl TabPickerState {
         if query.is_empty() {
             self.filtered = (0..self.entries.len()).collect();
         } else {
-            self.filtered = self.entries.iter().enumerate()
+            self.filtered = self
+                .entries
+                .iter()
+                .enumerate()
                 .filter(|(_, e)| {
-                    e.name.to_lowercase().contains(&query) ||
-                    e.description.to_lowercase().contains(&query) ||
-                    e.command.as_deref().unwrap_or("").to_lowercase().contains(&query)
+                    e.name.to_lowercase().contains(&query)
+                        || e.description.to_lowercase().contains(&query)
+                        || e.command
+                            .as_deref()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .contains(&query)
                 })
                 .map(|(i, _)| i)
                 .collect();
@@ -83,20 +93,22 @@ impl TabPickerState {
 }
 
 fn default_entries() -> Vec<TabPickerEntry> {
-    let mut entries = vec![
-        TabPickerEntry {
-            name: "Shell".into(),
-            command: None,
-            description: "Default shell ($SHELL)".into(),
-        },
-    ];
+    let mut entries = vec![TabPickerEntry {
+        name: "Shell".into(),
+        command: None,
+        description: "Default shell ($SHELL)".into(),
+    }];
 
     // Add common shells if they exist
     for (name, path, desc) in [
         ("Bash", "/bin/bash", "Bourne Again Shell"),
         ("Zsh", "/bin/zsh", "Z Shell"),
         ("Fish", "/usr/local/bin/fish", "Friendly Interactive Shell"),
-        ("Fish (Homebrew)", "/opt/homebrew/bin/fish", "Friendly Interactive Shell"),
+        (
+            "Fish (Homebrew)",
+            "/opt/homebrew/bin/fish",
+            "Friendly Interactive Shell",
+        ),
     ] {
         if std::path::Path::new(path).exists() {
             entries.push(TabPickerEntry {
@@ -165,10 +177,18 @@ pub fn render(state: &TabPickerState, theme: &Theme, frame: &mut Frame, area: Re
     // Separator
     let sep_area = Rect::new(inner.x, inner.y + 1, inner.width, 1);
     let sep = Line::from("─".repeat(inner.width as usize));
-    frame.render_widget(Paragraph::new(sep).style(Style::default().fg(Color::DarkGray)), sep_area);
+    frame.render_widget(
+        Paragraph::new(sep).style(Style::default().fg(Color::DarkGray)),
+        sep_area,
+    );
 
     // Entries
-    let list_area = Rect::new(inner.x, inner.y + 2, inner.width, inner.height.saturating_sub(2));
+    let list_area = Rect::new(
+        inner.x,
+        inner.y + 2,
+        inner.width,
+        inner.height.saturating_sub(2),
+    );
     let filtered = state.filtered_entries();
 
     for (i, (_idx, entry)) in filtered.iter().enumerate() {
@@ -177,7 +197,9 @@ pub fn render(state: &TabPickerState, theme: &Theme, frame: &mut Frame, area: Re
         }
         let is_selected = i == state.selected;
         let style = if is_selected {
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.fg)
         };

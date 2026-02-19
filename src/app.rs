@@ -2,7 +2,6 @@
 
 use crossterm::event::KeyEvent;
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Mode {
     Normal,

@@ -202,7 +202,11 @@ pub fn render(
     let max_scroll = lines.len().saturating_sub(visible_height);
     let scroll = help_state.scroll_offset.min(max_scroll);
 
-    let visible_lines: Vec<Line> = lines.into_iter().skip(scroll).take(visible_height).collect();
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(scroll)
+        .take(visible_height)
+        .collect();
 
     let paragraph = Paragraph::new(visible_lines);
     frame.render_widget(paragraph, inner);
@@ -247,7 +251,8 @@ mod tests {
         let key_style = Style::default();
         let desc_style = Style::default();
         let all_lines = build_help_lines(&keymap, None, heading, key_style, desc_style);
-        let filtered_lines = build_help_lines(&keymap, Some("quit"), heading, key_style, desc_style);
+        let filtered_lines =
+            build_help_lines(&keymap, Some("quit"), heading, key_style, desc_style);
         assert!(filtered_lines.len() < all_lines.len());
     }
 

@@ -73,17 +73,26 @@ mod tests {
 
     #[test]
     fn ctrl_a() {
-        assert_eq!(key_to_bytes(key(KeyCode::Char('a'), KeyModifiers::CONTROL)), vec![1]);
+        assert_eq!(
+            key_to_bytes(key(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+            vec![1]
+        );
     }
 
     #[test]
     fn ctrl_c() {
-        assert_eq!(key_to_bytes(key(KeyCode::Char('c'), KeyModifiers::CONTROL)), vec![3]);
+        assert_eq!(
+            key_to_bytes(key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            vec![3]
+        );
     }
 
     #[test]
     fn ctrl_z() {
-        assert_eq!(key_to_bytes(key(KeyCode::Char('z'), KeyModifiers::CONTROL)), vec![26]);
+        assert_eq!(
+            key_to_bytes(key(KeyCode::Char('z'), KeyModifiers::CONTROL)),
+            vec![26]
+        );
     }
 
     #[test]

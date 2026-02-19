@@ -32,18 +32,19 @@ pub fn start_event_loop(event_tx: mpsc::UnboundedSender<AppEvent>) {
                     let app_event = match event {
                         Event::Key(key) => AppEvent::Key(key),
                         Event::Mouse(m) => match m.kind {
-                            MouseEventKind::Down(MouseButton::Left) => {
-                                AppEvent::MouseDown { x: m.column, y: m.row }
-                            }
-                            MouseEventKind::Down(MouseButton::Right) => {
-                                AppEvent::MouseRightDown
-                            }
-                            MouseEventKind::Drag(MouseButton::Left) => {
-                                AppEvent::MouseDrag { x: m.column, y: m.row }
-                            }
-                            MouseEventKind::Moved => {
-                                AppEvent::MouseMove { x: m.column, y: m.row }
-                            }
+                            MouseEventKind::Down(MouseButton::Left) => AppEvent::MouseDown {
+                                x: m.column,
+                                y: m.row,
+                            },
+                            MouseEventKind::Down(MouseButton::Right) => AppEvent::MouseRightDown,
+                            MouseEventKind::Drag(MouseButton::Left) => AppEvent::MouseDrag {
+                                x: m.column,
+                                y: m.row,
+                            },
+                            MouseEventKind::Moved => AppEvent::MouseMove {
+                                x: m.column,
+                                y: m.row,
+                            },
                             MouseEventKind::Up(_) => AppEvent::MouseUp,
                             MouseEventKind::ScrollUp => AppEvent::MouseScroll { up: true },
                             MouseEventKind::ScrollDown => AppEvent::MouseScroll { up: false },
