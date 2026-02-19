@@ -149,7 +149,45 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
     } else {
         ServerState::new_session(session_name.clone(), &event_tx, 80, 24, config)?
     };
+    // Start plugin manager
+    let plugin_configs = state.config.plugins.clone();
     let state = Arc::new(Mutex::new(state));
+
+    if !plugin_configs.is_empty() {
+        let (mut plugin_mgr, mut plugin_rx) = crate::plugin::PluginManager::new(plugin_configs);
+        plugin_mgr.start_all();
+        let plugin_mgr = Arc::new(Mutex::new(plugin_mgr));
+
+        // Forward plugin events to state/broadcast
+        let plugin_mgr_clone = Arc::clone(&plugin_mgr);
+        let state_clone = Arc::clone(&state);
+        tokio::spawn(async move {
+            while let Some(event) = plugin_rx.recv().await {
+                let mut mgr = plugin_mgr_clone.lock().await;
+                let commands = mgr.handle_event(event);
+
+                // Broadcast updated segments to clients
+                // (segments are stored in the plugin manager, not sent via broadcast for now)
+
+                // Execute any commands returned by plugins
+                for cmd_str in commands {
+                    if cmd_str.is_empty() {
+                        continue;
+                    }
+                    if let Ok(parsed) = crate::server::command_parser::parse(&cmd_str) {
+                        let mut state = state_clone.lock().await;
+                        // Plugin commands don't need id_map or broadcast; fire and forget
+                        let _ = crate::server::command::execute(
+                            &parsed,
+                            &mut state,
+                            &mut crate::server::id_map::IdMap::new(),
+                            &tokio::sync::broadcast::channel(1).0,
+                        );
+                    }
+                }
+            }
+        });
+    }
 
     // ID map for tmux-compatible sequential IDs
     let id_map = Arc::new(Mutex::new(IdMap::new()));

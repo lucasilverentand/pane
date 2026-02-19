@@ -141,6 +141,7 @@ pub enum ServerResponse {
     PaneExited { pane_id: TabId },
     LayoutChanged { render_state: RenderState },
     StatsUpdate(SerializableSystemStats),
+    PluginSegments(Vec<Vec<crate::plugin::PluginSegment>>),
     SessionEnded,
     /// Full screen dump for a pane, sent when a client attaches mid-session.
     FullScreenDump { pane_id: TabId, data: Vec<u8> },

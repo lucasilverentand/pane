@@ -89,6 +89,9 @@ pub async fn run_control_mode(
                 ServerResponse::CommandOutput { .. } => {
                     // CommandSync responses are sent directly, not broadcast
                 }
+                ServerResponse::PluginSegments(_) => {
+                    // Skip plugin segments in control mode
+                }
             }
             let _ = out.flush();
         }

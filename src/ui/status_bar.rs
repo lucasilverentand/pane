@@ -93,20 +93,36 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
         ),
     };
 
+    // Build plugin segment string
+    let plugin_text: String = client.plugin_segments.iter()
+        .flat_map(|segs| segs.iter())
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" │ ");
+
     let left_len = left.len();
     let right_len = right.len();
-    let padding = (area.width as usize).saturating_sub(left_len + right_len);
+    let plugin_len = if plugin_text.is_empty() { 0 } else { plugin_text.len() + 2 }; // " │ " prefix
+    let padding = (area.width as usize).saturating_sub(left_len + plugin_len + right_len);
 
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(
             left,
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" ".repeat(padding)),
-        Span::styled(right, Style::default().fg(theme.dim)),
-    ]);
+    ];
+    if !plugin_text.is_empty() {
+        spans.push(Span::styled(
+            format!(" │ {}", plugin_text),
+            Style::default().fg(theme.accent),
+        ));
+    }
+    spans.push(Span::raw(" ".repeat(padding)));
+    spans.push(Span::styled(right, Style::default().fg(theme.dim)));
+
+    let line = Line::from(spans);
 
     let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);

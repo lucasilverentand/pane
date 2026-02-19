@@ -563,6 +563,7 @@ pub struct Config {
     pub status_bar: StatusBarConfig,
     pub decorations: Vec<PaneDecoration>,
     pub leader: LeaderConfig,
+    pub plugins: Vec<crate::plugin::PluginConfig>,
 }
 
 impl Default for Config {
@@ -575,6 +576,7 @@ impl Default for Config {
             status_bar: StatusBarConfig::default(),
             decorations: PaneDecoration::defaults(),
             leader: LeaderConfig::default(),
+            plugins: Vec::new(),
         }
     }
 }
@@ -690,6 +692,18 @@ impl Config {
             }
         }
 
+        // Plugins
+        if let Some(raw_plugins) = raw.plugins {
+            config.plugins = raw_plugins
+                .into_iter()
+                .map(|rp| crate::plugin::PluginConfig {
+                    command: rp.command,
+                    events: if rp.events.is_empty() { vec!["*".to_string()] } else { rp.events },
+                    refresh_interval_secs: rp.refresh_interval_secs,
+                })
+                .collect();
+        }
+
         config
     }
 }
@@ -708,6 +722,16 @@ struct RawConfig {
     decorations: Option<Vec<RawDecoration>>,
     leader: Option<RawLeader>,
     leader_keys: Option<HashMap<String, String>>,
+    plugins: Option<Vec<RawPlugin>>,
+}
+
+#[derive(Deserialize, Default)]
+struct RawPlugin {
+    command: String,
+    #[serde(default)]
+    events: Vec<String>,
+    #[serde(default)]
+    refresh_interval_secs: u64,
 }
 
 #[derive(Deserialize, Default)]

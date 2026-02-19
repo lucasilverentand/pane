@@ -6,6 +6,8 @@ mod copy_mode;
 mod event;
 mod keys;
 mod layout;
+#[allow(dead_code)]
+mod plugin;
 mod window;
 mod server;
 mod session;

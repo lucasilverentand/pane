@@ -34,6 +34,7 @@ pub struct Client {
     pub system_stats: SystemStats,
     pub config: Config,
     pub client_count: u32,
+    pub plugin_segments: Vec<Vec<crate::plugin::PluginSegment>>,
 
     // Client-only UI state
     pub leader_state: Option<LeaderState>,
@@ -57,6 +58,7 @@ impl Client {
             system_stats: SystemStats::default(),
             config,
             client_count: 1,
+            plugin_segments: Vec::new(),
 
             leader_state: None,
             help_state: HelpState::default(),
@@ -250,6 +252,9 @@ impl Client {
             }
             ServerResponse::ClientCountChanged(count) => {
                 self.client_count = count;
+            }
+            ServerResponse::PluginSegments(segments) => {
+                self.plugin_segments = segments;
             }
             ServerResponse::Error(_) | ServerResponse::Attached { .. } | ServerResponse::CommandOutput { .. } => {}
         }
