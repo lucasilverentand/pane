@@ -234,6 +234,13 @@ impl From<SerializableSystemStats> for SystemStats {
 // ---------------------------------------------------------------------------
 
 impl RenderState {
+    /// Build a RenderState for a specific client, using their active_workspace.
+    pub fn for_client(state: &crate::server::state::ServerState, active_workspace: usize) -> Self {
+        let mut rs = Self::from_server_state(state);
+        rs.active_workspace = active_workspace.min(rs.workspaces.len().saturating_sub(1));
+        rs
+    }
+
     #[allow(dead_code)]
     pub fn from_server_state(state: &crate::server::state::ServerState) -> Self {
         let workspaces = state

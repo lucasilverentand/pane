@@ -23,11 +23,19 @@ use crate::system_stats;
 /// Global counter for assigning unique client IDs.
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(0);
 
-/// Registry of connected clients with their terminal sizes.
+/// Per-client state tracked by the server.
+#[derive(Clone, Debug)]
+struct ClientInfo {
+    width: u16,
+    height: u16,
+    active_workspace: usize,
+}
+
+/// Registry of connected clients with their terminal sizes and workspace views.
 /// The server uses the smallest dimensions across all clients.
 #[derive(Clone)]
 struct ClientRegistry {
-    inner: Arc<Mutex<HashMap<u64, (u16, u16)>>>,
+    inner: Arc<Mutex<HashMap<u64, ClientInfo>>>,
 }
 
 impl ClientRegistry {
@@ -37,12 +45,25 @@ impl ClientRegistry {
         }
     }
 
-    async fn register(&self, id: u64, width: u16, height: u16) {
-        self.inner.lock().await.insert(id, (width, height));
+    async fn register(&self, id: u64, width: u16, height: u16, active_workspace: usize) {
+        self.inner.lock().await.insert(id, ClientInfo { width, height, active_workspace });
     }
 
     async fn update_size(&self, id: u64, width: u16, height: u16) {
-        self.inner.lock().await.insert(id, (width, height));
+        if let Some(info) = self.inner.lock().await.get_mut(&id) {
+            info.width = width;
+            info.height = height;
+        }
+    }
+
+    async fn set_active_workspace(&self, id: u64, ws: usize) {
+        if let Some(info) = self.inner.lock().await.get_mut(&id) {
+            info.active_workspace = ws;
+        }
+    }
+
+    async fn get_active_workspace(&self, id: u64) -> Option<usize> {
+        self.inner.lock().await.get(&id).map(|i| i.active_workspace)
     }
 
     async fn unregister(&self, id: u64) {
@@ -56,8 +77,8 @@ impl ClientRegistry {
         if clients.is_empty() {
             return None;
         }
-        let min_w = clients.values().map(|(w, _)| *w).min().unwrap_or(80);
-        let min_h = clients.values().map(|(_, h)| *h).min().unwrap_or(24);
+        let min_w = clients.values().map(|i| i.width).min().unwrap_or(80);
+        let min_h = clients.values().map(|i| i.height).min().unwrap_or(24);
         Some((min_w, min_h))
     }
 
@@ -385,19 +406,20 @@ async fn handle_client(
     // Send attached confirmation
     framing::send(&mut stream, &ServerResponse::Attached { session_name }).await?;
 
-    // Register client with default size; will be updated on first Resize
+    // Register client with default size and current active workspace
     {
         let state_guard = state.lock().await;
         let (w, h) = state_guard.last_size;
-        clients.register(client_id, w, h).await;
+        clients.register(client_id, w, h, state_guard.active_workspace).await;
         let count = clients.count().await as u32;
         let _ = broadcast_tx.send(ServerResponse::ClientCountChanged(count));
     }
 
-    // Send initial layout state
+    // Send initial layout state using this client's active workspace
     {
         let state = state.lock().await;
-        let render_state = RenderState::from_server_state(&state);
+        let client_ws = clients.get_active_workspace(client_id).await.unwrap_or(0);
+        let render_state = RenderState::for_client(&state, client_ws);
         framing::send(
             &mut stream,
             &ServerResponse::LayoutChanged { render_state },
@@ -462,12 +484,17 @@ async fn handle_client(
                 let mut state = state.lock().await;
                 state.last_size = (eff_w, eff_h);
                 state.resize_all_tabs(eff_w, eff_h);
+                // Broadcast uses server's active_workspace; each client re-renders with their own
                 let render_state = RenderState::from_server_state(&state);
                 let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
             }
             ClientRequest::Key(sk) => {
                 let key_event = sk.into();
                 let mut state = state.lock().await;
+                // Set state to this client's active workspace
+                if let Some(cws) = clients.get_active_workspace(client_id).await {
+                    state.active_workspace = cws;
+                }
                 // Forward key to the active pane as raw bytes
                 let ws = state.active_workspace_mut();
                 let group = ws.groups.get_mut(&ws.active_group);
@@ -481,14 +508,21 @@ async fn handle_client(
             }
             ClientRequest::MouseDown { x, y } => {
                 let mut state = state.lock().await;
+                if let Some(cws) = clients.get_active_workspace(client_id).await {
+                    state.active_workspace = cws;
+                }
                 handle_mouse_down_server(&mut state, x, y);
             }
             ClientRequest::MouseDrag { x, y } => {
                 let mut state = state.lock().await;
+                if let Some(cws) = clients.get_active_workspace(client_id).await {
+                    state.active_workspace = cws;
+                }
                 let had_drag = state.drag_state.is_some();
                 handle_mouse_drag_server(&mut state, x, y);
                 if had_drag {
-                    let render_state = RenderState::from_server_state(&state);
+                    let cws = state.active_workspace;
+                    let render_state = RenderState::for_client(&state, cws);
                     let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
                 }
             }
@@ -499,16 +533,23 @@ async fn handle_client(
                 let had_drag = state.lock().await.drag_state.is_some();
                 if had_drag {
                     let mut state = state.lock().await;
+                    if let Some(cws) = clients.get_active_workspace(client_id).await {
+                        state.active_workspace = cws;
+                    }
                     state.drag_state = None;
                     state.update_leaf_mins();
                     let (w, h) = state.last_size;
                     state.resize_all_tabs(w, h);
-                    let render_state = RenderState::from_server_state(&state);
+                    let cws = state.active_workspace;
+                    let render_state = RenderState::for_client(&state, cws);
                     let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
                 }
             }
             ClientRequest::MouseScroll { up } => {
                 let mut state = state.lock().await;
+                if let Some(cws) = clients.get_active_workspace(client_id).await {
+                    state.active_workspace = cws;
+                }
                 if up {
                     state.scroll_active_tab(|p| p.scroll_up(3));
                 } else {
@@ -516,7 +557,7 @@ async fn handle_client(
                 }
             }
             ClientRequest::Command(cmd) => {
-                if handle_command(&cmd, &state, &id_map, &broadcast_tx).await {
+                if handle_command(&cmd, &state, &id_map, &broadcast_tx, &clients, client_id).await {
                     break;
                 }
             }
@@ -676,12 +717,21 @@ async fn handle_command(
     state: &Arc<Mutex<ServerState>>,
     id_map: &Arc<Mutex<IdMap>>,
     broadcast_tx: &broadcast::Sender<ServerResponse>,
+    clients: &ClientRegistry,
+    client_id: u64,
 ) -> bool {
     match command_parser::parse(cmd) {
         Ok(parsed_cmd) => {
             let mut state = state.lock().await;
+            // Set active workspace to this client's view
+            if let Some(cws) = clients.get_active_workspace(client_id).await {
+                state.active_workspace = cws;
+            }
             let mut id_map = id_map.lock().await;
-            match crate::server::command::execute(&parsed_cmd, &mut state, &mut id_map, broadcast_tx) {
+            let result = crate::server::command::execute(&parsed_cmd, &mut state, &mut id_map, broadcast_tx);
+            // Sync back: command may have changed active_workspace (e.g. new-workspace, next-workspace)
+            clients.set_active_workspace(client_id, state.active_workspace).await;
+            match result {
                 Ok(crate::server::command::CommandResult::Ok(output)) => {
                     if !output.is_empty() {
                         // Send output as a display message response
@@ -1076,13 +1126,13 @@ mod tests {
         let registry = ClientRegistry::new();
         assert_eq!(registry.min_size().await, None);
 
-        registry.register(1, 120, 40).await;
+        registry.register(1, 120, 40, 0).await;
         assert_eq!(registry.min_size().await, Some((120, 40)));
 
-        registry.register(2, 80, 24).await;
+        registry.register(2, 80, 24, 0).await;
         assert_eq!(registry.min_size().await, Some((80, 24)));
 
-        registry.register(3, 100, 30).await;
+        registry.register(3, 100, 30, 0).await;
         assert_eq!(registry.min_size().await, Some((80, 24)));
 
         registry.unregister(2).await;
@@ -1099,8 +1149,8 @@ mod tests {
     async fn test_client_registry_update_size() {
         let registry = ClientRegistry::new();
 
-        registry.register(1, 120, 40).await;
-        registry.register(2, 80, 24).await;
+        registry.register(1, 120, 40, 0).await;
+        registry.register(2, 80, 24, 0).await;
         assert_eq!(registry.min_size().await, Some((80, 24)));
 
         // Client 2 resizes larger
