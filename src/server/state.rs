@@ -12,6 +12,17 @@ use crate::system_stats::SystemStats;
 use crate::workspace::Workspace;
 
 
+/// Active drag state for mouse-driven split resizing.
+#[derive(Clone, Debug)]
+pub struct DragState {
+    /// Path through the layout tree to the Split node being dragged.
+    pub split_path: Vec<Side>,
+    /// Direction of the split being dragged.
+    pub direction: SplitDirection,
+    /// Body rect for coordinate mapping.
+    pub body: ratatui::layout::Rect,
+}
+
 pub struct ServerState {
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
@@ -24,6 +35,8 @@ pub struct ServerState {
     pub last_size: (u16, u16),
     /// Counter for assigning tmux-compatible %N pane IDs.
     pub next_pane_number: u32,
+    /// Active drag state for split border resizing.
+    pub drag_state: Option<DragState>,
 }
 
 /// Auto-name a workspace: git repo basename → cwd basename → incremental number.
@@ -157,6 +170,7 @@ impl ServerState {
             event_tx: event_tx.clone(),
             last_size: (cols.saturating_add(2), rows.saturating_add(3)),
             next_pane_number: 1, // 0 was already used
+            drag_state: None,
         })
     }
 
@@ -239,6 +253,8 @@ impl ServerState {
                 active_group,
                 leaf_min_sizes: HashMap::new(),
                 sync_panes: false,
+                zoomed_window: None,
+                saved_ratios: None,
             });
         }
 
@@ -270,6 +286,7 @@ impl ServerState {
             event_tx,
             last_size: (width, height),
             next_pane_number: pane_counter,
+            drag_state: None,
         })
     }
 
@@ -589,6 +606,7 @@ mod tests {
             event_tx,
             last_size: (120, 40),
             next_pane_number: 1,
+            drag_state: None,
         };
         (state, rx)
     }
@@ -618,6 +636,8 @@ mod tests {
             active_group: gid1,
             leaf_min_sizes: HashMap::new(),
             sync_panes: false,
+            zoomed_window: None,
+            saved_ratios: None,
         };
         let state = ServerState {
             workspaces: vec![workspace],
@@ -630,6 +650,7 @@ mod tests {
             event_tx,
             last_size: (120, 40),
             next_pane_number: 2,
+            drag_state: None,
         };
         (state, gid1, gid2, rx)
     }

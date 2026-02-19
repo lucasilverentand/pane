@@ -9,12 +9,21 @@ use ratatui::{
 
 use crate::config::{Action, KeyMap, Theme};
 
+/// A single entry in the command palette.
+#[derive(Clone, Debug)]
+pub struct CommandEntry {
+    pub action: Action,
+    pub name: String,
+    pub keybind: Option<String>,
+    pub description: String,
+}
+
 /// State for the command palette overlay.
 pub struct CommandPaletteState {
     pub input: String,
     pub selected: usize,
-    pub filtered: Vec<(Action, String, Option<String>)>,
-    all_commands: Vec<(Action, String, Option<String>)>,
+    pub filtered: Vec<CommandEntry>,
+    all_commands: Vec<CommandEntry>,
 }
 
 impl CommandPaletteState {
@@ -52,41 +61,49 @@ impl CommandPaletteState {
     }
 
     pub fn selected_action(&self) -> Option<Action> {
-        self.filtered.get(self.selected).map(|(a, _, _)| a.clone())
+        self.filtered.get(self.selected).map(|e| e.action.clone())
     }
 }
 
-/// Build a list of all available commands with display names and keybinding hints.
-pub fn build_command_list(keymap: &KeyMap) -> Vec<(Action, String, Option<String>)> {
+/// Build a list of all available commands with display names, keybinding hints, and descriptions.
+pub fn build_command_list(keymap: &KeyMap) -> Vec<CommandEntry> {
     let actions = all_actions();
     let reverse = keymap.reverse_map();
 
     actions
         .into_iter()
-        .map(|(action, display_name)| {
-            let hint = reverse.get(&action).map(|keys| {
+        .map(|(action, display_name, description)| {
+            let keybind = reverse.get(&action).map(|keys| {
                 keys.iter()
                     .map(|k| key_event_to_string(k))
                     .collect::<Vec<_>>()
                     .join(", ")
             });
-            (action, display_name, hint)
+            CommandEntry {
+                action,
+                name: display_name,
+                keybind,
+                description,
+            }
         })
         .collect()
 }
 
-/// Filter commands by substring match on display name (case-insensitive).
+/// Filter commands by substring match on display name or description (case-insensitive).
 pub fn filter_commands(
-    commands: &[(Action, String, Option<String>)],
+    commands: &[CommandEntry],
     query: &str,
-) -> Vec<(Action, String, Option<String>)> {
+) -> Vec<CommandEntry> {
     if query.is_empty() {
         return commands.to_vec();
     }
     let query_lower = query.to_lowercase();
     commands
         .iter()
-        .filter(|(_, name, _)| name.to_lowercase().contains(&query_lower))
+        .filter(|e| {
+            e.name.to_lowercase().contains(&query_lower)
+                || e.description.to_lowercase().contains(&query_lower)
+        })
         .cloned()
         .collect()
 }
@@ -181,46 +198,55 @@ pub fn action_display_name(action: &Action) -> &str {
         Action::RenamePane => "Rename Pane",
         Action::Detach => "Detach",
         Action::SelectMode => "Select Mode",
+        Action::EnterInteract => "Enter Interact Mode",
+        Action::EnterNormal => "Enter Normal Mode",
+        Action::MaximizeFocused => "Maximize Focused",
+        Action::ToggleZoom => "Toggle Zoom",
     }
 }
 
 /// All actions available for the command palette (excludes parameterized ones).
-fn all_actions() -> Vec<(Action, String)> {
+/// Returns (Action, display_name, description).
+fn all_actions() -> Vec<(Action, String, String)> {
     vec![
-        (Action::Quit, "Quit".into()),
-        (Action::NewWorkspace, "New Workspace".into()),
-        (Action::CloseWorkspace, "Close Workspace".into()),
-        (Action::NewTab, "New Tab".into()),
-        (Action::DevServerInput, "New Dev Server Tab".into()),
-        (Action::NextTab, "Next Tab".into()),
-        (Action::PrevTab, "Previous Tab".into()),
-        (Action::CloseTab, "Close Tab".into()),
-        (Action::SplitHorizontal, "Split Right".into()),
-        (Action::SplitVertical, "Split Down".into()),
-        (Action::RestartPane, "Restart Pane".into()),
-        (Action::FocusLeft, "Focus Left".into()),
-        (Action::FocusDown, "Focus Down".into()),
-        (Action::FocusUp, "Focus Up".into()),
-        (Action::FocusRight, "Focus Right".into()),
-        (Action::MoveTabLeft, "Move Tab Left".into()),
-        (Action::MoveTabDown, "Move Tab Down".into()),
-        (Action::MoveTabUp, "Move Tab Up".into()),
-        (Action::MoveTabRight, "Move Tab Right".into()),
-        (Action::ResizeShrinkH, "Shrink Horizontally".into()),
-        (Action::ResizeGrowH, "Grow Horizontally".into()),
-        (Action::ResizeGrowV, "Grow Vertically".into()),
-        (Action::ResizeShrinkV, "Shrink Vertically".into()),
-        (Action::Equalize, "Equalize Panes".into()),
-        (Action::SessionPicker, "Session Picker".into()),
-        (Action::Help, "Help".into()),
-        (Action::ScrollMode, "Scroll Mode".into()),
-        (Action::CopyMode, "Copy Mode".into()),
-        (Action::PasteClipboard, "Paste from Clipboard".into()),
-        (Action::ToggleSyncPanes, "Toggle Sync Panes".into()),
-        (Action::RenameWindow, "Rename Window".into()),
-        (Action::RenamePane, "Rename Pane".into()),
-        (Action::Detach, "Detach".into()),
-        (Action::SelectMode, "Select Mode".into()),
+        (Action::Quit, "Quit".into(), "Exit pane and close the session".into()),
+        (Action::NewWorkspace, "New Workspace".into(), "Create a new workspace".into()),
+        (Action::CloseWorkspace, "Close Workspace".into(), "Close the current workspace".into()),
+        (Action::NewTab, "New Tab".into(), "Open a new tab in the current window".into()),
+        (Action::DevServerInput, "New Dev Server Tab".into(), "Open a dev server tab".into()),
+        (Action::NextTab, "Next Tab".into(), "Switch to the next tab".into()),
+        (Action::PrevTab, "Previous Tab".into(), "Switch to the previous tab".into()),
+        (Action::CloseTab, "Close Tab".into(), "Close the current tab".into()),
+        (Action::SplitHorizontal, "Split Right".into(), "Split the focused window horizontally".into()),
+        (Action::SplitVertical, "Split Down".into(), "Split the focused window vertically".into()),
+        (Action::RestartPane, "Restart Pane".into(), "Restart the exited pane process".into()),
+        (Action::FocusLeft, "Focus Left".into(), "Move focus to the left window".into()),
+        (Action::FocusDown, "Focus Down".into(), "Move focus to the window below".into()),
+        (Action::FocusUp, "Focus Up".into(), "Move focus to the window above".into()),
+        (Action::FocusRight, "Focus Right".into(), "Move focus to the right window".into()),
+        (Action::MoveTabLeft, "Move Tab Left".into(), "Move the current tab to the left window".into()),
+        (Action::MoveTabDown, "Move Tab Down".into(), "Move the current tab to the window below".into()),
+        (Action::MoveTabUp, "Move Tab Up".into(), "Move the current tab to the window above".into()),
+        (Action::MoveTabRight, "Move Tab Right".into(), "Move the current tab to the right window".into()),
+        (Action::ResizeShrinkH, "Shrink Horizontally".into(), "Decrease the focused window width".into()),
+        (Action::ResizeGrowH, "Grow Horizontally".into(), "Increase the focused window width".into()),
+        (Action::ResizeGrowV, "Grow Vertically".into(), "Increase the focused window height".into()),
+        (Action::ResizeShrinkV, "Shrink Vertically".into(), "Decrease the focused window height".into()),
+        (Action::Equalize, "Equalize Panes".into(), "Reset all split ratios to equal".into()),
+        (Action::MaximizeFocused, "Maximize Focused".into(), "Toggle maximize the focused window".into()),
+        (Action::ToggleZoom, "Toggle Zoom".into(), "Toggle full-screen zoom on the focused window".into()),
+        (Action::SessionPicker, "Session Picker".into(), "Open the session picker".into()),
+        (Action::Help, "Help".into(), "Show keybinding help".into()),
+        (Action::ScrollMode, "Scroll Mode".into(), "Enter scroll mode for the focused pane".into()),
+        (Action::CopyMode, "Copy Mode".into(), "Enter copy mode with vim-style selection".into()),
+        (Action::PasteClipboard, "Paste from Clipboard".into(), "Paste system clipboard into the focused pane".into()),
+        (Action::ToggleSyncPanes, "Toggle Sync Panes".into(), "Broadcast input to all panes in workspace".into()),
+        (Action::RenameWindow, "Rename Window".into(), "Rename the current window".into()),
+        (Action::RenamePane, "Rename Pane".into(), "Rename the current pane".into()),
+        (Action::Detach, "Detach".into(), "Detach from the session".into()),
+        (Action::SelectMode, "Select Mode".into(), "Toggle select mode for window navigation".into()),
+        (Action::EnterInteract, "Enter Interact Mode".into(), "Switch to interact mode (forward keys to PTY)".into()),
+        (Action::EnterNormal, "Enter Normal Mode".into(), "Switch to normal mode (vim-style navigation)".into()),
     ]
 }
 
@@ -273,7 +299,7 @@ pub fn render(state: &CommandPaletteState, theme: &Theme, frame: &mut Frame, are
         .enumerate()
         .skip(scroll_offset)
         .take(visible_count)
-        .map(|(i, (_, name, hint))| {
+        .map(|(i, entry)| {
             let is_selected = i == state.selected;
             let name_style = if is_selected {
                 Style::default()
@@ -282,15 +308,21 @@ pub fn render(state: &CommandPaletteState, theme: &Theme, frame: &mut Frame, are
             } else {
                 Style::default().fg(Color::White)
             };
-            let hint_text = hint
+            let hint_text = entry.keybind
                 .as_ref()
                 .map(|h| format!("  {}", h))
                 .unwrap_or_default();
+            let desc_text = if is_selected && !entry.description.is_empty() {
+                format!("  {}", entry.description)
+            } else {
+                String::new()
+            };
             let indicator = if is_selected { "  > " } else { "    " };
             Line::from(vec![
                 Span::styled(indicator, name_style),
-                Span::styled(name.clone(), name_style),
+                Span::styled(entry.name.clone(), name_style),
                 Span::styled(hint_text, Style::default().fg(theme.dim)),
+                Span::styled(desc_text, Style::default().fg(theme.dim)),
             ])
         })
         .collect();
@@ -331,11 +363,11 @@ mod tests {
     fn test_build_command_list_has_quit() {
         let keymap = KeyMap::from_defaults();
         let commands = build_command_list(&keymap);
-        let quit = commands.iter().find(|(a, _, _)| *a == Action::Quit);
+        let quit = commands.iter().find(|e| e.action == Action::Quit);
         assert!(quit.is_some());
-        let (_, name, hint) = quit.unwrap();
-        assert_eq!(name, "Quit");
-        assert!(hint.is_some());
+        let entry = quit.unwrap();
+        assert_eq!(entry.name, "Quit");
+        assert!(entry.keybind.is_some());
     }
 
     #[test]
@@ -351,7 +383,7 @@ mod tests {
         let keymap = KeyMap::from_defaults();
         let commands = build_command_list(&keymap);
         let filtered = filter_commands(&commands, "quit");
-        assert!(filtered.iter().any(|(a, _, _)| *a == Action::Quit));
+        assert!(filtered.iter().any(|e| e.action == Action::Quit));
     }
 
     #[test]
@@ -359,7 +391,7 @@ mod tests {
         let keymap = KeyMap::from_defaults();
         let commands = build_command_list(&keymap);
         let filtered = filter_commands(&commands, "QUIT");
-        assert!(filtered.iter().any(|(a, _, _)| *a == Action::Quit));
+        assert!(filtered.iter().any(|e| e.action == Action::Quit));
     }
 
     #[test]
@@ -423,6 +455,6 @@ mod tests {
         state.input = "tab".to_string();
         state.update_filter();
         assert!(state.filtered.len() < total);
-        assert!(state.filtered.iter().all(|(_, name, _)| name.to_lowercase().contains("tab")));
+        assert!(state.filtered.iter().all(|e| e.name.to_lowercase().contains("tab")));
     }
 }

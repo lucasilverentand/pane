@@ -175,6 +175,7 @@ pub struct WorkspaceSnapshot {
     pub active_group: WindowId,
     pub sync_panes: bool,
     pub leaf_min_sizes: HashMap<WindowId, (u16, u16)>,
+    pub zoomed_window: Option<WindowId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -266,6 +267,7 @@ impl RenderState {
                     active_group: ws.active_group,
                     sync_panes: ws.sync_panes,
                     leaf_min_sizes: ws.leaf_min_sizes.clone(),
+                    zoomed_window: ws.zoomed_window,
                 }
             })
             .collect();
@@ -416,6 +418,7 @@ mod tests {
                 active_group: WindowId::new_v4(),
                 sync_panes: false,
                 leaf_min_sizes: HashMap::new(),
+                zoomed_window: None,
             }],
             active_workspace: 0,
             session_name: "default".to_string(),

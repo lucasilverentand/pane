@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -45,7 +45,7 @@ pub struct Client {
 impl Client {
     pub fn new(config: Config, session_name: &str) -> Self {
         Self {
-            mode: Mode::Normal,
+            mode: Mode::Interact,
             render_state: RenderState {
                 workspaces: Vec::new(),
                 active_workspace: 0,
@@ -233,6 +233,7 @@ impl Client {
             }
             ServerResponse::LayoutChanged { render_state } => {
                 self.apply_layout(render_state);
+                self.update_terminal_title();
             }
             ServerResponse::PaneExited { pane_id } => {
                 // Mark locally if needed — the server handles cleanup
@@ -280,7 +281,7 @@ impl Client {
                             }
                         }
                     }
-                } else if self.mode == Mode::Normal || self.mode == Mode::Select {
+                } else if self.mode == Mode::Normal || self.mode == Mode::Interact || self.mode == Mode::Select {
                     // Check workspace bar clicks (client-side)
                     if y == 0 && !self.render_state.workspaces.is_empty() {
                         let names: Vec<&str> = self.render_state.workspaces.iter().map(|ws| ws.name.as_str()).collect();
@@ -364,33 +365,170 @@ impl Client {
             Mode::Select => {
                 // Falls through to action handling below
             }
-            Mode::Normal => {}
+            Mode::Normal => return self.handle_normal_key(key, tui, writer).await,
+            Mode::Interact => return self.handle_interact_key(key, tui, writer).await,
         }
 
-        // Check for leader key
+        // Select mode: check leader key, then select keymap
         let normalized = config::normalize_key(key);
         let leader_key = config::normalize_key(self.config.leader.key);
         if normalized == leader_key {
-            let root = self.config.leader.root.clone();
-            self.leader_state = Some(LeaderState {
-                path: Vec::new(),
-                current_node: root,
-                entered_at: std::time::Instant::now(),
-                popup_visible: false,
-            });
-            self.mode = Mode::Leader;
+            self.enter_leader_mode();
             return Ok(());
         }
 
-        // Check keymap
+        if let Some(action) = self.config.select_keys.lookup(&normalized).cloned() {
+            return self.execute_action(action, tui, writer).await;
+        }
+
+        Ok(())
+    }
+
+    /// Interact mode: forward ALL keys to PTY except Escape (→ Normal).
+    async fn handle_interact_key(
+        &mut self,
+        key: KeyEvent,
+        _tui: &Tui,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        let normalized = config::normalize_key(key);
+
+        // Escape → Normal mode
+        if normalized.code == KeyCode::Esc {
+            self.mode = Mode::Normal;
+            return Ok(());
+        }
+
+        // Check for leader key (allows accessing leader from Interact)
+        let leader_key = config::normalize_key(self.config.leader.key);
+        if normalized == leader_key {
+            self.enter_leader_mode();
+            return Ok(());
+        }
+
+        // Check global keymap (ctrl+q etc.)
+        if let Some(action) = self.config.keys.lookup(&normalized).cloned() {
+            return self.execute_action(action, _tui, writer).await;
+        }
+
+        // Forward to PTY
+        let mut w = writer.lock().await;
+        let _ = send_request(&mut *w, &ClientRequest::Key(SerializableKeyEvent::from(key))).await;
+        Ok(())
+    }
+
+    /// Normal mode: strict vim-style. No PTY fallback.
+    async fn handle_normal_key(
+        &mut self,
+        key: KeyEvent,
+        tui: &Tui,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        let normalized = config::normalize_key(key);
+
+        // Leader key
+        let leader_key = config::normalize_key(self.config.leader.key);
+        if normalized == leader_key {
+            self.enter_leader_mode();
+            return Ok(());
+        }
+
+        // Global keymap (ctrl+q, shift+pageup, etc.)
         if let Some(action) = self.config.keys.lookup(&normalized).cloned() {
             return self.execute_action(action, tui, writer).await;
         }
 
-        // Forward raw key to server for PTY input
-        let mut w = writer.lock().await;
-        let _ = send_request(&mut *w, &ClientRequest::Key(SerializableKeyEvent::from(key))).await;
+        // Normal mode plain-key bindings
+        match normalized.code {
+            KeyCode::Char('i') if normalized.modifiers == KeyModifiers::NONE => {
+                self.mode = Mode::Interact;
+            }
+            KeyCode::Char('h') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::FocusLeft, tui, writer).await;
+            }
+            KeyCode::Char('j') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::FocusDown, tui, writer).await;
+            }
+            KeyCode::Char('k') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::FocusUp, tui, writer).await;
+            }
+            KeyCode::Char('l') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::FocusRight, tui, writer).await;
+            }
+            KeyCode::Char('d') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::SplitHorizontal, tui, writer).await;
+            }
+            KeyCode::Char('D') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::SplitVertical, tui, writer).await;
+            }
+            KeyCode::Char('x') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::CloseTab, tui, writer).await;
+            }
+            KeyCode::Char('n') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::NewTab, tui, writer).await;
+            }
+            KeyCode::Char('m') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::MaximizeFocused, tui, writer).await;
+            }
+            KeyCode::Char('z') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::ToggleZoom, tui, writer).await;
+            }
+            KeyCode::Char('s') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::ScrollMode, tui, writer).await;
+            }
+            KeyCode::Char('c') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::CopyMode, tui, writer).await;
+            }
+            KeyCode::Char('p') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::PasteClipboard, tui, writer).await;
+            }
+            KeyCode::Char('/') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::CommandPalette, tui, writer).await;
+            }
+            KeyCode::Char('?') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::Help, tui, writer).await;
+            }
+            KeyCode::Char('=') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::Equalize, tui, writer).await;
+            }
+            KeyCode::Char('H') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::ResizeShrinkH, tui, writer).await;
+            }
+            KeyCode::Char('L') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::ResizeGrowH, tui, writer).await;
+            }
+            KeyCode::Char('J') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::ResizeGrowV, tui, writer).await;
+            }
+            KeyCode::Char('K') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::ResizeShrinkV, tui, writer).await;
+            }
+            KeyCode::Tab if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::NextTab, tui, writer).await;
+            }
+            KeyCode::BackTab => {
+                return self.execute_action(Action::PrevTab, tui, writer).await;
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' && normalized.modifiers == KeyModifiers::NONE => {
+                let n = c as u8 - b'0';
+                return self.execute_action(Action::FocusGroupN(n), tui, writer).await;
+            }
+            _ => {
+                // No PTY fallback in Normal mode — keys are consumed
+            }
+        }
         Ok(())
+    }
+
+    fn enter_leader_mode(&mut self) {
+        let root = self.config.leader.root.clone();
+        self.leader_state = Some(LeaderState {
+            path: Vec::new(),
+            current_node: root,
+            entered_at: std::time::Instant::now(),
+            popup_visible: false,
+        });
+        self.mode = Mode::Leader;
     }
 
     async fn execute_action(
@@ -447,6 +585,14 @@ impl Client {
                 } else {
                     Mode::Select
                 };
+                return Ok(());
+            }
+            Action::EnterInteract => {
+                self.mode = Mode::Interact;
+                return Ok(());
+            }
+            Action::EnterNormal => {
+                self.mode = Mode::Normal;
                 return Ok(());
             }
             Action::Detach => {
@@ -688,6 +834,21 @@ impl Client {
     pub fn pane_screen(&self, pane_id: TabId) -> Option<&vt100::Screen> {
         self.screens.get(&pane_id).map(|p| p.screen())
     }
+
+    fn update_terminal_title(&self) {
+        if let Some(ref fmt) = self.config.behavior.terminal_title_format {
+            let session = &self.render_state.session_name;
+            let workspace = self.active_workspace()
+                .map(|ws| ws.name.as_str())
+                .unwrap_or("");
+            let title = fmt
+                .replace("{session}", session)
+                .replace("{workspace}", workspace);
+            // OSC 0 - set terminal title
+            print!("\x1b]0;{}\x07", title);
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+    }
 }
 
 /// Events fed into the client event loop.
@@ -750,10 +911,13 @@ fn action_to_command(action: &Action) -> Option<String> {
             Some(format!("select-window -t {}", ws_idx))
         }
         Action::DevServerInput => Some("new-window".to_string()),
+        Action::MaximizeFocused => Some("maximize-focused".to_string()),
+        Action::ToggleZoom => Some("toggle-zoom".to_string()),
         Action::RenameWindow | Action::RenamePane => None,
         // Client-only actions handled before this function is called
         Action::Quit | Action::Help | Action::ScrollMode | Action::CopyMode
         | Action::CommandPalette | Action::PasteClipboard | Action::SelectMode
+        | Action::EnterInteract | Action::EnterNormal
         | Action::Detach | Action::SessionPicker => None,
     }
 }

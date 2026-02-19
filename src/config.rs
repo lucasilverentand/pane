@@ -49,6 +49,10 @@ pub enum Action {
     RenamePane,
     Detach,
     SelectMode,
+    EnterInteract,
+    EnterNormal,
+    MaximizeFocused,
+    ToggleZoom,
 }
 
 // ---------------------------------------------------------------------------
@@ -60,6 +64,9 @@ pub struct Theme {
     pub accent: Color,
     pub border_active: Color,
     pub border_inactive: Color,
+    pub border_normal: Color,
+    pub border_interact: Color,
+    pub border_scroll: Color,
     pub bg: Color,
     pub fg: Color,
     pub dim: Color,
@@ -75,6 +82,9 @@ impl Default for Theme {
             accent: Color::Cyan,
             border_active: Color::Cyan,
             border_inactive: Color::DarkGray,
+            border_normal: Color::Cyan,
+            border_interact: Color::Green,
+            border_scroll: Color::Yellow,
             bg: Color::Reset,
             fg: Color::Reset,
             dim: Color::DarkGray,
@@ -100,6 +110,8 @@ pub struct Behavior {
     pub default_shell: Option<String>,
     /// Seconds of no connected clients before auto-saving and exiting (default: 86400 = 24h).
     pub auto_suspend_secs: u64,
+    /// Format string for outer terminal title (e.g., "{session} - {workspace}").
+    pub terminal_title_format: Option<String>,
 }
 
 impl Default for Behavior {
@@ -112,6 +124,7 @@ impl Default for Behavior {
             mouse: true,
             default_shell: None,
             auto_suspend_secs: 86400,
+            terminal_title_format: Some("{session} - {workspace}".to_string()),
         }
     }
 }
@@ -320,6 +333,10 @@ fn action_name_map() -> HashMap<&'static str, Action> {
     m.insert("rename_pane", Action::RenamePane);
     m.insert("detach", Action::Detach);
     m.insert("select_mode", Action::SelectMode);
+    m.insert("enter_interact", Action::EnterInteract);
+    m.insert("enter_normal", Action::EnterNormal);
+    m.insert("maximize_focused", Action::MaximizeFocused);
+    m.insert("toggle_zoom", Action::ToggleZoom);
     for n in 1..=9u8 {
         // Leak is fine — these are static strings created once at startup
         let name: &'static str = Box::leak(format!("focus_group_{}", n).into_boxed_str());
@@ -381,6 +398,8 @@ fn default_leader_tree() -> LeaderNode {
         insert_leaf(&mut children, "c", Action::CloseTab, "Close");
         insert_leaf(&mut children, "=", Action::Equalize, "Equalize");
         insert_leaf(&mut children, "r", Action::RestartPane, "Restart");
+        insert_leaf(&mut children, "m", Action::MaximizeFocused, "Maximize");
+        insert_leaf(&mut children, "z", Action::ToggleZoom, "Zoom");
         let key = parse_key("w").unwrap();
         root.insert(key, LeaderNode::Group { label: "Window".into(), children });
     }
@@ -588,6 +607,9 @@ impl Config {
             if let Some(s) = t.accent { if let Some(c) = parse_color(&s) { config.theme.accent = c; } }
             if let Some(s) = t.border_active { if let Some(c) = parse_color(&s) { config.theme.border_active = c; } }
             if let Some(s) = t.border_inactive { if let Some(c) = parse_color(&s) { config.theme.border_inactive = c; } }
+            if let Some(s) = t.border_normal { if let Some(c) = parse_color(&s) { config.theme.border_normal = c; } }
+            if let Some(s) = t.border_interact { if let Some(c) = parse_color(&s) { config.theme.border_interact = c; } }
+            if let Some(s) = t.border_scroll { if let Some(c) = parse_color(&s) { config.theme.border_scroll = c; } }
             if let Some(s) = t.bg { if let Some(c) = parse_color(&s) { config.theme.bg = c; } }
             if let Some(s) = t.fg { if let Some(c) = parse_color(&s) { config.theme.fg = c; } }
             if let Some(s) = t.dim { if let Some(c) = parse_color(&s) { config.theme.dim = c; } }
@@ -606,6 +628,7 @@ impl Config {
             if let Some(v) = b.mouse { config.behavior.mouse = v; }
             if b.default_shell.is_some() { config.behavior.default_shell = b.default_shell; }
             if let Some(v) = b.auto_suspend_secs { config.behavior.auto_suspend_secs = v; }
+            if b.terminal_title_format.is_some() { config.behavior.terminal_title_format = b.terminal_title_format; }
         }
 
         // Keys
@@ -698,6 +721,9 @@ struct RawTheme {
     accent: Option<String>,
     border_active: Option<String>,
     border_inactive: Option<String>,
+    border_normal: Option<String>,
+    border_interact: Option<String>,
+    border_scroll: Option<String>,
     bg: Option<String>,
     fg: Option<String>,
     dim: Option<String>,
@@ -716,6 +742,7 @@ struct RawBehavior {
     mouse: Option<bool>,
     default_shell: Option<String>,
     auto_suspend_secs: Option<u64>,
+    terminal_title_format: Option<String>,
 }
 
 #[derive(Deserialize, Default)]

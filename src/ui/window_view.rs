@@ -180,10 +180,24 @@ pub fn render_group_from_snapshot(
         .map(|d| d.border_color);
 
     let border_style = if is_active {
-        let color = decoration_color.unwrap_or(theme.border_active);
+        let mode_color = match mode {
+            Mode::Normal => theme.border_normal,
+            Mode::Interact => theme.border_interact,
+            Mode::Scroll => theme.border_scroll,
+            Mode::Copy => theme.border_scroll,
+            _ => theme.border_active,
+        };
+        let color = decoration_color.unwrap_or(mode_color);
         Style::default().fg(color)
     } else {
         Style::default().fg(theme.border_inactive)
+    };
+
+    // Build top title with tab info
+    let tab_info = if group.tabs.len() > 1 {
+        format!(" [{}/{}] ", group.active_tab + 1, group.tabs.len())
+    } else {
+        String::new()
     };
 
     let mut block = Block::default()
@@ -191,11 +205,20 @@ pub fn render_group_from_snapshot(
         .border_type(BorderType::Rounded)
         .border_style(border_style);
 
+    if !tab_info.is_empty() {
+        block = block.title_top(Line::styled(
+            tab_info,
+            Style::default().fg(theme.dim),
+        ));
+    }
+
     if is_active {
         let indicator = match mode {
             Mode::Copy => " COPY ",
             Mode::Scroll => " SCROLL ",
             Mode::Select => " SELECT ",
+            Mode::Normal => " NORMAL ",
+            Mode::Interact => " INTERACT ",
             _ => " ACTIVE ",
         };
         block = block.title_bottom(Line::styled(

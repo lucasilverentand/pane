@@ -485,13 +485,27 @@ async fn handle_client(
             }
             ClientRequest::MouseDrag { x, y } => {
                 let mut state = state.lock().await;
+                let had_drag = state.drag_state.is_some();
                 handle_mouse_drag_server(&mut state, x, y);
+                if had_drag {
+                    let render_state = RenderState::from_server_state(&state);
+                    let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
+                }
             }
             ClientRequest::MouseMove { .. } => {
                 // Mouse move is client-side only (hover effects)
             }
             ClientRequest::MouseUp => {
-                // Drag state is client-side; no-op for now
+                let had_drag = state.lock().await.drag_state.is_some();
+                if had_drag {
+                    let mut state = state.lock().await;
+                    state.drag_state = None;
+                    state.update_leaf_mins();
+                    let (w, h) = state.last_size;
+                    state.resize_all_tabs(w, h);
+                    let render_state = RenderState::from_server_state(&state);
+                    let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
+                }
             }
             ClientRequest::MouseScroll { up } => {
                 let mut state = state.lock().await;
@@ -536,10 +550,25 @@ async fn handle_client(
 
 /// Handle mouse down events server-side (pane focus changes).
 fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
+    state.drag_state = None;
+
     let bar_h = state.workspace_bar_height();
     let (w, h) = state.last_size;
     let body_height = h.saturating_sub(1 + bar_h);
     let body = ratatui::layout::Rect::new(0, bar_h, w, body_height);
+
+    // Check for split border hit (drag initiation)
+    {
+        let ws = state.active_workspace();
+        if let Some((path, direction)) = ws.layout.hit_test_split_border(body, x, y) {
+            state.drag_state = Some(crate::server::state::DragState {
+                split_path: path,
+                direction,
+                body,
+            });
+            return;
+        }
+    }
 
     let params = crate::layout::LayoutParams::from(&state.config.behavior);
     let ws = state.active_workspace();
@@ -617,10 +646,27 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
 }
 
 /// Handle mouse drag events server-side (split resizing).
-fn handle_mouse_drag_server(state: &mut ServerState, _x: u16, _y: u16) {
-    // Drag state is maintained client-side for now.
-    // A full implementation would track drag on the server.
-    let _ = state;
+fn handle_mouse_drag_server(state: &mut ServerState, x: u16, y: u16) {
+    let drag = match &state.drag_state {
+        Some(d) => d.clone(),
+        None => return,
+    };
+
+    let body = drag.body;
+    let new_ratio = match drag.direction {
+        crate::layout::SplitDirection::Horizontal => {
+            if body.width == 0 { return; }
+            ((x.saturating_sub(body.x)) as f64) / (body.width as f64)
+        }
+        crate::layout::SplitDirection::Vertical => {
+            if body.height == 0 { return; }
+            ((y.saturating_sub(body.y)) as f64) / (body.height as f64)
+        }
+    };
+
+    let new_ratio = new_ratio.clamp(0.05, 0.95);
+    let ws = state.active_workspace_mut();
+    ws.layout.set_ratio_at_path(&drag.split_path, new_ratio);
 }
 
 /// Handle string commands from the command protocol.

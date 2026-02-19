@@ -58,6 +58,10 @@ pub enum Command {
     ToggleSync,
     PasteBuffer { text: String },
 
+    // Layout presets
+    MaximizeFocused,
+    ToggleZoom,
+
     // Client commands
     DetachClient,
 
@@ -489,6 +493,39 @@ pub fn execute(
             Ok(CommandResult::Ok(String::new()))
         }
 
+        Command::MaximizeFocused => {
+            let ws = state.active_workspace_mut();
+            let active = ws.active_group;
+            if let Some(ref saved) = ws.saved_ratios {
+                // Restore previous layout
+                ws.layout = saved.clone();
+                ws.saved_ratios = None;
+            } else {
+                // Save current layout and maximize
+                ws.saved_ratios = Some(ws.layout.clone());
+                ws.layout.maximize_leaf(active);
+            }
+            ws.leaf_min_sizes.clear();
+            let (w, h) = state.last_size;
+            state.resize_all_tabs(w, h);
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::ToggleZoom => {
+            let ws = state.active_workspace_mut();
+            let active = ws.active_group;
+            if ws.zoomed_window == Some(active) {
+                ws.zoomed_window = None;
+            } else {
+                ws.zoomed_window = Some(active);
+            }
+            let (w, h) = state.last_size;
+            state.resize_all_tabs(w, h);
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::LayoutChanged)
+        }
+
         Command::DetachClient => {
             Ok(CommandResult::DetachRequested)
         }
@@ -683,6 +720,7 @@ mod tests {
             event_tx,
             last_size: (120, 40),
             next_pane_number: 1,
+            drag_state: None,
         };
         let mut id_map = IdMap::new();
         id_map.register_window(group_id);
@@ -718,6 +756,8 @@ mod tests {
             active_group: gid1,
             leaf_min_sizes: HashMap::new(),
             sync_panes: false,
+            zoomed_window: None,
+            saved_ratios: None,
         };
         let state = ServerState {
             workspaces: vec![workspace],
@@ -730,6 +770,7 @@ mod tests {
             event_tx,
             last_size: (120, 40),
             next_pane_number: 2,
+            drag_state: None,
         };
         let mut id_map = IdMap::new();
         id_map.register_window(gid1);

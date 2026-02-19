@@ -60,60 +60,100 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
         } else {
             None
         };
-        let resolved = ws.layout.resolve_with_fold(body, params, &ws.leaf_min_sizes);
 
-        // First pass: visible panes
-        for rp in &resolved {
-            if let crate::layout::ResolvedPane::Visible { id: group_id, rect } = rp {
-                if let Some(group) = ws.groups.iter().find(|g| g.id == *group_id) {
+        // Check for zoom mode
+        if let Some(zoomed_id) = ws.zoomed_window {
+            // Render only the zoomed window filling the body
+            if let Some(group) = ws.groups.iter().find(|g| g.id == zoomed_id) {
+                let pane = group.tabs.get(group.active_tab);
+                let screen = pane.and_then(|p| client.pane_screen(p.id));
+                window_view::render_group_from_snapshot(
+                    group,
+                    screen,
+                    true,
+                    &client.mode,
+                    copy_mode_state,
+                    &client.config,
+                    frame,
+                    body,
+                );
+
+                // Cursor for zoomed window
+                if client.mode == Mode::Interact || client.mode == Mode::Normal {
+                    if let Some(pane) = group.tabs.get(group.active_tab) {
+                        if let Some(screen) = client.pane_screen(pane.id) {
+                            if !screen.hide_cursor() {
+                                let (vt_row, vt_col) = screen.cursor_position();
+                                let tab_bar_offset: u16 = if group.tabs.len() > 1 { 1 } else { 0 };
+                                let cursor_x = body.x + 2 + vt_col;
+                                let cursor_y = body.y + 1 + tab_bar_offset + vt_row;
+                                if cursor_x < body.x + body.width && cursor_y < body.y + body.height {
+                                    frame.set_cursor_position(ratatui::layout::Position {
+                                        x: cursor_x,
+                                        y: cursor_y,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            let resolved = ws.layout.resolve_with_fold(body, params, &ws.leaf_min_sizes);
+
+            // First pass: visible panes
+            for rp in &resolved {
+                if let crate::layout::ResolvedPane::Visible { id: group_id, rect } = rp {
+                    if let Some(group) = ws.groups.iter().find(|g| g.id == *group_id) {
+                        let is_active = *group_id == ws.active_group;
+                        let pane = group.tabs.get(group.active_tab);
+                        let screen = pane.and_then(|p| client.pane_screen(p.id));
+                        window_view::render_group_from_snapshot(
+                            group,
+                            screen,
+                            is_active,
+                            &client.mode,
+                            copy_mode_state,
+                            &client.config,
+                            frame,
+                            *rect,
+                        );
+                    }
+                }
+            }
+
+            // Second pass: fold bars
+            for rp in &resolved {
+                if let crate::layout::ResolvedPane::Folded { id: group_id, rect, direction } = rp {
+                    if rect.width == 0 || rect.height == 0 {
+                        continue;
+                    }
                     let is_active = *group_id == ws.active_group;
-                    let pane = group.tabs.get(group.active_tab);
-                    let screen = pane.and_then(|p| client.pane_screen(p.id));
-                    window_view::render_group_from_snapshot(
-                        group,
-                        screen,
-                        is_active,
-                        &client.mode,
-                        copy_mode_state,
-                        &client.config,
-                        frame,
-                        *rect,
-                    );
+                    window_view::render_folded(is_active, *direction, theme, frame, *rect);
                 }
             }
-        }
 
-        // Second pass: fold bars
-        for rp in &resolved {
-            if let crate::layout::ResolvedPane::Folded { id: group_id, rect, direction } = rp {
-                if rect.width == 0 || rect.height == 0 {
-                    continue;
-                }
-                let is_active = *group_id == ws.active_group;
-                window_view::render_folded(is_active, *direction, theme, frame, *rect);
-            }
-        }
-
-        // Cursor position (reuses resolved from above)
-        if client.mode == Mode::Normal {
-            if let Some(group) = ws.groups.iter().find(|g| g.id == ws.active_group) {
-                if let Some(pane) = group.tabs.get(group.active_tab) {
-                    if let Some(screen) = client.pane_screen(pane.id) {
-                        if !screen.hide_cursor() {
-                            for rp in &resolved {
-                                if let crate::layout::ResolvedPane::Visible { id, rect } = rp {
-                                    if *id == ws.active_group {
-                                        let (vt_row, vt_col) = screen.cursor_position();
-                                        let tab_bar_offset: u16 = if group.tabs.len() > 1 { 1 } else { 0 };
-                                        let cursor_x = rect.x + 2 + vt_col;
-                                        let cursor_y = rect.y + 1 + tab_bar_offset + vt_row;
-                                        if cursor_x < rect.x + rect.width && cursor_y < rect.y + rect.height {
-                                            frame.set_cursor_position(ratatui::layout::Position {
-                                                x: cursor_x,
-                                                y: cursor_y,
-                                            });
+            // Cursor position
+            if client.mode == Mode::Interact || client.mode == Mode::Normal {
+                if let Some(group) = ws.groups.iter().find(|g| g.id == ws.active_group) {
+                    if let Some(pane) = group.tabs.get(group.active_tab) {
+                        if let Some(screen) = client.pane_screen(pane.id) {
+                            if !screen.hide_cursor() {
+                                for rp in &resolved {
+                                    if let crate::layout::ResolvedPane::Visible { id, rect } = rp {
+                                        if *id == ws.active_group {
+                                            let (vt_row, vt_col) = screen.cursor_position();
+                                            let tab_bar_offset: u16 = if group.tabs.len() > 1 { 1 } else { 0 };
+                                            let cursor_x = rect.x + 2 + vt_col;
+                                            let cursor_y = rect.y + 1 + tab_bar_offset + vt_row;
+                                            if cursor_x < rect.x + rect.width && cursor_y < rect.y + rect.height {
+                                                frame.set_cursor_position(ratatui::layout::Position {
+                                                    x: cursor_x,
+                                                    y: cursor_y,
+                                                });
+                                            }
+                                            break;
                                         }
-                                        break;
                                     }
                                 }
                             }

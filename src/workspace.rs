@@ -13,6 +13,10 @@ pub struct Workspace {
     pub leaf_min_sizes: HashMap<WindowId, (u16, u16)>,
     /// When true, key input is broadcast to all panes in this workspace.
     pub sync_panes: bool,
+    /// Zoomed window: when Some, this window renders fullscreen.
+    pub zoomed_window: Option<WindowId>,
+    /// Saved layout ratios before maximize, for toggle-restore.
+    pub saved_ratios: Option<LayoutNode>,
 }
 
 impl Workspace {
@@ -28,6 +32,8 @@ impl Workspace {
             active_group,
             leaf_min_sizes: HashMap::new(),
             sync_panes: false,
+            zoomed_window: None,
+            saved_ratios: None,
         }
     }
 

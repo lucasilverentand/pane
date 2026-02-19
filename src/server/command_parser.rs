@@ -50,6 +50,8 @@ pub fn parse(input: &str) -> Result<Command> {
         "toggle-sync" => Ok(Command::ToggleSync),
         "paste-buffer" | "pasteb" => parse_paste_buffer(args),
         "detach-client" | "detach" => Ok(Command::DetachClient),
+        "maximize-focused" | "maximize" => Ok(Command::MaximizeFocused),
+        "toggle-zoom" | "zoom" => Ok(Command::ToggleZoom),
         _ => bail!("unknown command: {}", cmd_name),
     }
 }

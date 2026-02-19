@@ -728,6 +728,96 @@ impl LayoutNode {
         }
     }
 
+    /// Maximize a specific leaf by pushing split ratios toward it.
+    pub fn maximize_leaf(&mut self, target: TabId) {
+        if let LayoutNode::Split {
+            ratio,
+            first,
+            second,
+            ..
+        } = self
+        {
+            let in_first = first.contains(target);
+            let in_second = second.contains(target);
+            if in_first {
+                *ratio = 0.95;
+                first.maximize_leaf(target);
+                second.equalize();
+            } else if in_second {
+                *ratio = 0.05;
+                first.equalize();
+                second.maximize_leaf(target);
+            }
+        }
+    }
+
+    /// Hit-test split borders. Returns the path to the split node and direction
+    /// if (x, y) is within 1 cell of a split border.
+    pub fn hit_test_split_border(&self, area: Rect, x: u16, y: u16) -> Option<(Vec<Side>, SplitDirection)> {
+        self.hit_test_border_inner(area, x, y, &mut Vec::new())
+    }
+
+    fn hit_test_border_inner(
+        &self,
+        area: Rect,
+        x: u16,
+        y: u16,
+        path: &mut Vec<Side>,
+    ) -> Option<(Vec<Side>, SplitDirection)> {
+        if let LayoutNode::Split { direction, ratio, first, second, .. } = self {
+            let (first_rect, second_rect) = Self::split_rects(direction, *ratio, area);
+
+            // Check if the click is on the border between the two children
+            let on_border = match direction {
+                SplitDirection::Horizontal => {
+                    let border_x = first_rect.x + first_rect.width;
+                    x >= border_x.saturating_sub(1) && x <= border_x + 1
+                        && y >= area.y && y < area.y + area.height
+                }
+                SplitDirection::Vertical => {
+                    let border_y = first_rect.y + first_rect.height;
+                    y >= border_y.saturating_sub(1) && y <= border_y + 1
+                        && x >= area.x && x < area.x + area.width
+                }
+            };
+
+            if on_border {
+                return Some((path.clone(), *direction));
+            }
+
+            // Recurse into children
+            path.push(Side::First);
+            if let Some(result) = first.hit_test_border_inner(first_rect, x, y, path) {
+                return Some(result);
+            }
+            path.pop();
+
+            path.push(Side::Second);
+            if let Some(result) = second.hit_test_border_inner(second_rect, x, y, path) {
+                return Some(result);
+            }
+            path.pop();
+        }
+        None
+    }
+
+    /// Set the ratio at a given path through the tree.
+    pub fn set_ratio_at_path(&mut self, path: &[Side], ratio: f64) {
+        let ratio = ratio.clamp(0.05, 0.95);
+        if path.is_empty() {
+            if let LayoutNode::Split { ratio: r, .. } = self {
+                *r = ratio;
+            }
+            return;
+        }
+        if let LayoutNode::Split { first, second, .. } = self {
+            match path[0] {
+                Side::First => first.set_ratio_at_path(&path[1..], ratio),
+                Side::Second => second.set_ratio_at_path(&path[1..], ratio),
+            }
+        }
+    }
+
     /// Check if this subtree contains the given pane.
     pub fn contains(&self, target: TabId) -> bool {
         match self {
