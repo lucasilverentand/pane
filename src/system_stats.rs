@@ -36,6 +36,7 @@ pub fn start_stats_collector(
 ) {
     tokio::spawn(async move {
         let mut sys = System::new();
+        let mut disks = sysinfo::Disks::new_with_refreshed_list();
         let interval = Duration::from_secs(interval_secs.max(1));
 
         loop {
@@ -56,7 +57,7 @@ pub fn start_stats_collector(
             let load_avg = System::load_average();
 
             let disk_usage_percent = {
-                let disks = sysinfo::Disks::new_with_refreshed_list();
+                disks.refresh();
                 let mut total_space = 0u64;
                 let mut available_space = 0u64;
                 for disk in disks.list() {
