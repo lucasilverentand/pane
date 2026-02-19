@@ -37,7 +37,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
         );
     }
 
-    // Render workspace body
+    // Render workspace body + cursor
     if let Some(ws) = client.active_workspace() {
         let params = LayoutParams::from(&client.config.behavior);
         let copy_mode_state = if client.mode == Mode::Copy {
@@ -78,20 +78,13 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                 pane_view::render_folded(is_active, *direction, theme, frame, *rect);
             }
         }
-    }
 
-    // Status bar
-    status_bar::render_client(client, theme, frame, footer);
-
-    // Cursor position
-    if client.mode == Mode::Normal {
-        if let Some(ws) = client.active_workspace() {
+        // Cursor position (reuses resolved from above)
+        if client.mode == Mode::Normal {
             if let Some(group) = ws.groups.iter().find(|g| g.id == ws.active_group) {
                 if let Some(pane) = group.tabs.get(group.active_tab) {
                     if let Some(screen) = client.pane_screen(pane.id) {
                         if !screen.hide_cursor() {
-                            let params = LayoutParams::from(&client.config.behavior);
-                            let resolved = ws.layout.resolve_with_fold(body, params, &ws.leaf_min_sizes);
                             for rp in &resolved {
                                 if let crate::layout::ResolvedPane::Visible { id, rect } = rp {
                                     if *id == ws.active_group {
