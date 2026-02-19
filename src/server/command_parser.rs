@@ -50,6 +50,7 @@ pub fn parse(input: &str) -> Result<Command> {
         "toggle-sync" => Ok(Command::ToggleSync),
         "paste-buffer" | "pasteb" => parse_paste_buffer(args),
         "detach-client" | "detach" => Ok(Command::DetachClient),
+        "toggle-fold" | "fold" => Ok(Command::ToggleFold),
         "toggle-float" | "float" => Ok(Command::ToggleFloat),
         "new-float" => Ok(Command::NewFloat),
         "maximize-focused" | "maximize" => Ok(Command::MaximizeFocused),
@@ -1536,6 +1537,8 @@ mod tests {
         assert_eq!(parse("restart-pane").unwrap(), Command::RestartPane);
         assert_eq!(parse("equalize-layout").unwrap(), Command::EqualizeLayout);
         assert_eq!(parse("toggle-sync").unwrap(), Command::ToggleSync);
+        assert_eq!(parse("toggle-fold").unwrap(), Command::ToggleFold);
+        assert_eq!(parse("fold").unwrap(), Command::ToggleFold);
     }
 
     #[test]

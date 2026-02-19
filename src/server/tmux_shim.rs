@@ -132,6 +132,8 @@ fn is_subcommand(s: &str) -> bool {
             | "display"
             | "set-option"
             | "set"
+            | "toggle-fold"
+            | "fold"
     )
 }
 

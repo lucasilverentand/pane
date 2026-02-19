@@ -32,7 +32,10 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
     let (left, right) = match &client.mode {
         Mode::Normal => {
             let vars = build_client_vars(client);
-            let left = format!("NORMAL {}", format_string(&client.config.status_bar.left, &vars));
+            let left = format!(
+                "NORMAL {}",
+                format_string(&client.config.status_bar.left, &vars)
+            );
             let right = format_string(&client.config.status_bar.right, &vars);
             (left, right)
         }

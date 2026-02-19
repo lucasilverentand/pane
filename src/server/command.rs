@@ -108,6 +108,7 @@ pub enum Command {
     // Layout presets
     MaximizeFocused,
     ToggleZoom,
+    ToggleFold,
 
     // Floating windows
     ToggleFloat,
@@ -288,7 +289,8 @@ pub fn execute(
 
         Command::SelectWindow { target } => {
             let group_id = resolve_window_target(Some(target), state, id_map)?;
-            state.active_workspace_mut().active_group = group_id;
+            let bar_h = state.workspace_bar_height();
+            state.focus_group(group_id, bar_h);
             broadcast_layout(state, broadcast_tx);
             Ok(CommandResult::LayoutChanged)
         }
@@ -417,7 +419,8 @@ pub fn execute(
 
         Command::SelectPane { target, title } => {
             let group_id = resolve_pane_to_group(target, state, id_map)?;
-            state.active_workspace_mut().active_group = group_id;
+            let bar_h = state.workspace_bar_height();
+            state.focus_group(group_id, bar_h);
             if let Some(t) = title {
                 let ws = state.active_workspace_mut();
                 if let Some(group) = ws.groups.get_mut(&group_id) {
@@ -625,6 +628,15 @@ pub fn execute(
             state.resize_all_tabs(w, h);
             broadcast_layout(state, broadcast_tx);
             Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::ToggleFold => {
+            if state.toggle_fold_active_group() {
+                broadcast_layout(state, broadcast_tx);
+                Ok(CommandResult::LayoutChanged)
+            } else {
+                Ok(CommandResult::Ok(String::new()))
+            }
         }
 
         Command::ToggleFloat => {
@@ -1076,15 +1088,7 @@ mod tests {
 
     /// Helper: create a minimal ServerState + Window for expand_format tests.
     fn make_test_state_and_group() -> (ServerState, crate::window::Window) {
-        let (event_tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let state = ServerState::new_session(
-            "my-session".to_string(),
-            &event_tx,
-            120,
-            40,
-            crate::config::Config::default(),
-        )
-        .unwrap();
+        let (state, _id_map, _broadcast_tx, _rx) = make_test_state();
         let ws = state.active_workspace();
         let group = ws.groups.values().next().unwrap();
         // Clone the group data we need (can't return references)
@@ -1115,7 +1119,7 @@ mod tests {
     fn test_expand_format_session_name() {
         let (state, group) = make_test_state_and_group();
         let result = expand_format("#{session_name}", 0, 0, "bash", &group, true, &state);
-        assert_eq!(result, "my-session");
+        assert_eq!(result, "test-session");
     }
 
     #[test]
@@ -1148,7 +1152,7 @@ mod tests {
             true,
             &state,
         );
-        assert_eq!(result, "my-session:@2.%7");
+        assert_eq!(result, "test-session:@2.%7");
     }
 
     #[test]
@@ -1309,6 +1313,15 @@ mod tests {
         // Active group changed to the second group
         let second_layout_id = layout_ids[1];
         assert_eq!(state.active_workspace().active_group, second_layout_id);
+        match &state.active_workspace().layout {
+            crate::layout::LayoutNode::Split { ratio, .. } => {
+                assert!(
+                    *ratio <= 0.1,
+                    "selecting a folded pane should unfold it and skew ratio"
+                );
+            }
+            _ => panic!("expected split layout"),
+        }
     }
 
     #[test]
@@ -1447,6 +1460,26 @@ mod tests {
             target: TargetPane::Direction(PaneDirection::Right),
             title: None,
         };
+        let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert!(matches!(result, CommandResult::LayoutChanged));
+        assert_eq!(state.active_workspace().active_group, gid2);
+        match &state.active_workspace().layout {
+            crate::layout::LayoutNode::Split { ratio, .. } => {
+                assert!(
+                    *ratio <= 0.1,
+                    "moving focus to a folded right pane should unfold it"
+                );
+            }
+            _ => panic!("expected split layout"),
+        }
+    }
+
+    #[test]
+    fn test_execute_toggle_fold_moves_focus_to_neighbor() {
+        let (mut state, mut id_map, broadcast_tx, gid1, gid2) = make_split_state();
+        assert_eq!(state.active_workspace().active_group, gid1);
+
+        let cmd = Command::ToggleFold;
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(matches!(result, CommandResult::LayoutChanged));
         assert_eq!(state.active_workspace().active_group, gid2);
@@ -1655,8 +1688,8 @@ mod tests {
         assert_eq!(state.active_workspace().groups[&gid2].tab_count(), 2);
     }
 
-    #[test]
-    fn test_execute_split_window_horizontal() {
+    #[tokio::test]
+    async fn test_execute_split_window_horizontal() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         assert_eq!(state.active_workspace().groups.len(), 1);
         let cmd = Command::SplitWindow {
@@ -1677,8 +1710,8 @@ mod tests {
         assert_eq!(state.active_workspace().groups.len(), 2);
     }
 
-    #[test]
-    fn test_execute_split_window_vertical() {
+    #[tokio::test]
+    async fn test_execute_split_window_vertical() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let cmd = Command::SplitWindow {
             horizontal: false,
@@ -1689,8 +1722,8 @@ mod tests {
         assert_eq!(state.active_workspace().groups.len(), 2);
     }
 
-    #[test]
-    fn test_execute_new_window() {
+    #[tokio::test]
+    async fn test_execute_new_window() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let gid = state.active_workspace().active_group;
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 1);
@@ -1712,8 +1745,8 @@ mod tests {
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 2);
     }
 
-    #[test]
-    fn test_execute_new_window_with_name() {
+    #[tokio::test]
+    async fn test_execute_new_window_with_name() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let cmd = Command::NewWindow {
             target_session: None,
@@ -1761,8 +1794,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_execute_new_session_creates_workspace() {
+    #[tokio::test]
+    async fn test_execute_new_session_creates_workspace() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         assert_eq!(state.workspaces.len(), 1);
         let cmd = Command::NewSession {
@@ -1784,8 +1817,8 @@ mod tests {
         assert_eq!(state.active_workspace, 1);
     }
 
-    #[test]
-    fn test_execute_new_session_with_window_name() {
+    #[tokio::test]
+    async fn test_execute_new_session_with_window_name() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let cmd = Command::NewSession {
             name: "s2".to_string(),

@@ -199,6 +199,7 @@ pub fn action_display_name(action: &Action) -> &str {
         Action::EnterNormal => "Enter Normal Mode",
         Action::MaximizeFocused => "Maximize Focused",
         Action::ToggleZoom => "Toggle Zoom",
+        Action::ToggleFold => "Toggle Fold",
         Action::ToggleFloat => "Toggle Float",
         Action::NewFloat => "New Float",
     }
@@ -337,6 +338,11 @@ fn all_actions() -> Vec<(Action, String, String)> {
             Action::ToggleZoom,
             "Toggle Zoom".into(),
             "Toggle full-screen zoom on the focused window".into(),
+        ),
+        (
+            Action::ToggleFold,
+            "Toggle Fold".into(),
+            "Fold/unfold panes by moving focus across neighboring groups".into(),
         ),
         (
             Action::ToggleFloat,

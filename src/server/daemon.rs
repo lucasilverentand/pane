@@ -598,7 +598,11 @@ async fn handle_client(
                 if let Some(cws) = clients.get_active_workspace(client_id).await {
                     state.active_workspace = cws;
                 }
-                handle_mouse_down_server(&mut state, x, y);
+                if handle_mouse_down_server(&mut state, x, y) {
+                    let cws = state.active_workspace;
+                    let render_state = RenderState::for_client(&state, cws);
+                    let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
+                }
             }
             ClientRequest::MouseDrag { x, y } => {
                 let mut state = state.lock().await;
@@ -677,7 +681,7 @@ async fn handle_client(
 }
 
 /// Handle mouse down events server-side (pane focus changes).
-fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
+fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) -> bool {
     state.drag_state = None;
 
     let bar_h = state.workspace_bar_height();
@@ -694,7 +698,7 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
                 direction,
                 body,
             });
-            return;
+            return false;
         }
     }
 
@@ -716,7 +720,7 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
             if x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height {
                 let group_id = *group_id;
                 state.focus_group(group_id, bar_h);
-                return;
+                return true;
             }
         }
     }
@@ -729,40 +733,48 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
         {
             if x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height {
                 // Check tab bar click before focusing the group
-                if let Some(group) = state.active_workspace().groups.get(group_id) {
+                let tab_click = if let Some(group) = state.active_workspace().groups.get(group_id) {
                     if let Some(tab_area) = crate::ui::window_view::tab_bar_area(group, *rect) {
                         let layout = crate::ui::window_view::tab_bar_layout(
                             group,
                             &state.config.theme,
                             tab_area,
                         );
-                        if let Some(click) = crate::ui::window_view::tab_bar_hit_test(&layout, x, y)
-                        {
-                            state.active_workspace_mut().active_group = *group_id;
-                            match click {
-                                crate::ui::window_view::TabBarClick::Tab(i) => {
-                                    state.active_workspace_mut().active_group_mut().active_tab = i;
-                                }
-                                crate::ui::window_view::TabBarClick::NewTab => {
-                                    let cols = w.saturating_sub(4);
-                                    let rows = h.saturating_sub(2 + bar_h + 1);
-                                    let _ = state.add_tab_to_active_group(
-                                        crate::window::TabKind::Shell,
-                                        None,
-                                        cols,
-                                        rows,
-                                    );
-                                }
-                            }
-                            return;
+                        crate::ui::window_view::tab_bar_hit_test(&layout, x, y)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(click) = tab_click {
+                    state.focus_group(*group_id, bar_h);
+                    match click {
+                        crate::ui::window_view::TabBarClick::Tab(i) => {
+                            state.active_workspace_mut().active_group_mut().active_tab = i;
+                        }
+                        crate::ui::window_view::TabBarClick::NewTab => {
+                            let cols = w.saturating_sub(4);
+                            let rows = h.saturating_sub(2 + bar_h + 1);
+                            let _ = state.add_tab_to_active_group(
+                                crate::window::TabKind::Shell,
+                                None,
+                                cols,
+                                rows,
+                            );
                         }
                     }
+                    return true;
                 }
-                state.active_workspace_mut().active_group = *group_id;
-                return;
+
+                state.focus_group(*group_id, bar_h);
+                return true;
             }
         }
     }
+
+    false
 }
 
 /// Handle mouse drag events server-side (split resizing).
@@ -1106,6 +1118,35 @@ mod tests {
         assert!(
             matches!(resp, ServerResponse::LayoutChanged { .. }),
             "expected LayoutChanged, got {:?}",
+            resp
+        );
+
+        framing::send(&mut client, &ClientRequest::Detach)
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_mouse_down_triggers_layout_update() {
+        let (mut client, handle, _state) = setup_test_server().await;
+
+        attach_and_consume_initial(&mut client).await;
+
+        framing::send(&mut client, &ClientRequest::MouseDown { x: 1, y: 4 })
+            .await
+            .unwrap();
+
+        let resp: ServerResponse = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            framing::recv_required(&mut client),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            matches!(resp, ServerResponse::LayoutChanged { .. }),
+            "expected LayoutChanged after mouse click, got {:?}",
             resp
         );
 

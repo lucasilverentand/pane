@@ -395,6 +395,63 @@ impl ServerState {
         }
     }
 
+    /// Toggle folding around the active group.
+    /// - If the active group is folded, unfold it.
+    /// - If it's visible, focus a neighbor so this group can fold.
+    pub fn toggle_fold_active_group(&mut self) -> bool {
+        let bar_h = self.workspace_bar_height();
+        let (w, h) = self.last_size;
+        let body_height = h.saturating_sub(1 + bar_h);
+        let body = ratatui::layout::Rect::new(0, bar_h, w, body_height);
+        let params = LayoutParams::from(&self.config.behavior);
+
+        let (active_group, is_folded, neighbor) = {
+            let ws = self.active_workspace();
+            let active_group = ws.active_group;
+            let resolved = ws
+                .layout
+                .resolve_with_fold(body, params, &ws.leaf_min_sizes);
+            let is_folded = resolved.iter().any(|rp| {
+                matches!(
+                    rp,
+                    ResolvedPane::Folded { id, .. } if *id == active_group
+                )
+            });
+
+            // Prefer horizontal neighbors first (same row / adjacent columns),
+            // then vertical neighbors.
+            let neighbor = ws
+                .layout
+                .find_neighbor(active_group, SplitDirection::Horizontal, Side::Second)
+                .or_else(|| {
+                    ws.layout
+                        .find_neighbor(active_group, SplitDirection::Horizontal, Side::First)
+                })
+                .or_else(|| {
+                    ws.layout
+                        .find_neighbor(active_group, SplitDirection::Vertical, Side::Second)
+                })
+                .or_else(|| {
+                    ws.layout
+                        .find_neighbor(active_group, SplitDirection::Vertical, Side::First)
+                });
+
+            (active_group, is_folded, neighbor)
+        };
+
+        if is_folded {
+            self.focus_group(active_group, bar_h);
+            return true;
+        }
+
+        if let Some(neighbor) = neighbor {
+            self.focus_group(neighbor, bar_h);
+            return true;
+        }
+
+        false
+    }
+
     pub fn move_tab_to_neighbor(&mut self, direction: SplitDirection, side: Side) {
         let ws = self.active_workspace();
         let source_group_id = ws.active_group;
@@ -482,14 +539,34 @@ impl ServerState {
             Err(e) => Tab::spawn_error(pane_id, kind, &e.to_string()),
         };
 
+        let (w, h) = self.last_size;
+        let bar_h = self.workspace_bar_height();
+        let min_pw = self.config.behavior.min_pane_width;
+        let min_ph = self.config.behavior.min_pane_height;
         let group = Window::new(new_group_id, pane);
         let ws = self.active_workspace_mut();
+        let source_group_id = ws.active_group;
         ws.layout
-            .split_pane(ws.active_group, direction, new_group_id);
+            .split_pane(source_group_id, direction, new_group_id);
         ws.groups.insert(new_group_id, group);
         ws.active_group = new_group_id;
 
-        let (w, h) = self.last_size;
+        // Keep a freshly split pair visible even when terminal size is tight.
+        let body_height = h.saturating_sub(1 + bar_h);
+        let body = ratatui::layout::Rect::new(0, bar_h, w, body_height);
+        let resolved = ws.layout.resolve(body);
+        for (id, rect) in resolved {
+            if id != source_group_id && id != new_group_id {
+                continue;
+            }
+            if rect.width < min_pw || rect.height < min_ph {
+                ws.leaf_min_sizes
+                    .insert(id, (rect.width.max(1), rect.height.max(1)));
+            } else {
+                ws.leaf_min_sizes.remove(&id);
+            }
+        }
+
         self.resize_all_tabs(w, h);
         Ok((new_group_id, pane_id))
     }
@@ -932,6 +1009,39 @@ mod tests {
         assert_eq!(state.workspaces[0].active_group, gid1);
     }
 
+    #[test]
+    fn test_focus_group_unfolds_folded_target() {
+        let (mut state, gid1, gid2, _rx) = make_split_state();
+        let params = crate::layout::LayoutParams::from(&state.config.behavior);
+        let body = ratatui::layout::Rect::new(0, 1, state.last_size.0, state.last_size.1 - 2);
+        let before = state.workspaces[0].layout.resolve_with_fold(
+            body,
+            params,
+            &state.workspaces[0].leaf_min_sizes,
+        );
+        assert!(
+            before.iter().any(
+                |rp| matches!(rp, crate::layout::ResolvedPane::Folded { id, .. } if *id == gid2)
+            ),
+            "expected right pane to start folded in narrow layout"
+        );
+
+        state.focus_group(gid2, 1);
+        assert_eq!(state.workspaces[0].active_group, gid2);
+
+        let after = state.workspaces[0].layout.resolve_with_fold(
+            body,
+            params,
+            &state.workspaces[0].leaf_min_sizes,
+        );
+        assert!(
+            after.iter().any(
+                |rp| matches!(rp, crate::layout::ResolvedPane::Folded { id, .. } if *id == gid1)
+            ),
+            "expected previously active pane to become folded after unfolding gid2"
+        );
+    }
+
     // ---- move_tab_to_neighbor ----
 
     #[test]
@@ -1011,6 +1121,39 @@ mod tests {
         assert!(state.active_workspace().groups.contains_key(&new_gid));
         // Active group is the new split
         assert_eq!(state.active_workspace().active_group, new_gid);
+    }
+
+    #[tokio::test]
+    async fn test_split_active_group_keeps_new_split_visible() {
+        let (event_tx, _rx) = mpsc::unbounded_channel();
+        let mut state =
+            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+                .unwrap();
+        state.last_size = (120, 40);
+
+        let original_gid = state.active_workspace().active_group;
+        let (new_gid, _new_pid) = state
+            .split_active_group(SplitDirection::Horizontal, TabKind::Shell, 40, 22)
+            .unwrap();
+
+        let bar_h = state.workspace_bar_height();
+        let body_h = state.last_size.1.saturating_sub(1 + bar_h);
+        let body = ratatui::layout::Rect::new(0, bar_h, state.last_size.0, body_h);
+        let params = crate::layout::LayoutParams::from(&state.config.behavior);
+        let resolved = state.workspaces[0].layout.resolve_with_fold(
+            body,
+            params,
+            &state.workspaces[0].leaf_min_sizes,
+        );
+
+        let new_visible = resolved.iter().any(
+            |rp| matches!(rp, crate::layout::ResolvedPane::Visible { id, .. } if *id == new_gid),
+        );
+        let old_visible = resolved.iter().any(
+            |rp| matches!(rp, crate::layout::ResolvedPane::Visible { id, .. } if *id == original_gid),
+        );
+        assert!(new_visible, "new split should not start folded");
+        assert!(old_visible, "original split peer should remain visible");
     }
 
     // ---- new_workspace / close_workspace ----

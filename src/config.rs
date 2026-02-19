@@ -53,6 +53,7 @@ pub enum Action {
     EnterNormal,
     MaximizeFocused,
     ToggleZoom,
+    ToggleFold,
     ToggleFloat,
     NewFloat,
 }
@@ -339,6 +340,7 @@ fn action_name_map() -> HashMap<&'static str, Action> {
     m.insert("enter_normal", Action::EnterNormal);
     m.insert("maximize_focused", Action::MaximizeFocused);
     m.insert("toggle_zoom", Action::ToggleZoom);
+    m.insert("toggle_fold", Action::ToggleFold);
     m.insert("toggle_float", Action::ToggleFloat);
     m.insert("new_float", Action::NewFloat);
     for n in 1..=9u8 {
@@ -1776,5 +1778,6 @@ min_pane_width = 80
         assert_eq!(map.get("scroll_mode"), Some(&Action::ScrollMode));
         assert_eq!(map.get("detach"), Some(&Action::Detach));
         assert_eq!(map.get("select_mode"), Some(&Action::SelectMode));
+        assert_eq!(map.get("toggle_fold"), Some(&Action::ToggleFold));
     }
 }

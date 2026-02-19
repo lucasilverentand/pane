@@ -86,23 +86,25 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                 // Cursor for zoomed window
                 if client.mode == Mode::Interact || client.mode == Mode::Normal {
                     if panes_focused {
-                    if let Some(pane) = group.tabs.get(group.active_tab) {
-                        if let Some(screen) = client.pane_screen(pane.id) {
-                            if !screen.hide_cursor() {
-                                let (vt_row, vt_col) = screen.cursor_position();
-                                let tab_bar_offset: u16 = if group.tabs.len() > 1 { 1 } else { 0 };
-                                let cursor_x = body.x + 2 + vt_col;
-                                let cursor_y = body.y + 1 + tab_bar_offset + vt_row;
-                                if cursor_x < body.x + body.width && cursor_y < body.y + body.height
-                                {
-                                    frame.set_cursor_position(ratatui::layout::Position {
-                                        x: cursor_x,
-                                        y: cursor_y,
-                                    });
+                        if let Some(pane) = group.tabs.get(group.active_tab) {
+                            if let Some(screen) = client.pane_screen(pane.id) {
+                                if !screen.hide_cursor() {
+                                    let (vt_row, vt_col) = screen.cursor_position();
+                                    let tab_bar_offset: u16 =
+                                        if group.tabs.len() > 1 { 1 } else { 0 };
+                                    let cursor_x = body.x + 2 + vt_col;
+                                    let cursor_y = body.y + 1 + tab_bar_offset + vt_row;
+                                    if cursor_x < body.x + body.width
+                                        && cursor_y < body.y + body.height
+                                    {
+                                        frame.set_cursor_position(ratatui::layout::Position {
+                                            x: cursor_x,
+                                            y: cursor_y,
+                                        });
+                                    }
                                 }
                             }
                         }
-                    }
                     }
                 }
             }
@@ -114,7 +116,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
             // First pass: visible panes
             for rp in &resolved {
                 if let crate::layout::ResolvedPane::Visible { id: group_id, rect } = rp {
-                if let Some(group) = ws.groups.iter().find(|g| g.id == *group_id) {
+                    if let Some(group) = ws.groups.iter().find(|g| g.id == *group_id) {
                         let is_active = panes_focused && *group_id == ws.active_group;
                         let pane = group.tabs.get(group.active_tab);
                         let screen = pane.and_then(|p| client.pane_screen(p.id));
@@ -151,36 +153,38 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
             // Cursor position
             if client.mode == Mode::Interact || client.mode == Mode::Normal {
                 if panes_focused {
-                if let Some(group) = ws.groups.iter().find(|g| g.id == ws.active_group) {
-                    if let Some(pane) = group.tabs.get(group.active_tab) {
-                        if let Some(screen) = client.pane_screen(pane.id) {
-                            if !screen.hide_cursor() {
-                                for rp in &resolved {
-                                    if let crate::layout::ResolvedPane::Visible { id, rect } = rp {
-                                        if *id == ws.active_group {
-                                            let (vt_row, vt_col) = screen.cursor_position();
-                                            let tab_bar_offset: u16 =
-                                                if group.tabs.len() > 1 { 1 } else { 0 };
-                                            let cursor_x = rect.x + 2 + vt_col;
-                                            let cursor_y = rect.y + 1 + tab_bar_offset + vt_row;
-                                            if cursor_x < rect.x + rect.width
-                                                && cursor_y < rect.y + rect.height
-                                            {
-                                                frame.set_cursor_position(
-                                                    ratatui::layout::Position {
-                                                        x: cursor_x,
-                                                        y: cursor_y,
-                                                    },
-                                                );
+                    if let Some(group) = ws.groups.iter().find(|g| g.id == ws.active_group) {
+                        if let Some(pane) = group.tabs.get(group.active_tab) {
+                            if let Some(screen) = client.pane_screen(pane.id) {
+                                if !screen.hide_cursor() {
+                                    for rp in &resolved {
+                                        if let crate::layout::ResolvedPane::Visible { id, rect } =
+                                            rp
+                                        {
+                                            if *id == ws.active_group {
+                                                let (vt_row, vt_col) = screen.cursor_position();
+                                                let tab_bar_offset: u16 =
+                                                    if group.tabs.len() > 1 { 1 } else { 0 };
+                                                let cursor_x = rect.x + 2 + vt_col;
+                                                let cursor_y = rect.y + 1 + tab_bar_offset + vt_row;
+                                                if cursor_x < rect.x + rect.width
+                                                    && cursor_y < rect.y + rect.height
+                                                {
+                                                    frame.set_cursor_position(
+                                                        ratatui::layout::Position {
+                                                            x: cursor_x,
+                                                            y: cursor_y,
+                                                        },
+                                                    );
+                                                }
+                                                break;
                                             }
-                                            break;
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                }
                 }
             }
         }
