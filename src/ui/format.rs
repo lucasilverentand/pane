@@ -184,4 +184,116 @@ mod tests {
         let vars = make_vars(&[("pane_title", "zsh")]);
         assert_eq!(format_string(" #{pane_title} ", &vars), " zsh ");
     }
+
+    // --- Nested conditionals ---
+
+    #[test]
+    fn test_nested_conditional_both_true() {
+        let vars = make_vars(&[("a", "1"), ("b", "2")]);
+        assert_eq!(
+            format_string("#{?a,#{?b,x,y},z}", &vars),
+            "x"
+        );
+    }
+
+    #[test]
+    fn test_nested_conditional_outer_true_inner_false() {
+        let vars = make_vars(&[("a", "1")]);
+        assert_eq!(
+            format_string("#{?a,#{?b,x,y},z}", &vars),
+            "y"
+        );
+    }
+
+    #[test]
+    fn test_nested_conditional_outer_false() {
+        let vars = make_vars(&[("b", "2")]);
+        assert_eq!(
+            format_string("#{?a,#{?b,x,y},z}", &vars),
+            "z"
+        );
+    }
+
+    // --- Malformed templates ---
+
+    #[test]
+    fn test_unclosed_brace_treated_as_var() {
+        let vars = make_vars(&[]);
+        // "#{missing" — no closing brace, read_until_matching_brace reads to end
+        let result = format_string("#{missing", &vars);
+        // The token is "missing" (read to EOF), which is looked up as a variable
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_hash_without_open_brace() {
+        let vars = make_vars(&[]);
+        assert_eq!(format_string("#abc", &vars), "#abc");
+    }
+
+    #[test]
+    fn test_empty_token() {
+        let vars = make_vars(&[]);
+        // #{} — empty token, looked up as "" variable
+        assert_eq!(format_string("#{}", &vars), "");
+    }
+
+    // --- Conditional with fewer than 3 parts ---
+
+    #[test]
+    fn test_conditional_one_part_returns_empty() {
+        let vars = make_vars(&[("a", "1")]);
+        // #{?a} — only 1 part (the condition), no true/false branches
+        assert_eq!(format_string("#{?a}", &vars), "");
+    }
+
+    #[test]
+    fn test_conditional_two_parts_returns_empty() {
+        let vars = make_vars(&[("a", "1")]);
+        // #{?a,yes} — only 2 parts, needs 3
+        assert_eq!(format_string("#{?a,yes}", &vars), "");
+    }
+
+    // --- Empty condition name ---
+
+    #[test]
+    fn test_conditional_empty_condition_name() {
+        let vars = make_vars(&[]);
+        // #{?,yes,no} — empty condition name, not in vars → falsy
+        assert_eq!(format_string("#{?,yes,no}", &vars), "no");
+    }
+
+    #[test]
+    fn test_conditional_empty_condition_with_empty_string_var() {
+        let vars = make_vars(&[("", "")]);
+        // Empty key exists but is empty string → falsy
+        assert_eq!(format_string("#{?,yes,no}", &vars), "no");
+    }
+
+    #[test]
+    fn test_conditional_empty_condition_with_nonempty_var() {
+        let vars = make_vars(&[("", "val")]);
+        // Empty key exists and is non-empty → truthy
+        assert_eq!(format_string("#{?,yes,no}", &vars), "yes");
+    }
+
+    // --- Nested variable in conditional branches ---
+
+    #[test]
+    fn test_conditional_with_nested_var_in_true_branch() {
+        let vars = make_vars(&[("flag", "1"), ("val", "hello")]);
+        assert_eq!(
+            format_string("#{?flag,#{val},default}", &vars),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn test_conditional_with_nested_var_in_false_branch() {
+        let vars = make_vars(&[("val", "hello")]);
+        assert_eq!(
+            format_string("#{?flag,default,#{val}}", &vars),
+            "hello"
+        );
+    }
 }

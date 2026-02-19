@@ -1600,4 +1600,737 @@ mod tests {
         assert_eq!(w, 81);
         assert_eq!(h, 20);
     }
+
+    // --- Ratio edge case tests ---
+
+    #[test]
+    fn test_resolve_ratio_boundary_0_1() {
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.1,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        let area = Rect::new(0, 0, 200, 50);
+        let resolved = node.resolve(area);
+        assert_eq!(resolved.len(), 2);
+        // First gets ~10% = ~20px, second gets ~90% = ~180px
+        assert!(resolved[0].1.width <= 25);
+        assert!(resolved[1].1.width >= 175);
+        // Total width should cover the area
+        assert_eq!(resolved[0].1.width + resolved[1].1.width, 200);
+    }
+
+    #[test]
+    fn test_resolve_ratio_boundary_0_9() {
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.9,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        let area = Rect::new(0, 0, 200, 50);
+        let resolved = node.resolve(area);
+        assert_eq!(resolved.len(), 2);
+        assert!(resolved[0].1.width >= 175);
+        assert!(resolved[1].1.width <= 25);
+        assert_eq!(resolved[0].1.width + resolved[1].1.width, 200);
+    }
+
+    #[test]
+    fn test_resolve_ratio_boundary_vertical() {
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Vertical,
+            ratio: 0.1,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        let area = Rect::new(0, 0, 100, 100);
+        let resolved = node.resolve(area);
+        assert_eq!(resolved.len(), 2);
+        assert!(resolved[0].1.height <= 15);
+        assert!(resolved[1].1.height >= 85);
+    }
+
+    // --- Tiny area tests ---
+
+    #[test]
+    fn test_resolve_1x1_area() {
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        let area = Rect::new(0, 0, 1, 1);
+        let resolved = node.resolve(area);
+        assert_eq!(resolved.len(), 2);
+        // Total width must not exceed area
+        assert!(resolved[0].1.width + resolved[1].1.width <= 1);
+    }
+
+    #[test]
+    fn test_resolve_2x2_area() {
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        let area = Rect::new(0, 0, 2, 2);
+        let resolved = node.resolve(area);
+        assert_eq!(resolved.len(), 2);
+        // Each pane gets 1 col
+        assert_eq!(resolved[0].1.width + resolved[1].1.width, 2);
+        assert_eq!(resolved[0].1.height, 2);
+        assert_eq!(resolved[1].1.height, 2);
+    }
+
+    #[test]
+    fn test_resolve_3x3_area() {
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Vertical,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        let area = Rect::new(0, 0, 3, 3);
+        let resolved = node.resolve(area);
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].1.width, 3);
+        assert_eq!(resolved[1].1.width, 3);
+        assert_eq!(resolved[0].1.height + resolved[1].1.height, 3);
+    }
+
+    #[test]
+    fn test_resolve_with_fold_tiny_1x1() {
+        let id = PaneId::new_v4();
+        let node = LayoutNode::Leaf(id);
+        let area = Rect::new(0, 0, 1, 1);
+        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
+        assert_eq!(resolved.len(), 1);
+        assert!(matches!(resolved[0], ResolvedPane::Visible { id: rid, rect } if rid == id && rect.width == 1 && rect.height == 1));
+    }
+
+    #[test]
+    fn test_resolve_with_fold_split_in_tiny_area() {
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        // 3 wide: both panes < min width. One must fold.
+        let area = Rect::new(0, 0, 3, 3);
+        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
+        assert_eq!(resolved.len(), 2);
+        let visible_count = resolved.iter().filter(|rp| matches!(rp, ResolvedPane::Visible { .. })).count();
+        let folded_count = resolved.iter().filter(|rp| matches!(rp, ResolvedPane::Folded { .. })).count();
+        assert_eq!(visible_count, 1);
+        assert_eq!(folded_count, 1);
+    }
+
+    // --- Fold case 2 asymmetry tests ---
+
+    #[test]
+    fn test_fold_case2_asymmetric_leaf_mins_first_undersized() {
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        // 100 wide, ratio 0.3 → first=30, second=70
+        // leaf_mins: id1=(50,4), id2=(40,4) → total needed=90 <= 100 → case 2 (clamp)
+        // first_size(30) < first_min(50) → clamp first to 50, second gets 50
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.3,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        let area = Rect::new(0, 0, 100, 10);
+        let mut leaf_mins = HashMap::new();
+        leaf_mins.insert(id1, (50u16, 4u16));
+        leaf_mins.insert(id2, (40u16, 4u16));
+        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &leaf_mins);
+        assert_eq!(resolved.len(), 2);
+        // Both should be visible (case 2 clamping)
+        assert!(matches!(resolved[0], ResolvedPane::Visible { id, rect, .. } if id == id1 && rect.width >= 50));
+        assert!(matches!(resolved[1], ResolvedPane::Visible { id, rect, .. } if id == id2 && rect.width >= 40));
+    }
+
+    #[test]
+    fn test_fold_case2_asymmetric_leaf_mins_second_undersized() {
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        // 100 wide, ratio 0.8 → first=80, second=20
+        // leaf_mins: id1=(40,4), id2=(50,4) → total needed=90 <= 100 → case 2
+        // second_size(20) < second_min(50) → clamp second to 50, first gets 50
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.8,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        let area = Rect::new(0, 0, 100, 10);
+        let mut leaf_mins = HashMap::new();
+        leaf_mins.insert(id1, (40u16, 4u16));
+        leaf_mins.insert(id2, (50u16, 4u16));
+        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &leaf_mins);
+        assert_eq!(resolved.len(), 2);
+        assert!(matches!(resolved[0], ResolvedPane::Visible { id, rect, .. } if id == id1 && rect.width >= 40));
+        assert!(matches!(resolved[1], ResolvedPane::Visible { id, rect, .. } if id == id2 && rect.width >= 50));
+    }
+
+    // --- Large fold_cell_count tests ---
+
+    #[test]
+    fn test_large_fold_cell_count_nested() {
+        // Build a deeply nested same-direction split tree (4 leaves in horizontal chain)
+        // fold_cell_count = 4 for this subtree
+        let ids: Vec<PaneId> = (0..4).map(|_| PaneId::new_v4()).collect();
+        let right_subtree = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(ids[1])),
+                second: Box::new(LayoutNode::Leaf(ids[2])),
+            }),
+            second: Box::new(LayoutNode::Leaf(ids[3])),
+        };
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.9,
+            first: Box::new(LayoutNode::Leaf(ids[0])),
+            second: Box::new(right_subtree),
+        };
+        // fold_cell_count of right subtree = 3 (two leaves in H-split + one leaf)
+        // With 90 wide area: first gets ~81, second gets ~9
+        // second subtree min = min(81+3, 81+1) = min(84, 82) = 82 (with default params)
+        // So with small enough area, the right subtree folds
+        let area = Rect::new(0, 0, 90, 10);
+        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
+        // First should be visible, all 3 right leaves should be folded
+        let visible: Vec<_> = resolved.iter().filter(|rp| matches!(rp, ResolvedPane::Visible { .. })).collect();
+        let folded: Vec<_> = resolved.iter().filter(|rp| matches!(rp, ResolvedPane::Folded { .. })).collect();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(folded.len(), 3);
+    }
+
+    #[test]
+    fn test_fold_cell_count_exceeds_available_space() {
+        // 8 leaves in same-direction split chain → fold_cell_count = 8
+        // Available width is only 5 → fold bar capped at available space
+        fn chain(ids: &[PaneId]) -> LayoutNode {
+            if ids.len() == 1 {
+                return LayoutNode::Leaf(ids[0]);
+            }
+            LayoutNode::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(ids[0])),
+                second: Box::new(chain(&ids[1..])),
+            }
+        }
+        let ids: Vec<PaneId> = (0..8).map(|_| PaneId::new_v4()).collect();
+        let subtree = chain(&ids);
+        assert_eq!(subtree.fold_cell_count(SplitDirection::Horizontal), 8);
+
+        // Put it as second child of a split with tiny total area
+        let main_id = PaneId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.9,
+            first: Box::new(LayoutNode::Leaf(main_id)),
+            second: Box::new(subtree),
+        };
+        let area = Rect::new(0, 0, 12, 5);
+        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
+        // Should not panic; all rects should fit within the area
+        for rp in &resolved {
+            let rect = match rp {
+                ResolvedPane::Visible { rect, .. } | ResolvedPane::Folded { rect, .. } => rect,
+            };
+            assert!(rect.x + rect.width <= area.x + area.width);
+            assert!(rect.y + rect.height <= area.y + area.height);
+        }
+    }
+
+    // --- Resize deeply nested tests ---
+
+    #[test]
+    fn test_resize_3_levels_deep() {
+        // root(H) → [id1 | inner(V) → [id2 | deep(H) → [id3 | id4]]]
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let id3 = PaneId::new_v4();
+        let id4 = PaneId::new_v4();
+        let mut node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(id2)),
+                second: Box::new(LayoutNode::Split {
+                    direction: SplitDirection::Horizontal,
+                    ratio: 0.5,
+                    first: Box::new(LayoutNode::Leaf(id3)),
+                    second: Box::new(LayoutNode::Leaf(id4)),
+                }),
+            }),
+        };
+
+        // Resize id3 (3 levels deep) by +0.1
+        assert!(node.resize(id3, 0.1));
+
+        // Verify only the deepest split ratio changed
+        if let LayoutNode::Split { ratio, second, .. } = &node {
+            assert!((*ratio - 0.5).abs() < f64::EPSILON, "root ratio should be unchanged");
+            if let LayoutNode::Split { ratio: mid_ratio, second: deep, .. } = second.as_ref() {
+                assert!((*mid_ratio - 0.5).abs() < f64::EPSILON, "middle ratio should be unchanged");
+                if let LayoutNode::Split { ratio: deep_ratio, .. } = deep.as_ref() {
+                    assert!((*deep_ratio - 0.6).abs() < f64::EPSILON, "deep ratio should be 0.6");
+                } else {
+                    panic!("Expected deep split");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_resize_4_levels_deep() {
+        let ids: Vec<PaneId> = (0..5).map(|_| PaneId::new_v4()).collect();
+        let mut node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(ids[0])),
+            second: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(ids[1])),
+                second: Box::new(LayoutNode::Split {
+                    direction: SplitDirection::Horizontal,
+                    ratio: 0.5,
+                    first: Box::new(LayoutNode::Leaf(ids[2])),
+                    second: Box::new(LayoutNode::Split {
+                        direction: SplitDirection::Horizontal,
+                        ratio: 0.5,
+                        first: Box::new(LayoutNode::Leaf(ids[3])),
+                        second: Box::new(LayoutNode::Leaf(ids[4])),
+                    }),
+                }),
+            }),
+        };
+
+        // Resize the deepest pane
+        assert!(node.resize(ids[4], 0.2));
+
+        // Walk to the deepest split and verify only that ratio changed
+        fn get_deepest_ratio(n: &LayoutNode) -> f64 {
+            match n {
+                LayoutNode::Split { ratio, second, .. } => {
+                    if matches!(second.as_ref(), LayoutNode::Leaf(_)) {
+                        *ratio
+                    } else {
+                        get_deepest_ratio(second)
+                    }
+                }
+                _ => panic!("Expected split"),
+            }
+        }
+        let r = get_deepest_ratio(&node);
+        assert!((r - 0.3).abs() < f64::EPSILON, "deepest ratio should be 0.3 (0.5 - 0.2)");
+    }
+
+    // --- Unfold edge case tests ---
+
+    #[test]
+    fn test_unfold_towards_nonexistent_pane() {
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let mut node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.9,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        let nonexistent = PaneId::new_v4();
+        assert!(!node.unfold_towards(nonexistent));
+        // Ratio should be unchanged
+        if let LayoutNode::Split { ratio, .. } = &node {
+            assert!((*ratio - 0.9).abs() < f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_unfold_towards_on_leaf() {
+        let id = PaneId::new_v4();
+        let mut node = LayoutNode::Leaf(id);
+        assert!(!node.unfold_towards(id));
+    }
+
+    #[test]
+    fn test_unfold_towards_already_unfolded() {
+        // ratio is 0.5, pane is not folded, but unfold_towards still sets ratio
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let mut node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        assert!(node.unfold_towards(id2));
+        if let LayoutNode::Split { ratio, .. } = &node {
+            // Skews to 0.1 to give space to second
+            assert!((*ratio - 0.1).abs() < f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_unfold_nonexistent_pane() {
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let mut node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.9,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        assert!(!node.unfold(PaneId::new_v4()));
+        if let LayoutNode::Split { ratio, .. } = &node {
+            assert!((*ratio - 0.9).abs() < f64::EPSILON);
+        }
+    }
+
+    // --- Neighbor finding in deeply nested same-direction trees ---
+
+    #[test]
+    fn test_neighbor_deep_same_direction_chain() {
+        // 4 panes in a horizontal chain: [id1 | [id2 | [id3 | id4]]]
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let id3 = PaneId::new_v4();
+        let id4 = PaneId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.25,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.33,
+                first: Box::new(LayoutNode::Leaf(id2)),
+                second: Box::new(LayoutNode::Split {
+                    direction: SplitDirection::Horizontal,
+                    ratio: 0.5,
+                    first: Box::new(LayoutNode::Leaf(id3)),
+                    second: Box::new(LayoutNode::Leaf(id4)),
+                }),
+            }),
+        };
+
+        // Right neighbors
+        assert_eq!(node.find_neighbor(id1, SplitDirection::Horizontal, Side::Second), Some(id2));
+        assert_eq!(node.find_neighbor(id2, SplitDirection::Horizontal, Side::Second), Some(id3));
+        assert_eq!(node.find_neighbor(id3, SplitDirection::Horizontal, Side::Second), Some(id4));
+        assert_eq!(node.find_neighbor(id4, SplitDirection::Horizontal, Side::Second), None);
+
+        // Left neighbors
+        assert_eq!(node.find_neighbor(id1, SplitDirection::Horizontal, Side::First), None);
+        assert_eq!(node.find_neighbor(id2, SplitDirection::Horizontal, Side::First), Some(id1));
+        assert_eq!(node.find_neighbor(id3, SplitDirection::Horizontal, Side::First), Some(id2));
+        assert_eq!(node.find_neighbor(id4, SplitDirection::Horizontal, Side::First), Some(id3));
+    }
+
+    #[test]
+    fn test_neighbor_mixed_direction_deep() {
+        // H[id1 | V[id2 | H[id3 | id4]]]
+        let (node, id1, id2, id3, id4) = build_design_example();
+
+        // id4 → left = id3 (same H split)
+        assert_eq!(node.find_neighbor(id4, SplitDirection::Horizontal, Side::First), Some(id3));
+        // id3 → left crosses into id1's territory
+        assert_eq!(node.find_neighbor(id3, SplitDirection::Horizontal, Side::First), Some(id1));
+        // id4 → up = id2 (vertical neighbor from bottom-right)
+        assert_eq!(node.find_neighbor(id4, SplitDirection::Vertical, Side::First), Some(id2));
+        // id1 → down = None (id1 spans full height, no vertical split at root)
+        assert_eq!(node.find_neighbor(id1, SplitDirection::Vertical, Side::Second), None);
+    }
+
+    // --- Split/close cascade tests ---
+
+    #[test]
+    fn test_split_sibling_is_split_then_close() {
+        // Start: H[id1 | id2]
+        // Split id1 → H[H[id1 | id3] | id2]
+        // Close id3 → H[id1 | id2]
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let id3 = PaneId::new_v4();
+        let mut node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+
+        assert!(node.split_pane(id1, SplitDirection::Horizontal, id3));
+        assert_eq!(node.pane_ids(), vec![id1, id3, id2]);
+
+        // Close id3 — inner split collapses, back to [id1 | id2]
+        let focus = node.close_pane(id3);
+        assert_eq!(focus, Some(id1));
+        assert_eq!(node.pane_ids(), vec![id1, id2]);
+    }
+
+    #[test]
+    fn test_close_cascade_deeply_nested() {
+        // Build: H[id1 | V[id2 | H[id3 | id4]]]
+        // Close id4 → H[id1 | V[id2 | id3]]
+        // Close id3 → H[id1 | id2]
+        // Close id2 → Leaf(id1)
+        let (mut node, id1, id2, id3, id4) = build_design_example();
+
+        let focus = node.close_pane(id4);
+        assert_eq!(focus, Some(id3));
+        assert_eq!(node.pane_ids(), vec![id1, id2, id3]);
+
+        let focus = node.close_pane(id3);
+        assert_eq!(focus, Some(id2));
+        assert_eq!(node.pane_ids(), vec![id1, id2]);
+
+        let focus = node.close_pane(id2);
+        assert_eq!(focus, Some(id1));
+        assert!(matches!(node, LayoutNode::Leaf(id) if id == id1));
+    }
+
+    #[test]
+    fn test_split_both_children_are_splits() {
+        // H[H[id1 | id2] | H[id3 | id4]]
+        // Close id2 → H[id1 | H[id3 | id4]]
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let id3 = PaneId::new_v4();
+        let id4 = PaneId::new_v4();
+        let mut node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(id1)),
+                second: Box::new(LayoutNode::Leaf(id2)),
+            }),
+            second: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(id3)),
+                second: Box::new(LayoutNode::Leaf(id4)),
+            }),
+        };
+
+        let focus = node.close_pane(id2);
+        assert_eq!(focus, Some(id1));
+        assert_eq!(node.pane_ids(), vec![id1, id3, id4]);
+
+        // The first child should now be a leaf
+        if let LayoutNode::Split { first, .. } = &node {
+            assert!(matches!(first.as_ref(), LayoutNode::Leaf(id) if *id == id1));
+        }
+    }
+
+    // --- Equalize on complex trees ---
+
+    #[test]
+    fn test_equalize_5_pane_layout() {
+        // Build 5-pane layout: H[id1 | V[id2 | H[id3 | V[id4 | id5]]]]
+        let ids: Vec<PaneId> = (0..5).map(|_| PaneId::new_v4()).collect();
+        let mut node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.3,
+            first: Box::new(LayoutNode::Leaf(ids[0])),
+            second: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.7,
+                first: Box::new(LayoutNode::Leaf(ids[1])),
+                second: Box::new(LayoutNode::Split {
+                    direction: SplitDirection::Horizontal,
+                    ratio: 0.2,
+                    first: Box::new(LayoutNode::Leaf(ids[2])),
+                    second: Box::new(LayoutNode::Split {
+                        direction: SplitDirection::Vertical,
+                        ratio: 0.8,
+                        first: Box::new(LayoutNode::Leaf(ids[3])),
+                        second: Box::new(LayoutNode::Leaf(ids[4])),
+                    }),
+                }),
+            }),
+        };
+
+        node.equalize();
+
+        fn verify_all_ratios_half(n: &LayoutNode) {
+            if let LayoutNode::Split { ratio, first, second, .. } = n {
+                assert!((*ratio - 0.5).abs() < f64::EPSILON, "ratio was {} instead of 0.5", ratio);
+                verify_all_ratios_half(first);
+                verify_all_ratios_half(second);
+            }
+        }
+        verify_all_ratios_half(&node);
+        assert_eq!(node.pane_ids().len(), 5);
+    }
+
+    #[test]
+    fn test_equalize_6_pane_layout() {
+        // Balanced binary tree: H[V[id1|id2] | V[H[id3|id4] | H[id5|id6]]]
+        let ids: Vec<PaneId> = (0..6).map(|_| PaneId::new_v4()).collect();
+        let mut node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.3,
+            first: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.8,
+                first: Box::new(LayoutNode::Leaf(ids[0])),
+                second: Box::new(LayoutNode::Leaf(ids[1])),
+            }),
+            second: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.2,
+                first: Box::new(LayoutNode::Split {
+                    direction: SplitDirection::Horizontal,
+                    ratio: 0.9,
+                    first: Box::new(LayoutNode::Leaf(ids[2])),
+                    second: Box::new(LayoutNode::Leaf(ids[3])),
+                }),
+                second: Box::new(LayoutNode::Split {
+                    direction: SplitDirection::Horizontal,
+                    ratio: 0.1,
+                    first: Box::new(LayoutNode::Leaf(ids[4])),
+                    second: Box::new(LayoutNode::Leaf(ids[5])),
+                }),
+            }),
+        };
+
+        node.equalize();
+
+        fn check_all(n: &LayoutNode) {
+            if let LayoutNode::Split { ratio, first, second, .. } = n {
+                assert!((*ratio - 0.5).abs() < f64::EPSILON);
+                check_all(first);
+                check_all(second);
+            }
+        }
+        check_all(&node);
+    }
+
+    // --- Additional edge cases ---
+
+    #[test]
+    fn test_edge_leaf_on_complex_tree() {
+        let (node, id1, _, _, id4) = build_design_example();
+        assert_eq!(node.edge_leaf(Side::First), id1);
+        assert_eq!(node.edge_leaf(Side::Second), id4);
+    }
+
+    #[test]
+    fn test_fold_cell_count_cross_direction() {
+        // V[id1 | id2] folded horizontally → max(1, 1) = 1
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Vertical,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        assert_eq!(node.fold_cell_count(SplitDirection::Horizontal), 1);
+        // Same direction: V folded vertically → 1+1 = 2
+        assert_eq!(node.fold_cell_count(SplitDirection::Vertical), 2);
+    }
+
+    #[test]
+    fn test_fold_cell_count_deep_mixed() {
+        // H[V[a|b] | V[c|d]] folded horizontally
+        // H-split → sum of children's fold counts
+        // V[a|b] folded H → max(1,1) = 1
+        // V[c|d] folded H → max(1,1) = 1
+        // total = 1+1 = 2
+        let ids: Vec<PaneId> = (0..4).map(|_| PaneId::new_v4()).collect();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(ids[0])),
+                second: Box::new(LayoutNode::Leaf(ids[1])),
+            }),
+            second: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(ids[2])),
+                second: Box::new(LayoutNode::Leaf(ids[3])),
+            }),
+        };
+        assert_eq!(node.fold_cell_count(SplitDirection::Horizontal), 2);
+        // Folded vertically: H-split → max of children
+        // V[a|b] folded V → 1+1=2, V[c|d] folded V → 1+1=2
+        // H-split → max(2,2) = 2
+        assert_eq!(node.fold_cell_count(SplitDirection::Vertical), 2);
+    }
+
+    #[test]
+    fn test_split_rects_clamped_horizontal() {
+        let area = Rect::new(5, 10, 100, 30);
+        let (first, second) = LayoutNode::split_rects_clamped(
+            &SplitDirection::Horizontal, area, 30, 70,
+        );
+        assert_eq!(first, Rect::new(5, 10, 30, 30));
+        assert_eq!(second, Rect::new(35, 10, 70, 30));
+    }
+
+    #[test]
+    fn test_split_rects_clamped_vertical() {
+        let area = Rect::new(5, 10, 100, 40);
+        let (first, second) = LayoutNode::split_rects_clamped(
+            &SplitDirection::Vertical, area, 15, 25,
+        );
+        assert_eq!(first, Rect::new(5, 10, 100, 15));
+        assert_eq!(second, Rect::new(5, 25, 100, 25));
+    }
+
+    #[test]
+    fn test_resolve_with_nonzero_origin() {
+        let id1 = PaneId::new_v4();
+        let id2 = PaneId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        let area = Rect::new(10, 20, 100, 50);
+        let resolved = node.resolve(area);
+        // First pane should start at (10, 20)
+        assert_eq!(resolved[0].1.x, 10);
+        assert_eq!(resolved[0].1.y, 20);
+        // Second pane should start after first
+        assert!(resolved[1].1.x > 10);
+        assert_eq!(resolved[1].1.y, 20);
+    }
 }

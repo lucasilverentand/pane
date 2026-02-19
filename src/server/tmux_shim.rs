@@ -398,4 +398,242 @@ mod tests {
         assert!(!is_subcommand("-V"));
         assert!(!is_subcommand("-S"));
     }
+
+    // --- build_command_string tests ---
+
+    #[test]
+    fn test_build_command_string_no_args() {
+        let cmd = build_command_string("kill-server", &[]);
+        assert_eq!(cmd, "kill-server");
+    }
+
+    #[test]
+    fn test_build_command_string_empty_arg() {
+        let cmd = build_command_string("send-keys", &["".to_string()]);
+        assert_eq!(cmd, "send-keys ");
+    }
+
+    #[test]
+    fn test_build_command_string_arg_with_spaces() {
+        let cmd = build_command_string("send-keys", &["echo hello world".to_string()]);
+        assert_eq!(cmd, r#"send-keys "echo hello world""#);
+    }
+
+    #[test]
+    fn test_build_command_string_arg_with_quotes() {
+        let cmd = build_command_string("send-keys", &[r#"echo "hi""#.to_string()]);
+        assert_eq!(cmd, r#"send-keys "echo \"hi\"""#);
+    }
+
+    #[test]
+    fn test_build_command_string_arg_with_backslash() {
+        let cmd = build_command_string("send-keys", &[r"path\to\file".to_string()]);
+        // No spaces or quotes, so no quoting applied
+        assert_eq!(cmd, r"send-keys path\to\file");
+    }
+
+    #[test]
+    fn test_build_command_string_arg_with_backslash_and_spaces() {
+        let cmd = build_command_string("send-keys", &[r"path\to some\file".to_string()]);
+        assert_eq!(cmd, r#"send-keys "path\\to some\\file""#);
+    }
+
+    #[test]
+    fn test_build_command_string_arg_with_quotes_and_backslash() {
+        let cmd = build_command_string("send-keys", &[r#"say "hello\" world"#.to_string()]);
+        // Contains a quote, so it gets quoted with escaping
+        assert_eq!(cmd, r#"send-keys "say \"hello\\\" world""#);
+    }
+
+    #[test]
+    fn test_build_command_string_multiple_special_args() {
+        let cmd = build_command_string(
+            "send-keys",
+            &["-t".to_string(), "%0".to_string(), "ls -la".to_string(), "Enter".to_string()],
+        );
+        assert_eq!(cmd, r#"send-keys -t %0 "ls -la" Enter"#);
+    }
+
+    // --- parse_global_flags tests ---
+
+    #[test]
+    fn test_parse_global_flags_no_flags() {
+        let args: Vec<String> = vec!["kill-server".to_string()];
+        let (session, subcmd, rest) = parse_global_flags(&args).unwrap();
+        assert_eq!(session, None);
+        assert_eq!(subcmd, "kill-server");
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn test_parse_global_flags_empty_args() {
+        let args: Vec<String> = vec![];
+        let result = parse_global_flags(&args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_global_flags_only_flags_no_subcommand() {
+        let args: Vec<String> = vec!["-L".to_string(), "test".to_string()];
+        let result = parse_global_flags(&args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_global_flags_socket_path_s() {
+        let args: Vec<String> = vec![
+            "-S".to_string(), "/tmp/my.sock".to_string(),
+            "list-sessions".to_string(),
+        ];
+        let (session, subcmd, rest) = parse_global_flags(&args).unwrap();
+        // -S doesn't set session, only -L does
+        assert_eq!(session, None);
+        assert_eq!(subcmd, "list-sessions");
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn test_parse_global_flags_config_file() {
+        let args: Vec<String> = vec![
+            "-f".to_string(), "/etc/tmux.conf".to_string(),
+            "new-session".to_string(), "-s".to_string(), "test".to_string(),
+        ];
+        let (session, subcmd, rest) = parse_global_flags(&args).unwrap();
+        assert_eq!(session, None);
+        assert_eq!(subcmd, "new-session");
+        assert_eq!(rest, vec!["-s".to_string(), "test".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_global_flags_multiple_flags() {
+        let args: Vec<String> = vec![
+            "-L".to_string(), "mysock".to_string(),
+            "-f".to_string(), "/my/config".to_string(),
+            "split-window".to_string(), "-h".to_string(),
+        ];
+        let (session, subcmd, rest) = parse_global_flags(&args).unwrap();
+        assert_eq!(session, Some("mysock".to_string()));
+        assert_eq!(subcmd, "split-window");
+        assert_eq!(rest, vec!["-h".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_global_flags_unknown_flag_skipped() {
+        // An unknown flag (like -u) that doesn't look like a subcommand gets skipped
+        let args: Vec<String> = vec!["-u".to_string(), "list-sessions".to_string()];
+        let (session, subcmd, rest) = parse_global_flags(&args).unwrap();
+        assert_eq!(session, None);
+        assert_eq!(subcmd, "list-sessions");
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn test_parse_global_flags_subcommand_at_start() {
+        // Subcommand recognized immediately without any flags
+        let args: Vec<String> = vec![
+            "send-keys".to_string(), "-t".to_string(), "%0".to_string(),
+            "hello".to_string(),
+        ];
+        let (session, subcmd, rest) = parse_global_flags(&args).unwrap();
+        assert_eq!(session, None);
+        assert_eq!(subcmd, "send-keys");
+        assert_eq!(rest, vec!["-t".to_string(), "%0".to_string(), "hello".to_string()]);
+    }
+
+    // --- extract_session_name tests ---
+
+    #[test]
+    fn test_extract_session_name_from_target() {
+        let args = vec!["-t".to_string(), "mysession".to_string()];
+        let name = extract_session_name(&args, &None).unwrap();
+        assert_eq!(name, "mysession");
+    }
+
+    #[test]
+    fn test_extract_session_name_target_with_window() {
+        let args = vec!["-t".to_string(), "mysession:0".to_string()];
+        let name = extract_session_name(&args, &None).unwrap();
+        assert_eq!(name, "mysession");
+    }
+
+    #[test]
+    fn test_extract_session_name_target_with_window_and_pane() {
+        let args = vec!["-t".to_string(), "mysession:0.1".to_string()];
+        let name = extract_session_name(&args, &None).unwrap();
+        assert_eq!(name, "mysession");
+    }
+
+    #[test]
+    fn test_extract_session_name_from_override() {
+        let args: Vec<String> = vec![];
+        let name = extract_session_name(&args, &Some("override".to_string())).unwrap();
+        assert_eq!(name, "override");
+    }
+
+    #[test]
+    fn test_extract_session_name_target_takes_precedence_over_override() {
+        let args = vec!["-t".to_string(), "fromtarget".to_string()];
+        let name = extract_session_name(&args, &Some("fromoverride".to_string())).unwrap();
+        assert_eq!(name, "fromtarget");
+    }
+
+    #[test]
+    fn test_extract_session_name_default_fallback() {
+        // No -t, no override, no TMUX env var → "default"
+        let args: Vec<String> = vec![];
+        // We can't fully control env, but without TMUX set we get "default"
+        // (TMUX may or may not be set in test env, so just check we get some string)
+        let name = extract_session_name(&args, &None).unwrap();
+        assert!(!name.is_empty());
+    }
+
+    #[test]
+    fn test_extract_session_name_target_colon_only() {
+        // Target is just ":" — session part before colon is empty string
+        let args = vec!["-t".to_string(), ":0".to_string()];
+        let name = extract_session_name(&args, &None).unwrap();
+        assert_eq!(name, "");
+    }
+
+    #[test]
+    fn test_extract_session_name_t_at_end_without_value() {
+        // -t is last arg with no following value
+        let args = vec!["-t".to_string()];
+        // Falls through to override/default since args.get(i+1) is None
+        let name = extract_session_name(&args, &Some("fallback".to_string())).unwrap();
+        assert_eq!(name, "fallback");
+    }
+
+    // --- is_subcommand comprehensive tests ---
+
+    #[test]
+    fn test_is_subcommand_all_valid() {
+        let valid = vec![
+            "has-session", "has", "list-sessions", "ls", "new-session", "new",
+            "kill-session", "new-window", "neww", "kill-window", "killw",
+            "split-window", "splitw", "send-keys", "send",
+            "select-pane", "selectp", "select-window", "selectw",
+            "list-panes", "lsp", "list-windows", "lsw",
+            "kill-pane", "killp", "kill-server",
+            "rename-session", "rename-window", "renamew",
+            "select-layout", "resize-pane", "resizep",
+            "display-message", "display",
+            "set-option", "set",
+        ];
+        for cmd in valid {
+            assert!(is_subcommand(cmd), "expected '{}' to be a valid subcommand", cmd);
+        }
+    }
+
+    #[test]
+    fn test_is_subcommand_invalid() {
+        let invalid = vec![
+            "-V", "-S", "-L", "-f", "-u", "--help",
+            "nonexistent", "kill", "list", "split",
+            "", "KILL-SERVER", "Kill-Server",
+        ];
+        for cmd in invalid {
+            assert!(!is_subcommand(cmd), "expected '{}' to NOT be a valid subcommand", cmd);
+        }
+    }
 }

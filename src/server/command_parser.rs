@@ -683,4 +683,502 @@ mod tests {
         assert!(parse_target_window("abc").is_err());
         assert!(parse_target_pane("abc").is_err());
     }
+
+    // --- Tokenizer edge cases ---
+
+    #[test]
+    fn test_tokenize_multiple_consecutive_spaces() {
+        let tokens = tokenize("split-window    -h").unwrap();
+        assert_eq!(tokens, vec!["split-window", "-h"]);
+    }
+
+    #[test]
+    fn test_tokenize_leading_spaces() {
+        let tokens = tokenize("   kill-server").unwrap();
+        assert_eq!(tokens, vec!["kill-server"]);
+    }
+
+    #[test]
+    fn test_tokenize_trailing_spaces() {
+        let tokens = tokenize("kill-server   ").unwrap();
+        assert_eq!(tokens, vec!["kill-server"]);
+    }
+
+    #[test]
+    fn test_tokenize_only_spaces() {
+        let tokens = tokenize("     ").unwrap();
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn test_tokenize_mixed_quotes() {
+        // Double quotes inside single quotes are literal
+        let tokens = tokenize(r#"send-keys 'say "hello"' Enter"#).unwrap();
+        assert_eq!(tokens, vec!["send-keys", r#"say "hello""#, "Enter"]);
+    }
+
+    #[test]
+    fn test_tokenize_single_quotes_no_escape() {
+        // Backslash inside single quotes is literal (no escape processing)
+        let tokens = tokenize(r"send-keys 'hello\nworld'").unwrap();
+        assert_eq!(tokens, vec!["send-keys", r"hello\nworld"]);
+    }
+
+    #[test]
+    fn test_tokenize_escaped_backslash_in_double_quotes() {
+        let tokens = tokenize(r#"send-keys "back\\slash""#).unwrap();
+        assert_eq!(tokens, vec!["send-keys", r"back\slash"]);
+    }
+
+    #[test]
+    fn test_tokenize_escaped_tab_in_double_quotes() {
+        let tokens = tokenize(r#"send-keys "col1\tcol2""#).unwrap();
+        assert_eq!(tokens, vec!["send-keys", "col1\tcol2"]);
+    }
+
+    #[test]
+    fn test_tokenize_unknown_escape_in_double_quotes() {
+        // Unknown escape like \x keeps both characters
+        let tokens = tokenize(r#"send-keys "hello\xworld""#).unwrap();
+        assert_eq!(tokens, vec!["send-keys", r"hello\xworld"]);
+    }
+
+    #[test]
+    fn test_tokenize_unterminated_single_quote() {
+        let result = tokenize("send-keys 'hello");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tokenize_adjacent_quoted_and_unquoted() {
+        // Quoted string adjacent to unquoted text gets concatenated
+        let tokens = tokenize(r#"send-keys prefix"quoted""#).unwrap();
+        assert_eq!(tokens, vec!["send-keys", "prefixquoted"]);
+    }
+
+    #[test]
+    fn test_tokenize_empty_quoted_string() {
+        let tokens = tokenize(r#"send-keys "" Enter"#).unwrap();
+        // Empty quotes produce an empty token is NOT pushed (current is empty when quote closes)
+        // Actually: the empty quote sets in_quote=true then immediately closes, current stays empty
+        // The empty token only gets pushed if followed by whitespace — let's verify
+        assert_eq!(tokens, vec!["send-keys", "Enter"]);
+    }
+
+    #[test]
+    fn test_tokenize_tab_as_whitespace() {
+        let tokens = tokenize("split-window\t-h").unwrap();
+        assert_eq!(tokens, vec!["split-window", "-h"]);
+    }
+
+    // --- Malformed input / parse edge cases ---
+
+    #[test]
+    fn test_parse_whitespace_only_command() {
+        let result = parse("   ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_unknown_command_with_args() {
+        let result = parse("totally-bogus -x -y");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("unknown command"));
+    }
+
+    // --- Invalid numeric values ---
+
+    #[test]
+    fn test_parse_split_window_invalid_percent() {
+        // -l abc% should fail to parse percent, falls through to unwrap_or(50)
+        let cmd = parse("split-window -h -l abc%").unwrap();
+        assert_eq!(cmd, Command::SplitWindow {
+            horizontal: true,
+            target: None,
+            size: Some(SplitSize::Percent(50)),
+        });
+    }
+
+    #[test]
+    fn test_parse_split_window_invalid_cells() {
+        // -l xyz (no % suffix, not a valid u16) → size stays None
+        let cmd = parse("split-window -h -l xyz").unwrap();
+        assert_eq!(cmd, Command::SplitWindow {
+            horizontal: true,
+            target: None,
+            size: None,
+        });
+    }
+
+    #[test]
+    fn test_parse_split_window_zero_percent() {
+        let cmd = parse("split-window -l 0%").unwrap();
+        assert_eq!(cmd, Command::SplitWindow {
+            horizontal: false,
+            target: None,
+            size: Some(SplitSize::Percent(0)),
+        });
+    }
+
+    #[test]
+    fn test_parse_split_window_large_percent() {
+        // 255 fits in u8
+        let cmd = parse("split-window -l 255%").unwrap();
+        assert_eq!(cmd, Command::SplitWindow {
+            horizontal: false,
+            target: None,
+            size: Some(SplitSize::Percent(255)),
+        });
+    }
+
+    #[test]
+    fn test_parse_split_window_cells() {
+        let cmd = parse("split-window -l 20").unwrap();
+        assert_eq!(cmd, Command::SplitWindow {
+            horizontal: false,
+            target: None,
+            size: Some(SplitSize::Cells(20)),
+        });
+    }
+
+    #[test]
+    fn test_parse_resize_pane_non_numeric_amount_ignored() {
+        // Non-numeric value after direction flag: amount stays at default 1
+        let cmd = parse("resize-pane -L abc").unwrap();
+        assert_eq!(cmd, Command::ResizePane {
+            target: None,
+            direction: ResizeDirection::Left,
+            amount: 1,
+        });
+    }
+
+    // --- Multi-flag combinations ---
+
+    #[test]
+    fn test_parse_split_window_both_h_and_v_last_wins() {
+        let cmd = parse("split-window -h -v").unwrap();
+        // -v is parsed last, overrides -h
+        assert_eq!(cmd, Command::SplitWindow {
+            horizontal: false,
+            target: None,
+            size: None,
+        });
+    }
+
+    #[test]
+    fn test_parse_split_window_v_then_h() {
+        let cmd = parse("split-window -v -h").unwrap();
+        assert_eq!(cmd, Command::SplitWindow {
+            horizontal: true,
+            target: None,
+            size: None,
+        });
+    }
+
+    #[test]
+    fn test_parse_select_pane_all_directions() {
+        for (flag, dir) in [
+            ("-L", PaneDirection::Left),
+            ("-R", PaneDirection::Right),
+            ("-U", PaneDirection::Up),
+            ("-D", PaneDirection::Down),
+        ] {
+            let cmd = parse(&format!("select-pane {}", flag)).unwrap();
+            assert_eq!(cmd, Command::SelectPane {
+                target: TargetPane::Direction(dir),
+                title: None,
+            });
+        }
+    }
+
+    #[test]
+    fn test_parse_resize_pane_all_directions() {
+        for (flag, dir) in [
+            ("-L", ResizeDirection::Left),
+            ("-R", ResizeDirection::Right),
+            ("-U", ResizeDirection::Up),
+            ("-D", ResizeDirection::Down),
+        ] {
+            let cmd = parse(&format!("resize-pane {} 3", flag)).unwrap();
+            assert_eq!(cmd, Command::ResizePane {
+                target: None,
+                direction: dir,
+                amount: 3,
+            });
+        }
+    }
+
+    #[test]
+    fn test_parse_resize_pane_with_target_and_direction() {
+        let cmd = parse("resize-pane -t %5 -U 10").unwrap();
+        assert_eq!(cmd, Command::ResizePane {
+            target: Some(TargetPane::Id(5)),
+            direction: ResizeDirection::Up,
+            amount: 10,
+        });
+    }
+
+    #[test]
+    fn test_parse_display_message_with_stdout_flag() {
+        let cmd = parse("display-message -p #{session_name}").unwrap();
+        assert_eq!(cmd, Command::DisplayMessage {
+            message: "#{session_name}".to_string(),
+            to_stdout: true,
+        });
+    }
+
+    #[test]
+    fn test_parse_display_message_with_target_skipped() {
+        let cmd = parse("display-message -t %0 hello").unwrap();
+        assert_eq!(cmd, Command::DisplayMessage {
+            message: "hello".to_string(),
+            to_stdout: false,
+        });
+    }
+
+    // --- Commands with missing required arguments ---
+
+    #[test]
+    fn test_parse_rename_session_missing_name() {
+        let result = parse("rename-session");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_send_keys_missing_keys() {
+        let result = parse("send-keys");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_send_keys_with_target_but_no_keys() {
+        let result = parse("send-keys -t %0");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_select_layout_missing_name() {
+        let result = parse("select-layout");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_select_window_missing_target() {
+        let result = parse("select-window");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_has_session_missing_target() {
+        let result = parse("has-session");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_rename_window_missing_name() {
+        let result = parse("rename-window -t @0");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_move_tab_missing_direction() {
+        let result = parse("move-tab");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_select_workspace_missing_target() {
+        let result = parse("select-workspace");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_select_workspace_non_numeric_index() {
+        let result = parse("select-workspace -t abc");
+        assert!(result.is_err());
+    }
+
+    // --- Target parsing edge cases ---
+
+    #[test]
+    fn test_parse_target_pane_invalid_id() {
+        let result = parse_target_pane("%abc");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_target_pane_empty() {
+        let result = parse_target_pane("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_target_pane_percent_only() {
+        let result = parse_target_pane("%");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_target_window_at_only() {
+        let result = parse_target_window("@");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_target_window_at_invalid() {
+        let result = parse_target_window("@xyz");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_target_window_negative_rejected() {
+        // "-1" starts with "-", not "@", and isn't a valid usize
+        let result = parse_target_window("-1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_target_pane_direction_aliases() {
+        assert_eq!(parse_target_pane("-L").unwrap(), TargetPane::Direction(PaneDirection::Left));
+        assert_eq!(parse_target_pane("-R").unwrap(), TargetPane::Direction(PaneDirection::Right));
+        assert_eq!(parse_target_pane("-U").unwrap(), TargetPane::Direction(PaneDirection::Up));
+        assert_eq!(parse_target_pane("-D").unwrap(), TargetPane::Direction(PaneDirection::Down));
+    }
+
+    // --- Command alias coverage ---
+
+    #[test]
+    fn test_parse_all_aliases() {
+        assert_eq!(parse("has -t test").unwrap(), Command::HasSession { name: "test".to_string() });
+        assert_eq!(parse("neww").unwrap(), Command::NewWindow { target_session: None, window_name: None });
+        assert_eq!(parse("killw").unwrap(), Command::KillWindow { target: None });
+        assert_eq!(parse("selectw -t @0").unwrap(), Command::SelectWindow { target: TargetWindow::Id(0) });
+        assert_eq!(parse("selectw -t 0").unwrap(), Command::SelectWindow { target: TargetWindow::Index(0) });
+        assert_eq!(parse("splitw").unwrap(), Command::SplitWindow { horizontal: false, target: None, size: None });
+        assert_eq!(parse("killp").unwrap(), Command::KillPane { target: None });
+        assert_eq!(parse("selectp -L").unwrap(), Command::SelectPane { target: TargetPane::Direction(PaneDirection::Left), title: None });
+        assert_eq!(parse("send hello Enter").unwrap(), Command::SendKeys { target: None, keys: vec!["hello".to_string(), "Enter".to_string()] });
+        assert_eq!(parse("resizep -R 2").unwrap(), Command::ResizePane { target: None, direction: ResizeDirection::Right, amount: 2 });
+        assert_eq!(parse("display hello").unwrap(), Command::DisplayMessage { message: "hello".to_string(), to_stdout: false });
+        assert_eq!(parse("renamew new-name").unwrap(), Command::RenameWindow { target: None, new_name: "new-name".to_string() });
+        assert_eq!(parse("next").unwrap(), Command::NextWindow);
+        assert_eq!(parse("prev").unwrap(), Command::PreviousWindow);
+        assert_eq!(parse("equalize").unwrap(), Command::EqualizeLayout);
+        assert_eq!(parse("pasteb hello world").unwrap(), Command::PasteBuffer { text: "hello world".to_string() });
+    }
+
+    // --- extract_target edge cases ---
+
+    #[test]
+    fn test_extract_target_no_flag() {
+        let (target, rest) = extract_target(&["hello".to_string(), "world".to_string()]);
+        assert_eq!(target, None);
+        assert_eq!(rest, vec!["hello".to_string(), "world".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_target_t_at_end() {
+        // -t with no following arg: -t stays as a regular arg
+        let (target, rest) = extract_target(&["-t".to_string()]);
+        assert_eq!(target, None);
+        assert_eq!(rest, vec!["-t".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_target_multiple_t_flags() {
+        // Second -t overrides first
+        let (target, rest) = extract_target(&[
+            "-t".to_string(), "first".to_string(),
+            "-t".to_string(), "second".to_string(),
+        ]);
+        assert_eq!(target, Some("second".to_string()));
+        assert!(rest.is_empty());
+    }
+
+    // --- New session parsing ---
+
+    #[test]
+    fn test_parse_new_session_with_name() {
+        let cmd = parse("new-session -s mysession").unwrap();
+        assert_eq!(cmd, Command::NewSession {
+            name: "mysession".to_string(),
+            window_name: None,
+            detached: false,
+        });
+    }
+
+    #[test]
+    fn test_parse_new_session_detached_with_window_name() {
+        let cmd = parse("new-session -d -s test -n mywindow").unwrap();
+        assert_eq!(cmd, Command::NewSession {
+            name: "test".to_string(),
+            window_name: Some("mywindow".to_string()),
+            detached: true,
+        });
+    }
+
+    #[test]
+    fn test_parse_new_session_default_name() {
+        let cmd = parse("new-session").unwrap();
+        assert_eq!(cmd, Command::NewSession {
+            name: "default".to_string(),
+            window_name: None,
+            detached: false,
+        });
+    }
+
+    #[test]
+    fn test_parse_new_window_with_name() {
+        let cmd = parse("new-window -n mywin").unwrap();
+        assert_eq!(cmd, Command::NewWindow {
+            target_session: None,
+            window_name: Some("mywin".to_string()),
+        });
+    }
+
+    #[test]
+    fn test_parse_new_window_with_target() {
+        let cmd = parse("new-window -t mysession -n mywin").unwrap();
+        assert_eq!(cmd, Command::NewWindow {
+            target_session: Some("mysession".to_string()),
+            window_name: Some("mywin".to_string()),
+        });
+    }
+
+    // --- Misc zero-arg commands ---
+
+    #[test]
+    fn test_parse_zero_arg_commands() {
+        assert_eq!(parse("close-workspace").unwrap(), Command::CloseWorkspace);
+        assert_eq!(parse("next-window").unwrap(), Command::NextWindow);
+        assert_eq!(parse("previous-window").unwrap(), Command::PreviousWindow);
+        assert_eq!(parse("restart-pane").unwrap(), Command::RestartPane);
+        assert_eq!(parse("equalize-layout").unwrap(), Command::EqualizeLayout);
+        assert_eq!(parse("toggle-sync").unwrap(), Command::ToggleSync);
+    }
+
+    #[test]
+    fn test_parse_paste_buffer_empty() {
+        let cmd = parse("paste-buffer").unwrap();
+        assert_eq!(cmd, Command::PasteBuffer { text: "".to_string() });
+    }
+
+    #[test]
+    fn test_parse_list_windows_with_format() {
+        let fmt = format!("list-windows -F \"#{{window_id}}: #{{window_name}}\"");
+        let cmd = parse(&fmt).unwrap();
+        assert_eq!(cmd, Command::ListWindows {
+            format: Some("#{window_id}: #{window_name}".to_string()),
+        });
+    }
+
+    #[test]
+    fn test_parse_list_panes_with_format_and_target() {
+        let fmt = format!("list-panes -t @0 -F \"#{{pane_id}}\"");
+        let cmd = parse(&fmt).unwrap();
+        assert_eq!(cmd, Command::ListPanes {
+            format: Some("#{pane_id}".to_string()),
+        });
+    }
 }

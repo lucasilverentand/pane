@@ -110,6 +110,12 @@ mod tests {
     use crate::session::{PaneConfig, PaneGroupConfig, WorkspaceConfig};
     use std::collections::HashMap;
 
+    fn test_tempdir() -> tempfile::TempDir {
+        let tmp = std::env::temp_dir();
+        let _ = fs::create_dir_all(&tmp);
+        tempfile::tempdir().unwrap()
+    }
+
     fn make_test_session(name: &str) -> Session {
         let group_id = PaneGroupId::new_v4();
         let pane_id = PaneId::new_v4();
@@ -145,7 +151,7 @@ mod tests {
 
     #[test]
     fn test_save_and_load() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tempdir();
         let session = make_test_session("test-session");
         let id = session.id;
 
@@ -162,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_list_sessions() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tempdir();
 
         let s1 = make_test_session("alpha");
         let s2 = make_test_session("beta");
@@ -179,21 +185,21 @@ mod tests {
 
     #[test]
     fn test_load_nonexistent() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tempdir();
         let result = load_from_dir(&Uuid::new_v4(), dir.path());
         assert!(result.is_err());
     }
 
     #[test]
     fn test_list_empty_dir() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tempdir();
         let summaries = list_from_dir(dir.path()).unwrap();
         assert!(summaries.is_empty());
     }
 
     #[test]
     fn test_list_ignores_non_json() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tempdir();
         std::fs::write(dir.path().join("notes.txt"), "not a session").unwrap();
         let summaries = list_from_dir(dir.path()).unwrap();
         assert!(summaries.is_empty());
@@ -201,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_list_ignores_invalid_json() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tempdir();
         std::fs::write(dir.path().join("bad.json"), "{ invalid }").unwrap();
         let summaries = list_from_dir(dir.path()).unwrap();
         assert!(summaries.is_empty());
@@ -209,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_save_overwrites() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tempdir();
 
         let mut session = make_test_session("original");
         let id = session.id;
@@ -225,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_summary_pane_count() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tempdir();
         let group_id = PaneGroupId::new_v4();
         let pane1 = PaneId::new_v4();
         let pane2 = PaneId::new_v4();
@@ -277,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_v1_session_migration() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tempdir();
         // Create a v1 session (no "version" field, no "sync_panes", no group "name")
         let id = Uuid::new_v4();
         let group_id = PaneGroupId::new_v4();

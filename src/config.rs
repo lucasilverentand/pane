@@ -1084,4 +1084,483 @@ min_pane_width = 80
         assert_eq!(config.theme.border_active, Color::Cyan);
         assert_eq!(config.behavior.min_pane_height, 20);
     }
+
+    // --- LeaderConfig ---
+
+    #[test]
+    fn test_leader_config_default_key_and_timeout() {
+        let leader = LeaderConfig::default();
+        assert_eq!(leader.key, make_key(KeyCode::Char('\\'), KeyModifiers::NONE));
+        assert_eq!(leader.timeout_ms, 300);
+    }
+
+    #[test]
+    fn test_leader_config_default_root_is_group() {
+        let leader = LeaderConfig::default();
+        match &leader.root {
+            LeaderNode::Group { label, .. } => assert_eq!(label, "Leader"),
+            _ => panic!("root should be a Group"),
+        }
+    }
+
+    // --- default_leader_tree ---
+
+    #[test]
+    fn test_default_leader_tree_has_window_group() {
+        let tree = default_leader_tree();
+        let children = match &tree {
+            LeaderNode::Group { children, .. } => children,
+            _ => panic!("root should be a Group"),
+        };
+        let w_key = parse_key("w").unwrap();
+        match children.get(&w_key) {
+            Some(LeaderNode::Group { label, children }) => {
+                assert_eq!(label, "Window");
+                // Should have h/j/k/l, 1-9, d, D, c, =, r
+                let h_key = parse_key("h").unwrap();
+                assert!(children.contains_key(&h_key));
+                let d_key = parse_key("d").unwrap();
+                assert!(children.contains_key(&d_key));
+                // FocusGroupN(5)
+                let five_key = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE);
+                match children.get(&five_key) {
+                    Some(LeaderNode::Leaf { action, .. }) => {
+                        assert_eq!(*action, Action::FocusGroupN(5));
+                    }
+                    _ => panic!("expected FocusGroupN(5) leaf"),
+                }
+            }
+            _ => panic!("expected Window group at 'w'"),
+        }
+    }
+
+    #[test]
+    fn test_default_leader_tree_has_tab_group() {
+        let tree = default_leader_tree();
+        let children = match &tree {
+            LeaderNode::Group { children, .. } => children,
+            _ => panic!("root should be a Group"),
+        };
+        let t_key = parse_key("t").unwrap();
+        match children.get(&t_key) {
+            Some(LeaderNode::Group { label, children }) => {
+                assert_eq!(label, "Tab");
+                let n_key = parse_key("n").unwrap();
+                match children.get(&n_key) {
+                    Some(LeaderNode::Leaf { action, .. }) => {
+                        assert_eq!(*action, Action::NewTab);
+                    }
+                    _ => panic!("expected NewTab leaf"),
+                }
+            }
+            _ => panic!("expected Tab group at 't'"),
+        }
+    }
+
+    #[test]
+    fn test_default_leader_tree_has_session_group() {
+        let tree = default_leader_tree();
+        let children = match &tree {
+            LeaderNode::Group { children, .. } => children,
+            _ => panic!("root should be a Group"),
+        };
+        let s_key = parse_key("s").unwrap();
+        match children.get(&s_key) {
+            Some(LeaderNode::Group { label, .. }) => assert_eq!(label, "Session"),
+            _ => panic!("expected Session group at 's'"),
+        }
+    }
+
+    #[test]
+    fn test_default_leader_tree_has_workspace_group() {
+        let tree = default_leader_tree();
+        let children = match &tree {
+            LeaderNode::Group { children, .. } => children,
+            _ => panic!("root should be a Group"),
+        };
+        let w_key = parse_key("shift+w").unwrap();
+        match children.get(&w_key) {
+            Some(LeaderNode::Group { label, children }) => {
+                assert_eq!(label, "Workspace");
+                let n_key = parse_key("n").unwrap();
+                assert!(children.contains_key(&n_key));
+                // SwitchWorkspace(3)
+                let three_key = KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE);
+                match children.get(&three_key) {
+                    Some(LeaderNode::Leaf { action, .. }) => {
+                        assert_eq!(*action, Action::SwitchWorkspace(3));
+                    }
+                    _ => panic!("expected SwitchWorkspace(3) leaf"),
+                }
+            }
+            _ => panic!("expected Workspace group at 'W'"),
+        }
+    }
+
+    #[test]
+    fn test_default_leader_tree_has_resize_group() {
+        let tree = default_leader_tree();
+        let children = match &tree {
+            LeaderNode::Group { children, .. } => children,
+            _ => panic!("root should be a Group"),
+        };
+        let r_key = parse_key("r").unwrap();
+        match children.get(&r_key) {
+            Some(LeaderNode::Group { label, .. }) => assert_eq!(label, "Resize"),
+            _ => panic!("expected Resize group at 'r'"),
+        }
+    }
+
+    #[test]
+    fn test_default_leader_tree_has_paste_and_help() {
+        let tree = default_leader_tree();
+        let children = match &tree {
+            LeaderNode::Group { children, .. } => children,
+            _ => panic!("root should be a Group"),
+        };
+        let y_key = parse_key("y").unwrap();
+        match children.get(&y_key) {
+            Some(LeaderNode::Leaf { action, .. }) => assert_eq!(*action, Action::PasteClipboard),
+            _ => panic!("expected Paste leaf at 'y'"),
+        }
+        let slash_key = parse_key("/").unwrap();
+        match children.get(&slash_key) {
+            Some(LeaderNode::Leaf { action, .. }) => assert_eq!(*action, Action::Help),
+            _ => panic!("expected Help leaf at '/'"),
+        }
+    }
+
+    #[test]
+    fn test_default_leader_tree_has_passthrough() {
+        let tree = default_leader_tree();
+        let children = match &tree {
+            LeaderNode::Group { children, .. } => children,
+            _ => panic!("root should be a Group"),
+        };
+        let bs_key = KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE);
+        match children.get(&bs_key) {
+            Some(LeaderNode::PassThrough) => {}
+            _ => panic!("expected PassThrough at '\\\\'"),
+        }
+    }
+
+    // --- build_leader_tree ---
+
+    #[test]
+    fn test_build_leader_tree_add_custom_leaf() {
+        let defaults = default_leader_tree();
+        let mut raw = HashMap::new();
+        raw.insert("x".to_string(), "quit".to_string());
+        let tree = build_leader_tree(&raw, defaults);
+        let children = match &tree {
+            LeaderNode::Group { children, .. } => children,
+            _ => panic!("root should be a Group"),
+        };
+        let x_key = parse_key("x").unwrap();
+        match children.get(&x_key) {
+            Some(LeaderNode::Leaf { action, label }) => {
+                assert_eq!(*action, Action::Quit);
+                assert_eq!(label, "quit");
+            }
+            _ => panic!("expected Quit leaf at 'x'"),
+        }
+    }
+
+    #[test]
+    fn test_build_leader_tree_passthrough_value() {
+        let defaults = default_leader_tree();
+        let mut raw = HashMap::new();
+        raw.insert("z".to_string(), "passthrough".to_string());
+        let tree = build_leader_tree(&raw, defaults);
+        let children = match &tree {
+            LeaderNode::Group { children, .. } => children,
+            _ => panic!("root should be a Group"),
+        };
+        let z_key = parse_key("z").unwrap();
+        match children.get(&z_key) {
+            Some(LeaderNode::PassThrough) => {}
+            _ => panic!("expected PassThrough at 'z'"),
+        }
+    }
+
+    #[test]
+    fn test_build_leader_tree_group_label() {
+        let defaults = default_leader_tree();
+        let mut raw = HashMap::new();
+        raw.insert("g".to_string(), "+Custom".to_string());
+        let tree = build_leader_tree(&raw, defaults);
+        let children = match &tree {
+            LeaderNode::Group { children, .. } => children,
+            _ => panic!("root should be a Group"),
+        };
+        let g_key = parse_key("g").unwrap();
+        match children.get(&g_key) {
+            Some(LeaderNode::Group { label, .. }) => assert_eq!(label, "Custom"),
+            _ => panic!("expected Custom group at 'g'"),
+        }
+    }
+
+    #[test]
+    fn test_build_leader_tree_nested_path() {
+        let defaults = default_leader_tree();
+        let mut raw = HashMap::new();
+        raw.insert("g q".to_string(), "quit".to_string());
+        let tree = build_leader_tree(&raw, defaults);
+        let children = match &tree {
+            LeaderNode::Group { children, .. } => children,
+            _ => panic!("root should be a Group"),
+        };
+        let g_key = parse_key("g").unwrap();
+        match children.get(&g_key) {
+            Some(LeaderNode::Group { children, .. }) => {
+                let q_key = parse_key("q").unwrap();
+                match children.get(&q_key) {
+                    Some(LeaderNode::Leaf { action, .. }) => assert_eq!(*action, Action::Quit),
+                    _ => panic!("expected Quit leaf at 'g q'"),
+                }
+            }
+            _ => panic!("expected group at 'g'"),
+        }
+    }
+
+    #[test]
+    fn test_build_leader_tree_invalid_action_ignored() {
+        let defaults = default_leader_tree();
+        let mut raw = HashMap::new();
+        raw.insert("x".to_string(), "nonexistent_action".to_string());
+        let tree = build_leader_tree(&raw, defaults);
+        let children = match &tree {
+            LeaderNode::Group { children, .. } => children,
+            _ => panic!("root should be a Group"),
+        };
+        let x_key = parse_key("x").unwrap();
+        assert!(children.get(&x_key).is_none());
+    }
+
+    #[test]
+    fn test_build_leader_tree_invalid_key_ignored() {
+        let defaults = default_leader_tree();
+        let mut raw = HashMap::new();
+        raw.insert("".to_string(), "quit".to_string());
+        let tree = build_leader_tree(&raw, defaults);
+        // Should still be valid — just no new binding added
+        match &tree {
+            LeaderNode::Group { .. } => {}
+            _ => panic!("root should be a Group"),
+        }
+    }
+
+    // --- insert_into_tree ---
+
+    #[test]
+    fn test_insert_into_tree_single_key() {
+        let mut tree = LeaderNode::Group {
+            label: "root".into(),
+            children: HashMap::new(),
+        };
+        let key = parse_key("a").unwrap();
+        let node = LeaderNode::Leaf {
+            action: Action::Quit,
+            label: "Quit".into(),
+        };
+        insert_into_tree(&mut tree, &[key], node);
+        match &tree {
+            LeaderNode::Group { children, .. } => {
+                assert!(children.contains_key(&key));
+            }
+            _ => panic!("root should be a Group"),
+        }
+    }
+
+    #[test]
+    fn test_insert_into_tree_nested_creates_intermediate_group() {
+        let mut tree = LeaderNode::Group {
+            label: "root".into(),
+            children: HashMap::new(),
+        };
+        let key_a = parse_key("a").unwrap();
+        let key_b = parse_key("b").unwrap();
+        let node = LeaderNode::Leaf {
+            action: Action::Help,
+            label: "Help".into(),
+        };
+        insert_into_tree(&mut tree, &[key_a, key_b], node);
+        match &tree {
+            LeaderNode::Group { children, .. } => {
+                match children.get(&key_a) {
+                    Some(LeaderNode::Group { children: inner, .. }) => {
+                        match inner.get(&key_b) {
+                            Some(LeaderNode::Leaf { action, .. }) => {
+                                assert_eq!(*action, Action::Help);
+                            }
+                            _ => panic!("expected Help leaf"),
+                        }
+                    }
+                    _ => panic!("expected intermediate group"),
+                }
+            }
+            _ => panic!("root should be a Group"),
+        }
+    }
+
+    #[test]
+    fn test_insert_into_tree_empty_keys_noop() {
+        let mut tree = LeaderNode::Group {
+            label: "root".into(),
+            children: HashMap::new(),
+        };
+        insert_into_tree(&mut tree, &[], LeaderNode::PassThrough);
+        match &tree {
+            LeaderNode::Group { children, .. } => assert!(children.is_empty()),
+            _ => panic!("root should be a Group"),
+        }
+    }
+
+    // --- get_or_create_group ---
+
+    #[test]
+    fn test_get_or_create_group_new() {
+        let mut tree = LeaderNode::Group {
+            label: "root".into(),
+            children: HashMap::new(),
+        };
+        let key = parse_key("g").unwrap();
+        let group = get_or_create_group(&mut tree, &key, "Custom");
+        assert!(group.is_empty());
+        // Verify the group was actually created
+        match &tree {
+            LeaderNode::Group { children, .. } => {
+                match children.get(&key) {
+                    Some(LeaderNode::Group { label, .. }) => assert_eq!(label, "Custom"),
+                    _ => panic!("expected Custom group"),
+                }
+            }
+            _ => panic!("root should be a Group"),
+        }
+    }
+
+    #[test]
+    fn test_get_or_create_group_existing() {
+        let mut inner = HashMap::new();
+        let q_key = parse_key("q").unwrap();
+        inner.insert(q_key, LeaderNode::Leaf {
+            action: Action::Quit,
+            label: "Quit".into(),
+        });
+        let g_key = parse_key("g").unwrap();
+        let mut root_children = HashMap::new();
+        root_children.insert(g_key, LeaderNode::Group {
+            label: "Existing".into(),
+            children: inner,
+        });
+        let mut tree = LeaderNode::Group {
+            label: "root".into(),
+            children: root_children,
+        };
+        let group = get_or_create_group(&mut tree, &g_key, "Ignored");
+        // Should return existing group contents (with Quit inside)
+        assert!(group.contains_key(&q_key));
+        // Label should remain "Existing", not overwritten
+        match &tree {
+            LeaderNode::Group { children, .. } => {
+                match children.get(&g_key) {
+                    Some(LeaderNode::Group { label, .. }) => assert_eq!(label, "Existing"),
+                    _ => panic!("expected group"),
+                }
+            }
+            _ => panic!("root should be a Group"),
+        }
+    }
+
+    // --- Dark ANSI color parsing ---
+
+    #[test]
+    fn test_parse_color_dark_red() {
+        assert_eq!(parse_color("dark_red"), Some(Color::Indexed(1)));
+        assert_eq!(parse_color("darkred"), Some(Color::Indexed(1)));
+    }
+
+    #[test]
+    fn test_parse_color_dark_green() {
+        assert_eq!(parse_color("dark_green"), Some(Color::Indexed(2)));
+        assert_eq!(parse_color("darkgreen"), Some(Color::Indexed(2)));
+    }
+
+    #[test]
+    fn test_parse_color_dark_yellow() {
+        assert_eq!(parse_color("dark_yellow"), Some(Color::Indexed(3)));
+        assert_eq!(parse_color("darkyellow"), Some(Color::Indexed(3)));
+    }
+
+    #[test]
+    fn test_parse_color_dark_blue() {
+        assert_eq!(parse_color("dark_blue"), Some(Color::Indexed(4)));
+        assert_eq!(parse_color("darkblue"), Some(Color::Indexed(4)));
+    }
+
+    #[test]
+    fn test_parse_color_dark_magenta() {
+        assert_eq!(parse_color("dark_magenta"), Some(Color::Indexed(5)));
+        assert_eq!(parse_color("darkmagenta"), Some(Color::Indexed(5)));
+    }
+
+    #[test]
+    fn test_parse_color_dark_cyan() {
+        assert_eq!(parse_color("dark_cyan"), Some(Color::Indexed(6)));
+        assert_eq!(parse_color("darkcyan"), Some(Color::Indexed(6)));
+    }
+
+    // --- decoration_for ---
+
+    #[test]
+    fn test_decoration_for_matching_process() {
+        let config = Config::default();
+        let dec = config.decoration_for("claude");
+        assert!(dec.is_some());
+        assert_eq!(dec.unwrap().border_color, Color::Rgb(249, 115, 22));
+    }
+
+    #[test]
+    fn test_decoration_for_no_match() {
+        let config = Config::default();
+        assert!(config.decoration_for("vim").is_none());
+    }
+
+    // --- Action name round-tripping ---
+
+    #[test]
+    fn test_action_name_map_focus_group_1_to_9() {
+        let map = action_name_map();
+        for n in 1..=9u8 {
+            let name = format!("focus_group_{}", n);
+            assert_eq!(map.get(name.as_str()), Some(&Action::FocusGroupN(n)));
+        }
+    }
+
+    #[test]
+    fn test_action_name_map_switch_workspace_1_to_9() {
+        let map = action_name_map();
+        for n in 1..=9u8 {
+            let name = format!("switch_workspace_{}", n);
+            assert_eq!(map.get(name.as_str()), Some(&Action::SwitchWorkspace(n)));
+        }
+    }
+
+    #[test]
+    fn test_action_name_map_contains_all_basic_actions() {
+        let map = action_name_map();
+        assert_eq!(map.get("quit"), Some(&Action::Quit));
+        assert_eq!(map.get("new_workspace"), Some(&Action::NewWorkspace));
+        assert_eq!(map.get("close_workspace"), Some(&Action::CloseWorkspace));
+        assert_eq!(map.get("new_tab"), Some(&Action::NewTab));
+        assert_eq!(map.get("next_tab"), Some(&Action::NextTab));
+        assert_eq!(map.get("prev_tab"), Some(&Action::PrevTab));
+        assert_eq!(map.get("close_tab"), Some(&Action::CloseTab));
+        assert_eq!(map.get("split_horizontal"), Some(&Action::SplitHorizontal));
+        assert_eq!(map.get("split_vertical"), Some(&Action::SplitVertical));
+        assert_eq!(map.get("help"), Some(&Action::Help));
+        assert_eq!(map.get("scroll_mode"), Some(&Action::ScrollMode));
+        assert_eq!(map.get("detach"), Some(&Action::Detach));
+        assert_eq!(map.get("select_mode"), Some(&Action::SelectMode));
+    }
 }

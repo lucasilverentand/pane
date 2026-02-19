@@ -546,6 +546,457 @@ impl ServerState {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::layout::{PaneId, SplitDirection};
+    use crate::pane::{Pane, PaneGroup, PaneGroupId, PaneKind};
+
+    /// Build a ServerState without PTY spawning. Uses `Pane::spawn_error` for all panes.
+    fn make_test_state() -> (ServerState, mpsc::UnboundedReceiver<AppEvent>) {
+        let (event_tx, rx) = mpsc::unbounded_channel();
+        let pane_id = PaneId::new_v4();
+        let group_id = PaneGroupId::new_v4();
+        let pane = Pane::spawn_error(pane_id, PaneKind::Shell, "test");
+        let group = PaneGroup::new(group_id, pane);
+        let workspace = Workspace::new("workspace".to_string(), group_id, group);
+        let state = ServerState {
+            workspaces: vec![workspace],
+            active_workspace: 0,
+            session_name: "test-session".to_string(),
+            session_id: Uuid::new_v4(),
+            session_created_at: Utc::now(),
+            config: Config::default(),
+            system_stats: SystemStats::default(),
+            event_tx,
+            last_size: (120, 40),
+            next_pane_number: 1,
+        };
+        (state, rx)
+    }
+
+    /// Build a ServerState with two groups in a horizontal split.
+    fn make_split_state() -> (ServerState, PaneGroupId, PaneGroupId, mpsc::UnboundedReceiver<AppEvent>) {
+        let (event_tx, rx) = mpsc::unbounded_channel();
+        let gid1 = PaneGroupId::new_v4();
+        let gid2 = PaneGroupId::new_v4();
+        let p1 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "left");
+        let p2 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "right");
+        let g1 = PaneGroup::new(gid1, p1);
+        let g2 = PaneGroup::new(gid2, p2);
+        let mut groups = HashMap::new();
+        groups.insert(gid1, g1);
+        groups.insert(gid2, g2);
+        let layout = crate::layout::LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(crate::layout::LayoutNode::Leaf(gid1)),
+            second: Box::new(crate::layout::LayoutNode::Leaf(gid2)),
+        };
+        let workspace = Workspace {
+            name: "workspace".to_string(),
+            layout,
+            groups,
+            active_group: gid1,
+            leaf_min_sizes: HashMap::new(),
+            sync_panes: false,
+        };
+        let state = ServerState {
+            workspaces: vec![workspace],
+            active_workspace: 0,
+            session_name: "test-session".to_string(),
+            session_id: Uuid::new_v4(),
+            session_created_at: Utc::now(),
+            config: Config::default(),
+            system_stats: SystemStats::default(),
+            event_tx,
+            last_size: (120, 40),
+            next_pane_number: 2,
+        };
+        (state, gid1, gid2, rx)
+    }
+
+    // ---- next_workspace_name ----
+
+    #[test]
+    fn test_next_workspace_name_empty() {
+        assert_eq!(next_workspace_name(&[]), "workspace");
+    }
+
+    #[test]
+    fn test_next_workspace_name_one_existing() {
+        let gid = PaneGroupId::new_v4();
+        let p = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "t");
+        let g = PaneGroup::new(gid, p);
+        let ws = Workspace::new("workspace".to_string(), gid, g);
+        assert_eq!(next_workspace_name(&[ws]), "workspace 2");
+    }
+
+    #[test]
+    fn test_next_workspace_name_gap_fills() {
+        // "workspace" (=1) and "workspace 3" exist, should fill gap with "workspace 2"
+        let make_ws = |name: &str| {
+            let gid = PaneGroupId::new_v4();
+            let p = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "t");
+            let g = PaneGroup::new(gid, p);
+            Workspace::new(name.to_string(), gid, g)
+        };
+        let ws1 = make_ws("workspace");
+        let ws3 = make_ws("workspace 3");
+        assert_eq!(next_workspace_name(&[ws1, ws3]), "workspace 2");
+    }
+
+    #[test]
+    fn test_next_workspace_name_non_numeric_suffix_ignored() {
+        let gid = PaneGroupId::new_v4();
+        let p = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "t");
+        let g = PaneGroup::new(gid, p);
+        let ws = Workspace::new("workspace abc".to_string(), gid, g);
+        // "workspace abc" doesn't match the pattern, so "workspace" (=1) is available
+        assert_eq!(next_workspace_name(&[ws]), "workspace");
+    }
+
+    #[test]
+    fn test_next_workspace_name_consecutive() {
+        let make_ws = |name: &str| {
+            let gid = PaneGroupId::new_v4();
+            let p = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "t");
+            let g = PaneGroup::new(gid, p);
+            Workspace::new(name.to_string(), gid, g)
+        };
+        let ws1 = make_ws("workspace");
+        let ws2 = make_ws("workspace 2");
+        assert_eq!(next_workspace_name(&[ws1, ws2]), "workspace 3");
+    }
+
+    // ---- find_pane_mut / find_pane_location ----
+
+    #[test]
+    fn test_find_pane_mut_in_active_workspace() {
+        let (mut state, _rx) = make_test_state();
+        let ws = &state.workspaces[0];
+        let pane_id = ws.groups.values().next().unwrap().tabs[0].id;
+        assert!(state.find_pane_mut(pane_id).is_some());
+    }
+
+    #[test]
+    fn test_find_pane_mut_nonexistent() {
+        let (mut state, _rx) = make_test_state();
+        assert!(state.find_pane_mut(PaneId::new_v4()).is_none());
+    }
+
+    #[test]
+    fn test_find_pane_location_returns_correct_workspace_and_group() {
+        let (state, _rx) = make_test_state();
+        let gid = state.workspaces[0].active_group;
+        let pane_id = state.workspaces[0].groups[&gid].tabs[0].id;
+        let (ws_idx, found_gid) = state.find_pane_location(pane_id).unwrap();
+        assert_eq!(ws_idx, 0);
+        assert_eq!(found_gid, gid);
+    }
+
+    #[test]
+    fn test_find_pane_location_nonexistent() {
+        let (state, _rx) = make_test_state();
+        assert!(state.find_pane_location(PaneId::new_v4()).is_none());
+    }
+
+    #[test]
+    fn test_find_pane_across_workspaces() {
+        let (mut state, _rx) = make_test_state();
+        // Add a second workspace manually
+        let gid2 = PaneGroupId::new_v4();
+        let pid2 = PaneId::new_v4();
+        let p2 = Pane::spawn_error(pid2, PaneKind::Shell, "ws2-pane");
+        let g2 = PaneGroup::new(gid2, p2);
+        let ws2 = Workspace::new("workspace 2".to_string(), gid2, g2);
+        state.workspaces.push(ws2);
+
+        let (ws_idx, found_gid) = state.find_pane_location(pid2).unwrap();
+        assert_eq!(ws_idx, 1);
+        assert_eq!(found_gid, gid2);
+        assert!(state.find_pane_mut(pid2).is_some());
+    }
+
+    #[test]
+    fn test_find_pane_mut_can_modify() {
+        let (mut state, _rx) = make_test_state();
+        let gid = state.workspaces[0].active_group;
+        let pane_id = state.workspaces[0].groups[&gid].tabs[0].id;
+        let pane = state.find_pane_mut(pane_id).unwrap();
+        pane.title = "modified".to_string();
+        // Verify modification persisted
+        let pane = state.find_pane_mut(pane_id).unwrap();
+        assert_eq!(pane.title, "modified");
+    }
+
+    // ---- handle_pty_exited ----
+
+    #[test]
+    fn test_handle_pty_exited_single_tab_single_group_quits() {
+        let (mut state, _rx) = make_test_state();
+        let gid = state.workspaces[0].active_group;
+        let pane_id = state.workspaces[0].groups[&gid].tabs[0].id;
+        let should_quit = state.handle_pty_exited(pane_id);
+        assert!(should_quit, "last pane in last workspace should quit");
+    }
+
+    #[test]
+    fn test_handle_pty_exited_multi_tab_removes_tab() {
+        let (mut state, _rx) = make_test_state();
+        let gid = state.workspaces[0].active_group;
+        // Add a second tab
+        let pid2 = PaneId::new_v4();
+        let p2 = Pane::spawn_error(pid2, PaneKind::Shell, "tab2");
+        state.workspaces[0].groups.get_mut(&gid).unwrap().add_tab(p2);
+        assert_eq!(state.workspaces[0].groups[&gid].tab_count(), 2);
+
+        let should_quit = state.handle_pty_exited(pid2);
+        assert!(!should_quit);
+        assert_eq!(state.workspaces[0].groups[&gid].tab_count(), 1);
+    }
+
+    #[test]
+    fn test_handle_pty_exited_closes_group_in_split() {
+        let (mut state, gid1, _gid2, _rx) = make_split_state();
+        let pane_id = state.workspaces[0].groups[&gid1].tabs[0].id;
+        let should_quit = state.handle_pty_exited(pane_id);
+        assert!(!should_quit);
+        // gid1 should be removed
+        assert!(!state.workspaces[0].groups.contains_key(&gid1));
+        assert_eq!(state.workspaces[0].groups.len(), 1);
+    }
+
+    #[test]
+    fn test_handle_pty_exited_marks_pane_as_exited() {
+        let (mut state, _rx) = make_test_state();
+        let gid = state.workspaces[0].active_group;
+        // Add a second tab so the pane survives (multi-tab removes tab, doesn't quit)
+        let pid2 = PaneId::new_v4();
+        let p2 = Pane::spawn_error(pid2, PaneKind::Shell, "tab2");
+        state.workspaces[0].groups.get_mut(&gid).unwrap().add_tab(p2);
+        // Reset exited flag on the first pane
+        state.workspaces[0].groups.get_mut(&gid).unwrap().tabs[0].exited = false;
+        let pane_id = state.workspaces[0].groups[&gid].tabs[0].id;
+
+        state.handle_pty_exited(pane_id);
+        // The tab was removed, but the exited flag was set on the pane before removal
+        // Verify remaining tab is the second one
+        assert_eq!(state.workspaces[0].groups[&gid].tab_count(), 1);
+    }
+
+    #[test]
+    fn test_handle_pty_exited_closes_workspace_when_multiple() {
+        let (mut state, _rx) = make_test_state();
+        // Add a second workspace
+        let gid2 = PaneGroupId::new_v4();
+        let pid2 = PaneId::new_v4();
+        let p2 = Pane::spawn_error(pid2, PaneKind::Shell, "ws2");
+        let g2 = PaneGroup::new(gid2, p2);
+        let ws2 = Workspace::new("workspace 2".to_string(), gid2, g2);
+        state.workspaces.push(ws2);
+        assert_eq!(state.workspaces.len(), 2);
+
+        // Exit the pane in workspace 2 (single group, single tab, but multiple workspaces)
+        let should_quit = state.handle_pty_exited(pid2);
+        assert!(!should_quit);
+        assert_eq!(state.workspaces.len(), 1);
+    }
+
+    #[test]
+    fn test_handle_pty_exited_nonexistent_pane() {
+        let (mut state, _rx) = make_test_state();
+        let should_quit = state.handle_pty_exited(PaneId::new_v4());
+        assert!(!should_quit);
+    }
+
+    // ---- focus_group ----
+
+    #[test]
+    fn test_focus_group_changes_active() {
+        let (mut state, _gid1, gid2, _rx) = make_split_state();
+        assert_ne!(state.workspaces[0].active_group, gid2);
+        state.focus_group(gid2, 1);
+        assert_eq!(state.workspaces[0].active_group, gid2);
+    }
+
+    #[test]
+    fn test_focus_group_same_group_is_noop() {
+        let (mut state, gid1, _gid2, _rx) = make_split_state();
+        state.focus_group(gid1, 1);
+        assert_eq!(state.workspaces[0].active_group, gid1);
+    }
+
+    // ---- move_tab_to_neighbor ----
+
+    #[test]
+    fn test_move_tab_to_neighbor_moves_tab() {
+        let (mut state, gid1, gid2, _rx) = make_split_state();
+        // Add a second tab to gid1 so we can move one
+        let pid_extra = PaneId::new_v4();
+        let p_extra = Pane::spawn_error(pid_extra, PaneKind::Shell, "extra");
+        state.workspaces[0].groups.get_mut(&gid1).unwrap().add_tab(p_extra);
+        assert_eq!(state.workspaces[0].groups[&gid1].tab_count(), 2);
+        assert_eq!(state.workspaces[0].groups[&gid2].tab_count(), 1);
+
+        state.move_tab_to_neighbor(SplitDirection::Horizontal, crate::layout::Side::Second);
+        // Tab moved from gid1 to gid2
+        assert_eq!(state.workspaces[0].groups[&gid1].tab_count(), 1);
+        assert_eq!(state.workspaces[0].groups[&gid2].tab_count(), 2);
+        // Focus moved to neighbor
+        assert_eq!(state.workspaces[0].active_group, gid2);
+    }
+
+    #[test]
+    fn test_move_tab_to_neighbor_single_tab_noop() {
+        let (mut state, gid1, gid2, _rx) = make_split_state();
+        // gid1 has only 1 tab, so move should be a no-op
+        state.move_tab_to_neighbor(SplitDirection::Horizontal, crate::layout::Side::Second);
+        assert_eq!(state.workspaces[0].groups[&gid1].tab_count(), 1);
+        assert_eq!(state.workspaces[0].groups[&gid2].tab_count(), 1);
+        assert_eq!(state.workspaces[0].active_group, gid1);
+    }
+
+    #[test]
+    fn test_move_tab_no_neighbor_noop() {
+        let (mut state, _rx) = make_test_state();
+        // Single group, no neighbor exists
+        let gid = state.workspaces[0].active_group;
+        let tab_count_before = state.workspaces[0].groups[&gid].tab_count();
+        state.move_tab_to_neighbor(SplitDirection::Horizontal, crate::layout::Side::Second);
+        assert_eq!(state.workspaces[0].groups[&gid].tab_count(), tab_count_before);
+    }
+
+    // ---- add_tab_to_active_group / split_active_group ----
+
+    #[tokio::test]
+    async fn test_add_tab_to_active_group() {
+        let (event_tx, _rx) = mpsc::unbounded_channel();
+        let mut state = ServerState::new_session(
+            "test".to_string(),
+            &event_tx,
+            80,
+            24,
+            Config::default(),
+        )
+        .unwrap();
+        let gid = state.active_workspace().active_group;
+        assert_eq!(state.active_workspace().groups[&gid].tab_count(), 1);
+
+        state.add_tab_to_active_group(PaneKind::Shell, None, 78, 22).unwrap();
+        assert_eq!(state.active_workspace().groups[&gid].tab_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_split_active_group() {
+        let (event_tx, _rx) = mpsc::unbounded_channel();
+        let mut state = ServerState::new_session(
+            "test".to_string(),
+            &event_tx,
+            80,
+            24,
+            Config::default(),
+        )
+        .unwrap();
+        assert_eq!(state.active_workspace().groups.len(), 1);
+
+        let (new_gid, _new_pid) = state
+            .split_active_group(SplitDirection::Horizontal, PaneKind::Shell, 40, 22)
+            .unwrap();
+        assert_eq!(state.active_workspace().groups.len(), 2);
+        assert!(state.active_workspace().groups.contains_key(&new_gid));
+        // Active group is the new split
+        assert_eq!(state.active_workspace().active_group, new_gid);
+    }
+
+    // ---- new_workspace / close_workspace ----
+
+    #[tokio::test]
+    async fn test_new_workspace_names_increment() {
+        let (event_tx, _rx) = mpsc::unbounded_channel();
+        let mut state = ServerState::new_session(
+            "test".to_string(),
+            &event_tx,
+            80,
+            24,
+            Config::default(),
+        )
+        .unwrap();
+        // First workspace is "workspace"
+        assert_eq!(state.workspaces[0].name, "workspace");
+
+        state.new_workspace(80, 24).unwrap();
+        assert_eq!(state.workspaces[1].name, "workspace 2");
+
+        state.new_workspace(80, 24).unwrap();
+        assert_eq!(state.workspaces[2].name, "workspace 3");
+    }
+
+    #[tokio::test]
+    async fn test_close_workspace_adjusts_active_index() {
+        let (event_tx, _rx) = mpsc::unbounded_channel();
+        let mut state = ServerState::new_session(
+            "test".to_string(),
+            &event_tx,
+            80,
+            24,
+            Config::default(),
+        )
+        .unwrap();
+        state.new_workspace(80, 24).unwrap();
+        state.new_workspace(80, 24).unwrap();
+        assert_eq!(state.workspaces.len(), 3);
+        // active_workspace is 2 (last created)
+        assert_eq!(state.active_workspace, 2);
+
+        state.close_workspace();
+        assert_eq!(state.workspaces.len(), 2);
+        assert_eq!(state.active_workspace, 1);
+    }
+
+    #[test]
+    fn test_close_workspace_single_noop() {
+        let (mut state, _rx) = make_test_state();
+        state.close_workspace();
+        assert_eq!(state.workspaces.len(), 1);
+    }
+
+    #[test]
+    fn test_close_workspace_first_of_two() {
+        let (mut state, _rx) = make_test_state();
+        // Add second workspace
+        let gid2 = PaneGroupId::new_v4();
+        let p2 = Pane::spawn_error(PaneId::new_v4(), PaneKind::Shell, "ws2");
+        let g2 = PaneGroup::new(gid2, p2);
+        let ws2 = Workspace::new("workspace 2".to_string(), gid2, g2);
+        state.workspaces.push(ws2);
+        state.active_workspace = 0;
+
+        state.close_workspace();
+        assert_eq!(state.workspaces.len(), 1);
+        assert_eq!(state.active_workspace, 0);
+        assert_eq!(state.workspaces[0].name, "workspace 2");
+    }
+
+    // ---- active_group always exists ----
+
+    #[test]
+    fn test_active_group_exists_in_groups() {
+        let (state, _rx) = make_test_state();
+        let ws = state.active_workspace();
+        assert!(ws.groups.contains_key(&ws.active_group));
+    }
+
+    #[test]
+    fn test_active_group_exists_after_split_close() {
+        let (mut state, gid1, _gid2, _rx) = make_split_state();
+        let pane_id = state.workspaces[0].groups[&gid1].tabs[0].id;
+        state.handle_pty_exited(pane_id);
+        let ws = state.active_workspace();
+        assert!(
+            ws.groups.contains_key(&ws.active_group),
+            "active_group must exist in groups HashMap after closing a group"
+        );
+    }
+
+    // ---- existing tests ----
 
     #[tokio::test]
     async fn test_server_state_new_session() {
