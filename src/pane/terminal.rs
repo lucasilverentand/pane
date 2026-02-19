@@ -61,8 +61,7 @@ fn render_screen_inner(
             }
 
             if style != current_style && !current_text.is_empty() {
-                spans.push(Span::styled(current_text.clone(), current_style));
-                current_text.clear();
+                spans.push(Span::styled(std::mem::take(&mut current_text), current_style));
             }
             current_style = style;
 
