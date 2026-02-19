@@ -246,26 +246,27 @@ fn render_tab_bar_from_snapshot(
     frame: &mut Frame,
     area: Rect,
 ) {
+    const SEP: &str = " \u{B7} ";
+    const SEP_WIDTH: u16 = 3;
+    const PLUS_TEXT: &str = " + ";
+    const PLUS_RESERVE: u16 = 3;
+
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut cursor_x = area.x;
     let max_x = area.x + area.width;
-    let sep = " \u{B7} ";
-    let sep_width = 3u16;
-    let plus_text = " + ";
-    let plus_reserve = 3u16;
 
     for (i, tab) in group.tabs.iter().enumerate() {
         let is_active_tab = i == group.active_tab;
         let label = format!(" {} ", tab.title);
         let label_width = label.len() as u16;
 
-        if cursor_x + label_width + plus_reserve > max_x && !is_active_tab {
+        if cursor_x + label_width + PLUS_RESERVE > max_x && !is_active_tab {
             continue;
         }
 
         if i > 0 {
-            spans.push(Span::styled(sep.to_string(), Style::default().fg(theme.dim)));
-            cursor_x += sep_width;
+            spans.push(Span::styled(SEP, Style::default().fg(theme.dim)));
+            cursor_x += SEP_WIDTH;
         }
 
         let style = if is_active_tab {
@@ -278,9 +279,9 @@ fn render_tab_bar_from_snapshot(
         cursor_x += label_width;
     }
 
-    if cursor_x + sep_width + plus_reserve <= max_x {
-        spans.push(Span::styled(sep.to_string(), Style::default().fg(theme.dim)));
-        spans.push(Span::styled(plus_text.to_string(), Style::default().fg(theme.accent)));
+    if cursor_x + SEP_WIDTH + PLUS_RESERVE <= max_x {
+        spans.push(Span::styled(SEP, Style::default().fg(theme.dim)));
+        spans.push(Span::styled(PLUS_TEXT, Style::default().fg(theme.accent)));
     }
 
     let line = Line::from(spans);
