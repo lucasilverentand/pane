@@ -13,5 +13,5 @@
     "enabled": true,
     "autoAllowBashIfSandboxed": true
   },
-  "spinnerTipsEnabled": true
+  "spinnerTipsEnabled": false
 }

@@ -308,6 +308,7 @@ impl ServerState {
                     let ws = &mut self.workspaces[ws_idx];
                     if let Some(new_focus) = ws.layout.close_pane(group_id) {
                         ws.groups.remove(&group_id);
+                        ws.prune_leaf_min_sizes();
                         ws.active_group = new_focus;
                     } else if self.workspaces.len() > 1 {
                         self.workspaces.remove(ws_idx);
@@ -791,6 +792,24 @@ mod tests {
         assert!(!should_quit);
         // gid1 should be removed
         assert!(!state.workspaces[0].groups.contains_key(&gid1));
+        assert_eq!(state.workspaces[0].groups.len(), 1);
+    }
+
+    #[test]
+    fn test_handle_pty_exited_prunes_leaf_min_sizes() {
+        let (mut state, gid1, gid2, _rx) = make_split_state();
+        {
+            let ws = state.active_workspace_mut();
+            ws.leaf_min_sizes.insert(gid1, (50, 10));
+            ws.leaf_min_sizes.insert(gid2, (60, 12));
+        }
+
+        let pane_id = state.workspaces[0].groups[&gid1].tabs[0].id;
+        let should_quit = state.handle_pty_exited(pane_id);
+
+        assert!(!should_quit);
+        assert!(!state.workspaces[0].leaf_min_sizes.contains_key(&gid1));
+        assert!(state.workspaces[0].leaf_min_sizes.contains_key(&gid2));
         assert_eq!(state.workspaces[0].groups.len(), 1);
     }
 

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::layout::LayoutNode;
 use crate::window::{Window, WindowId};
@@ -62,6 +62,11 @@ impl Workspace {
     #[allow(dead_code)]
     pub fn group_ids(&self) -> Vec<WindowId> {
         self.layout.pane_ids()
+    }
+
+    pub fn prune_leaf_min_sizes(&mut self) {
+        let live_ids: HashSet<_> = self.layout.pane_ids().into_iter().collect();
+        self.leaf_min_sizes.retain(|id, _| live_ids.contains(id));
     }
 }
 
@@ -203,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn test_leaf_min_sizes_stale_entries() {
+    fn test_leaf_min_sizes_stale_entries_are_pruned() {
         let (mut ws, gid1, _) = make_workspace();
 
         // Add a second group and set leaf_min_sizes for both
@@ -222,9 +227,7 @@ mod tests {
         assert!(ws.leaf_min_sizes.contains_key(&gid2));
         assert!(!ws.layout.contains(gid2));
 
-        // Clean up stale entries (the pattern the codebase should follow)
-        let live_ids: std::collections::HashSet<_> = ws.layout.pane_ids().into_iter().collect();
-        ws.leaf_min_sizes.retain(|id, _| live_ids.contains(id));
+        ws.prune_leaf_min_sizes();
 
         // After cleanup, only gid1's entry remains
         assert_eq!(ws.leaf_min_sizes.len(), 1);

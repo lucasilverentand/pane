@@ -223,6 +223,7 @@ pub fn execute(
             }
             if let Some(new_focus) = ws.layout.close_pane(group_id) {
                 ws.groups.remove(&group_id);
+                ws.prune_leaf_min_sizes();
                 ws.active_group = new_focus;
                 id_map.unregister_window(&group_id);
             }
@@ -324,6 +325,7 @@ pub fn execute(
                     let ws = state.active_workspace_mut();
                     if let Some(new_focus) = ws.layout.close_pane(_group_id) {
                         ws.groups.remove(&_group_id);
+                        ws.prune_leaf_min_sizes();
                         ws.active_group = new_focus;
                         id_map.unregister_window(&_group_id);
                         id_map.unregister_pane(&pane_id);
@@ -1204,6 +1206,24 @@ mod tests {
         assert!(matches!(result, CommandResult::LayoutChanged));
         assert_eq!(state.active_workspace().groups.len(), 1);
         assert!(!state.active_workspace().groups.contains_key(&gid1));
+    }
+
+    #[test]
+    fn test_execute_kill_window_cleans_leaf_min_sizes() {
+        let (mut state, mut id_map, broadcast_tx, gid1, gid2) = make_split_state();
+        {
+            let ws = state.active_workspace_mut();
+            ws.leaf_min_sizes.insert(gid1, (50, 10));
+            ws.leaf_min_sizes.insert(gid2, (60, 12));
+        }
+        let win_n = id_map.window_number(&gid1).unwrap();
+        let cmd = Command::KillWindow { target: Some(TargetWindow::Id(win_n)) };
+        let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+
+        assert!(matches!(result, CommandResult::LayoutChanged));
+        let ws = state.active_workspace();
+        assert!(!ws.leaf_min_sizes.contains_key(&gid1));
+        assert!(ws.leaf_min_sizes.contains_key(&gid2));
     }
 
     #[test]
