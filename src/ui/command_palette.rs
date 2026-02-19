@@ -202,6 +202,8 @@ pub fn action_display_name(action: &Action) -> &str {
         Action::EnterNormal => "Enter Normal Mode",
         Action::MaximizeFocused => "Maximize Focused",
         Action::ToggleZoom => "Toggle Zoom",
+        Action::ToggleFloat => "Toggle Float",
+        Action::NewFloat => "New Float",
     }
 }
 
@@ -235,6 +237,8 @@ fn all_actions() -> Vec<(Action, String, String)> {
         (Action::Equalize, "Equalize Panes".into(), "Reset all split ratios to equal".into()),
         (Action::MaximizeFocused, "Maximize Focused".into(), "Toggle maximize the focused window".into()),
         (Action::ToggleZoom, "Toggle Zoom".into(), "Toggle full-screen zoom on the focused window".into()),
+        (Action::ToggleFloat, "Toggle Float".into(), "Toggle floating mode for the focused window".into()),
+        (Action::NewFloat, "New Float".into(), "Create a new floating window".into()),
         (Action::SessionPicker, "Session Picker".into(), "Open the session picker".into()),
         (Action::Help, "Help".into(), "Show keybinding help".into()),
         (Action::ScrollMode, "Scroll Mode".into(), "Enter scroll mode for the focused pane".into()),

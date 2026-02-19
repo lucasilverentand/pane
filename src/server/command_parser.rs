@@ -50,6 +50,8 @@ pub fn parse(input: &str) -> Result<Command> {
         "toggle-sync" => Ok(Command::ToggleSync),
         "paste-buffer" | "pasteb" => parse_paste_buffer(args),
         "detach-client" | "detach" => Ok(Command::DetachClient),
+        "toggle-float" | "float" => Ok(Command::ToggleFloat),
+        "new-float" => Ok(Command::NewFloat),
         "maximize-focused" | "maximize" => Ok(Command::MaximizeFocused),
         "toggle-zoom" | "zoom" => Ok(Command::ToggleZoom),
         _ => bail!("unknown command: {}", cmd_name),
@@ -187,16 +189,18 @@ fn parse_new_session(args: &[String]) -> Result<Command> {
 fn parse_new_window(args: &[String]) -> Result<Command> {
     let mut target_session = None;
     let mut window_name = None;
+    let mut command = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "-t" if i + 1 < args.len() => { target_session = Some(args[i + 1].clone()); i += 2; }
             "-n" if i + 1 < args.len() => { window_name = Some(args[i + 1].clone()); i += 2; }
+            "-c" if i + 1 < args.len() => { command = Some(args[i + 1].clone()); i += 2; }
             "-P" | "-F" => { i += 1; if args.get(i).map(|a| !a.starts_with('-')).unwrap_or(false) { i += 1; } }
             _ => { i += 1; }
         }
     }
-    Ok(Command::NewWindow { target_session, window_name })
+    Ok(Command::NewWindow { target_session, window_name, command })
 }
 
 fn parse_kill_window(args: &[String]) -> Result<Command> {
@@ -473,7 +477,7 @@ mod tests {
     #[test]
     fn test_parse_new_window() {
         let cmd = parse("new-window").unwrap();
-        assert_eq!(cmd, Command::NewWindow { target_session: None, window_name: None });
+        assert_eq!(cmd, Command::NewWindow { target_session: None, window_name: None, command: None });
     }
 
     #[test]
@@ -1053,7 +1057,7 @@ mod tests {
     #[test]
     fn test_parse_all_aliases() {
         assert_eq!(parse("has -t test").unwrap(), Command::HasSession { name: "test".to_string() });
-        assert_eq!(parse("neww").unwrap(), Command::NewWindow { target_session: None, window_name: None });
+        assert_eq!(parse("neww").unwrap(), Command::NewWindow { target_session: None, window_name: None, command: None });
         assert_eq!(parse("killw").unwrap(), Command::KillWindow { target: None });
         assert_eq!(parse("selectw -t @0").unwrap(), Command::SelectWindow { target: TargetWindow::Id(0) });
         assert_eq!(parse("selectw -t 0").unwrap(), Command::SelectWindow { target: TargetWindow::Index(0) });
@@ -1136,6 +1140,7 @@ mod tests {
         assert_eq!(cmd, Command::NewWindow {
             target_session: None,
             window_name: Some("mywin".to_string()),
+            command: None,
         });
     }
 
@@ -1145,6 +1150,7 @@ mod tests {
         assert_eq!(cmd, Command::NewWindow {
             target_session: Some("mysession".to_string()),
             window_name: Some("mywin".to_string()),
+            command: None,
         });
     }
 

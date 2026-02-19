@@ -2,6 +2,7 @@ pub mod command_palette;
 pub mod format;
 pub mod help;
 pub mod layout_render;
+pub mod tab_picker;
 pub mod window_view;
 pub mod status_bar;
 pub mod which_key;
@@ -162,6 +163,28 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                 }
             }
         }
+
+        // Render floating windows on top of tiled layout
+        for fw in &ws.floating_windows {
+            if let Some(group) = ws.groups.iter().find(|g| g.id == fw.id) {
+                let is_active = fw.id == ws.active_group;
+                let pane = group.tabs.get(group.active_tab);
+                let screen = pane.and_then(|p| client.pane_screen(p.id));
+                let fw_rect = ratatui::layout::Rect::new(fw.x, fw.y, fw.width, fw.height);
+                use ratatui::widgets::Clear;
+                frame.render_widget(Clear, fw_rect);
+                window_view::render_group_from_snapshot(
+                    group,
+                    screen,
+                    is_active,
+                    &client.mode,
+                    copy_mode_state,
+                    &client.config,
+                    frame,
+                    fw_rect,
+                );
+            }
+        }
     }
 
     // Overlays
@@ -186,6 +209,11 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
         Mode::Leader => {
             if let Some(ref ls) = client.leader_state {
                 which_key::render(ls, theme, frame, frame.area());
+            }
+        }
+        Mode::TabPicker => {
+            if let Some(ref tp_state) = client.tab_picker_state {
+                tab_picker::render(tp_state, theme, frame, frame.area());
             }
         }
         _ => {}

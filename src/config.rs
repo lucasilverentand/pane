@@ -53,6 +53,8 @@ pub enum Action {
     EnterNormal,
     MaximizeFocused,
     ToggleZoom,
+    ToggleFloat,
+    NewFloat,
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +339,8 @@ fn action_name_map() -> HashMap<&'static str, Action> {
     m.insert("enter_normal", Action::EnterNormal);
     m.insert("maximize_focused", Action::MaximizeFocused);
     m.insert("toggle_zoom", Action::ToggleZoom);
+    m.insert("toggle_float", Action::ToggleFloat);
+    m.insert("new_float", Action::NewFloat);
     for n in 1..=9u8 {
         // Leak is fine — these are static strings created once at startup
         let name: &'static str = Box::leak(format!("focus_group_{}", n).into_boxed_str());
@@ -400,6 +404,8 @@ fn default_leader_tree() -> LeaderNode {
         insert_leaf(&mut children, "r", Action::RestartPane, "Restart");
         insert_leaf(&mut children, "m", Action::MaximizeFocused, "Maximize");
         insert_leaf(&mut children, "z", Action::ToggleZoom, "Zoom");
+        insert_leaf(&mut children, "f", Action::ToggleFloat, "Float");
+        insert_leaf(&mut children, "F", Action::NewFloat, "New Float");
         let key = parse_key("w").unwrap();
         root.insert(key, LeaderNode::Group { label: "Window".into(), children });
     }

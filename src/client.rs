@@ -23,6 +23,7 @@ use crate::tui::Tui;
 use crate::ui;
 use crate::ui::command_palette::CommandPaletteState;
 use crate::ui::help::HelpState;
+use crate::ui::tab_picker::TabPickerState;
 
 /// TUI client that connects to a pane daemon via Unix socket.
 pub struct Client {
@@ -39,6 +40,7 @@ pub struct Client {
     pub help_state: HelpState,
     pub command_palette_state: Option<CommandPaletteState>,
     pub copy_mode_state: Option<CopyModeState>,
+    pub tab_picker_state: Option<TabPickerState>,
     pub should_quit: bool,
 }
 
@@ -60,6 +62,7 @@ impl Client {
             help_state: HelpState::default(),
             command_palette_state: None,
             copy_mode_state: None,
+            tab_picker_state: None,
             should_quit: false,
         }
     }
@@ -360,6 +363,7 @@ impl Client {
             Mode::Scroll => return self.handle_scroll_key(key, writer).await,
             Mode::Copy => return self.handle_copy_mode_key(key),
             Mode::CommandPalette => return self.handle_command_palette_key(key, tui, writer).await,
+            Mode::TabPicker => return self.handle_tab_picker_key(key, writer).await,
             Mode::Confirm => return self.handle_confirm_key(key),
             Mode::Leader => return self.handle_leader_key(key, tui, writer).await,
             Mode::Select => {
@@ -472,6 +476,12 @@ impl Client {
             }
             KeyCode::Char('z') if normalized.modifiers == KeyModifiers::NONE => {
                 return self.execute_action(Action::ToggleZoom, tui, writer).await;
+            }
+            KeyCode::Char('f') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::ToggleFloat, tui, writer).await;
+            }
+            KeyCode::Char('F') if normalized.modifiers == KeyModifiers::NONE => {
+                return self.execute_action(Action::NewFloat, tui, writer).await;
             }
             KeyCode::Char('s') if normalized.modifiers == KeyModifiers::NONE => {
                 return self.execute_action(Action::ScrollMode, tui, writer).await;
@@ -599,6 +609,11 @@ impl Client {
                 self.should_quit = true;
                 return Ok(());
             }
+            Action::NewTab => {
+                self.tab_picker_state = Some(TabPickerState::new());
+                self.mode = Mode::TabPicker;
+                return Ok(());
+            }
             Action::PasteClipboard => {
                 if let Ok(text) = clipboard::paste_from_clipboard() {
                     if !text.is_empty() {
@@ -617,6 +632,47 @@ impl Client {
         if let Some(cmd) = action_to_command(&action) {
             let mut w = writer.lock().await;
             let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+        }
+        Ok(())
+    }
+
+    async fn handle_tab_picker_key(
+        &mut self,
+        key: KeyEvent,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        let state = match self.tab_picker_state.as_mut() {
+            Some(s) => s,
+            None => {
+                self.mode = Mode::Normal;
+                return Ok(());
+            }
+        };
+
+        match key.code {
+            KeyCode::Esc => {
+                self.tab_picker_state = None;
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Enter => {
+                if let Some(cmd) = state.selected_command() {
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                }
+                self.tab_picker_state = None;
+                self.mode = Mode::Interact;
+            }
+            KeyCode::Up => state.move_up(),
+            KeyCode::Down => state.move_down(),
+            KeyCode::Backspace => {
+                state.input.pop();
+                state.update_filter();
+            }
+            KeyCode::Char(c) => {
+                state.input.push(c);
+                state.update_filter();
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -884,7 +940,7 @@ fn action_to_command(action: &Action) -> Option<String> {
         Action::NewWorkspace => Some("new-session -d -s workspace".to_string()),
         Action::CloseWorkspace => Some("close-workspace".to_string()),
         Action::SwitchWorkspace(n) => Some(format!("select-workspace -t {}", (*n as usize) - 1)),
-        Action::NewTab => Some("new-window".to_string()),
+        // Action::NewTab is handled client-side (opens picker)
         Action::NextTab => Some("next-window".to_string()),
         Action::PrevTab => Some("previous-window".to_string()),
         Action::CloseTab => Some("kill-pane".to_string()),
@@ -913,11 +969,14 @@ fn action_to_command(action: &Action) -> Option<String> {
         Action::DevServerInput => Some("new-window".to_string()),
         Action::MaximizeFocused => Some("maximize-focused".to_string()),
         Action::ToggleZoom => Some("toggle-zoom".to_string()),
+        Action::ToggleFloat => Some("toggle-float".to_string()),
+        Action::NewFloat => Some("new-float".to_string()),
         Action::RenameWindow | Action::RenamePane => None,
         // Client-only actions handled before this function is called
         Action::Quit | Action::Help | Action::ScrollMode | Action::CopyMode
         | Action::CommandPalette | Action::PasteClipboard | Action::SelectMode
         | Action::EnterInteract | Action::EnterNormal
-        | Action::Detach | Action::SessionPicker => None,
+        | Action::Detach | Action::SessionPicker
+        | Action::NewTab => None,  // NewTab opens picker client-side
     }
 }

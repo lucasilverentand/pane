@@ -14,6 +14,7 @@ pub enum Mode {
     CommandPalette,
     Confirm,
     Leader,
+    TabPicker,
 }
 
 pub struct LeaderState {

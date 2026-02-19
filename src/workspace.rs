@@ -3,6 +3,16 @@ use std::collections::HashMap;
 use crate::layout::LayoutNode;
 use crate::window::{Window, WindowId};
 
+/// A floating window positioned above the tiled layout.
+#[derive(Clone, Debug)]
+pub struct FloatingWindow {
+    pub id: WindowId,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
 pub struct Workspace {
     pub name: String,
     pub layout: LayoutNode,
@@ -17,6 +27,8 @@ pub struct Workspace {
     pub zoomed_window: Option<WindowId>,
     /// Saved layout ratios before maximize, for toggle-restore.
     pub saved_ratios: Option<LayoutNode>,
+    /// Floating windows rendered above the tiled layout.
+    pub floating_windows: Vec<FloatingWindow>,
 }
 
 impl Workspace {
@@ -34,6 +46,7 @@ impl Workspace {
             sync_panes: false,
             zoomed_window: None,
             saved_ratios: None,
+            floating_windows: Vec::new(),
         }
     }
 

@@ -87,6 +87,10 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
                 "esc cancel ".to_string(),
             )
         }
+        Mode::TabPicker => (
+            "[NEW TAB] ".to_string(),
+            "type to filter  enter spawn  esc cancel ".to_string(),
+        ),
     };
 
     let left_len = left.len();

@@ -167,6 +167,16 @@ pub struct RenderState {
     pub session_name: String,
 }
 
+/// Serializable floating window info.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FloatingWindowSnapshot {
+    pub id: WindowId,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkspaceSnapshot {
     pub name: String,
@@ -176,6 +186,7 @@ pub struct WorkspaceSnapshot {
     pub sync_panes: bool,
     pub leaf_min_sizes: HashMap<WindowId, (u16, u16)>,
     pub zoomed_window: Option<WindowId>,
+    pub floating_windows: Vec<FloatingWindowSnapshot>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -275,6 +286,13 @@ impl RenderState {
                     sync_panes: ws.sync_panes,
                     leaf_min_sizes: ws.leaf_min_sizes.clone(),
                     zoomed_window: ws.zoomed_window,
+                    floating_windows: ws.floating_windows.iter().map(|fw| FloatingWindowSnapshot {
+                        id: fw.id,
+                        x: fw.x,
+                        y: fw.y,
+                        width: fw.width,
+                        height: fw.height,
+                    }).collect(),
                 }
             })
             .collect();
@@ -426,6 +444,7 @@ mod tests {
                 sync_panes: false,
                 leaf_min_sizes: HashMap::new(),
                 zoomed_window: None,
+                floating_windows: vec![],
             }],
             active_workspace: 0,
             session_name: "default".to_string(),

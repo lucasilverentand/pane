@@ -26,7 +26,7 @@ pub enum Command {
     NewSession { name: String, window_name: Option<String>, detached: bool },
 
     // Window (Window) commands
-    NewWindow { target_session: Option<String>, window_name: Option<String> },
+    NewWindow { target_session: Option<String>, window_name: Option<String>, command: Option<String> },
     KillWindow { target: Option<TargetWindow> },
     SelectWindow { target: TargetWindow },
     RenameWindow { target: Option<TargetWindow>, new_name: String },
@@ -61,6 +61,10 @@ pub enum Command {
     // Layout presets
     MaximizeFocused,
     ToggleZoom,
+
+    // Floating windows
+    ToggleFloat,
+    NewFloat,
 
     // Client commands
     DetachClient,
@@ -187,12 +191,12 @@ pub fn execute(
             })
         }
 
-        Command::NewWindow { window_name, .. } => {
+        Command::NewWindow { window_name, command, .. } => {
             let (w, h) = state.last_size;
             let bar_h = state.workspace_bar_height();
             let cols = w.saturating_sub(4);
             let rows = h.saturating_sub(2 + bar_h + 1);
-            let pane_id = state.add_tab_to_active_group(TabKind::Shell, None, cols, rows)?;
+            let pane_id = state.add_tab_to_active_group(TabKind::Shell, command.clone(), cols, rows)?;
             if let Some(wname) = window_name {
                 let ws = state.active_workspace_mut();
                 if let Some(group) = ws.groups.get_mut(&ws.active_group) {
@@ -526,6 +530,79 @@ pub fn execute(
             Ok(CommandResult::LayoutChanged)
         }
 
+        Command::ToggleFloat => {
+            let (w, h) = state.last_size;
+            let bar_h = state.workspace_bar_height();
+            let ws = state.active_workspace_mut();
+            let active = ws.active_group;
+            // Check if active window is already floating
+            if let Some(idx) = ws.floating_windows.iter().position(|fw| fw.id == active) {
+                // Unfloat: remove from floating list
+                ws.floating_windows.remove(idx);
+            } else {
+                // Float: add to floating list
+                let body_h = h.saturating_sub(1 + bar_h);
+                let fw_w = (w * 3 / 4).max(20);
+                let fw_h = (body_h * 3 / 4).max(10);
+                let fx = (w.saturating_sub(fw_w)) / 2;
+                let fy = bar_h + (body_h.saturating_sub(fw_h)) / 2;
+                ws.floating_windows.push(crate::workspace::FloatingWindow {
+                    id: active,
+                    x: fx,
+                    y: fy,
+                    width: fw_w,
+                    height: fw_h,
+                });
+            }
+            let (w, h) = state.last_size;
+            state.resize_all_tabs(w, h);
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::NewFloat => {
+            let (w, h) = state.last_size;
+            let bar_h = state.workspace_bar_height();
+            let body_h = h.saturating_sub(1 + bar_h);
+            let fw_w = (w * 3 / 4).max(20);
+            let fw_h = (body_h * 3 / 4).max(10);
+            let fx = (w.saturating_sub(fw_w)) / 2;
+            let fy = bar_h + (body_h.saturating_sub(fw_h)) / 2;
+
+            let group_id = WindowId::new_v4();
+            let pane_id = crate::layout::TabId::new_v4();
+            let tmux_env = state.next_tmux_env();
+            let cols = fw_w.saturating_sub(2);
+            let rows = fw_h.saturating_sub(2);
+            let pane = match crate::window::Tab::spawn_with_env(
+                pane_id, crate::window::TabKind::Shell, cols, rows,
+                state.event_tx.clone(), None, Some(tmux_env),
+            ) {
+                Ok(p) => p,
+                Err(e) => crate::window::Tab::spawn_error(pane_id, crate::window::TabKind::Shell, &e.to_string()),
+            };
+            let group = crate::window::Window::new(group_id, pane);
+            let ws = state.active_workspace_mut();
+            ws.groups.insert(group_id, group);
+            ws.floating_windows.push(crate::workspace::FloatingWindow {
+                id: group_id,
+                x: fx,
+                y: fy,
+                width: fw_w,
+                height: fw_h,
+            });
+            ws.active_group = group_id;
+
+            let win_n = id_map.register_window(group_id);
+            let pane_n = id_map.register_pane(pane_id);
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::OkWithId {
+                output: String::new(),
+                pane_id: Some(pane_n),
+                window_id: Some(win_n),
+            })
+        }
+
         Command::DetachClient => {
             Ok(CommandResult::DetachRequested)
         }
@@ -758,6 +835,7 @@ mod tests {
             sync_panes: false,
             zoomed_window: None,
             saved_ratios: None,
+            floating_windows: Vec::new(),
         };
         let state = ServerState {
             workspaces: vec![workspace],
@@ -1381,7 +1459,7 @@ mod tests {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let gid = state.active_workspace().active_group;
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 1);
-        let cmd = Command::NewWindow { target_session: None, window_name: None };
+        let cmd = Command::NewWindow { target_session: None, window_name: None, command: None };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
             CommandResult::OkWithId { pane_id, window_id, .. } => {
@@ -1399,6 +1477,7 @@ mod tests {
         let cmd = Command::NewWindow {
             target_session: None,
             window_name: Some("my-named-window".to_string()),
+            command: None,
         };
         execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         let ws = state.active_workspace();

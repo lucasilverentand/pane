@@ -255,6 +255,7 @@ impl ServerState {
                 sync_panes: false,
                 zoomed_window: None,
                 saved_ratios: None,
+                floating_windows: Vec::new(),
             });
         }
 
@@ -638,6 +639,7 @@ mod tests {
             sync_panes: false,
             zoomed_window: None,
             saved_ratios: None,
+            floating_windows: Vec::new(),
         };
         let state = ServerState {
             workspaces: vec![workspace],
