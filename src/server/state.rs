@@ -379,16 +379,18 @@ impl ServerState {
         let params = LayoutParams::from(&self.config.behavior);
 
         let ws = &self.workspaces[self.active_workspace];
+        let previous_active = ws.active_group;
         let resolved = ws
             .layout
             .resolve_with_fold(body, params, &ws.leaf_min_sizes);
         let is_folded = resolved
             .iter()
             .any(|rp| matches!(rp, ResolvedPane::Folded { id: fid, .. } if *fid == id));
+        let should_reflow = previous_active != id || is_folded;
 
         let ws = &mut self.workspaces[self.active_workspace];
         ws.active_group = id;
-        if is_folded {
+        if should_reflow {
             ws.leaf_min_sizes.clear();
             ws.layout.unfold_towards(id);
             self.resize_all_tabs(w, h);
@@ -1007,6 +1009,43 @@ mod tests {
         let (mut state, gid1, _gid2, _rx) = make_split_state();
         state.focus_group(gid1, 1);
         assert_eq!(state.workspaces[0].active_group, gid1);
+    }
+
+    #[test]
+    fn test_focus_group_reflows_when_target_is_visible() {
+        let (mut state, gid1, gid2, _rx) = make_split_state();
+        state.config.behavior.min_pane_width = 1;
+        state.config.behavior.min_pane_height = 1;
+
+        let params = crate::layout::LayoutParams::from(&state.config.behavior);
+        let body = ratatui::layout::Rect::new(0, 1, state.last_size.0, state.last_size.1 - 2);
+        let before = state.workspaces[0].layout.resolve_with_fold(
+            body,
+            params,
+            &state.workspaces[0].leaf_min_sizes,
+        );
+        assert!(
+            before
+                .iter()
+                .any(|rp| matches!(rp, crate::layout::ResolvedPane::Visible { id, .. } if *id == gid1))
+        );
+        assert!(
+            before
+                .iter()
+                .any(|rp| matches!(rp, crate::layout::ResolvedPane::Visible { id, .. } if *id == gid2))
+        );
+
+        state.focus_group(gid2, 1);
+        assert_eq!(state.workspaces[0].active_group, gid2);
+        match &state.workspaces[0].layout {
+            crate::layout::LayoutNode::Split { ratio, .. } => {
+                assert!(
+                    *ratio <= 0.1,
+                    "focusing a visible target should still skew layout toward it"
+                );
+            }
+            _ => panic!("expected split layout"),
+        }
     }
 
     #[test]

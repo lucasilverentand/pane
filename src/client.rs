@@ -42,7 +42,7 @@ pub struct Client {
     pub command_palette_state: Option<CommandPaletteState>,
     pub copy_mode_state: Option<CopyModeState>,
     pub tab_picker_state: Option<TabPickerState>,
-    pub ui_focus: UiFocus,
+    ui_focus: UiFocus,
     pub should_quit: bool,
 }
 
