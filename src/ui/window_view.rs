@@ -5,8 +5,9 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
 
-use crate::app::Mode;
+use crate::app::{BaseMode, Mode, Overlay};
 use crate::config::{Config, Theme};
 use crate::copy_mode::CopyModeState;
 use crate::layout::SplitDirection;
@@ -62,32 +63,67 @@ pub enum TabBarClick {
     NewTab,
 }
 
+fn display_width_u16(text: &str) -> u16 {
+    UnicodeWidthStr::width(text).min(u16::MAX as usize) as u16
+}
+
+fn split_content_and_tab_areas(padded: Rect, show_tab_bar: bool) -> (Option<Rect>, Rect) {
+    let constraints = if show_tab_bar {
+        vec![Constraint::Length(1), Constraint::Fill(1)]
+    } else {
+        vec![Constraint::Fill(1)]
+    };
+    let areas = Layout::vertical(constraints).split(padded);
+    if show_tab_bar {
+        (Some(areas[0]), areas[1])
+    } else {
+        (None, areas[0])
+    }
+}
+
+fn search_overlay_area(content_area: Rect, show_search: bool) -> Option<Rect> {
+    if !show_search || content_area.height == 0 {
+        return None;
+    }
+    Some(Rect::new(
+        content_area.x,
+        content_area.y + content_area.height - 1,
+        content_area.width,
+        1,
+    ))
+}
+
 fn build_tab_bar<'a>(group: &Window, theme: &Theme, area: Rect) -> (Vec<Span<'a>>, TabBarLayout) {
     let mut spans: Vec<Span<'a>> = Vec::new();
     let mut tab_ranges: Vec<(u16, u16)> = Vec::new();
     let mut cursor_x = area.x;
-    let max_x = area.x + area.width;
+    let max_x = area.x.saturating_add(area.width);
     let sep = " \u{B7} "; // " · "
-    let sep_width = 3u16; // 3 display columns
+    let sep_width = display_width_u16(sep);
     let plus_text = " + ";
-    let plus_reserve = 3u16;
+    let plus_reserve = display_width_u16(plus_text);
+    let mut has_visible_tabs = false;
 
     for (i, tab) in group.tabs.iter().enumerate() {
         let is_active_tab = i == group.active_tab;
         let label = format!(" {} ", tab.title);
-        let label_width = label.len() as u16;
+        let label_width = display_width_u16(&label);
+        let sep_before = if has_visible_tabs { sep_width } else { 0 };
+        let needed = sep_before
+            .saturating_add(label_width)
+            .saturating_add(plus_reserve);
 
         // Check if this tab fits (reserve space for + button)
-        if cursor_x + label_width + plus_reserve > max_x && !is_active_tab {
+        if cursor_x.saturating_add(needed) > max_x && !is_active_tab {
             tab_ranges.push((0, 0));
             continue;
         }
 
         // Separator before non-first tabs
-        if i > 0 {
+        if has_visible_tabs {
             let sep_style = Style::default().fg(theme.dim);
             spans.push(Span::styled(sep, sep_style));
-            cursor_x += sep_width;
+            cursor_x = cursor_x.saturating_add(sep_width);
         }
 
         let tab_start = cursor_x;
@@ -101,18 +137,26 @@ fn build_tab_bar<'a>(group: &Window, theme: &Theme, area: Rect) -> (Vec<Span<'a>
         };
 
         spans.push(Span::styled(label, style));
-        cursor_x += label_width;
+        cursor_x = cursor_x.saturating_add(label_width);
 
         tab_ranges.push((tab_start, cursor_x));
+        has_visible_tabs = true;
     }
 
     // + button
-    let plus_range = if cursor_x + sep_width + plus_reserve <= max_x {
-        spans.push(Span::styled(sep, Style::default().fg(theme.dim)));
-        cursor_x += sep_width;
+    let plus_sep = if has_visible_tabs { sep_width } else { 0 };
+    let plus_range = if cursor_x
+        .saturating_add(plus_sep)
+        .saturating_add(plus_reserve)
+        <= max_x
+    {
+        if has_visible_tabs {
+            spans.push(Span::styled(sep, Style::default().fg(theme.dim)));
+            cursor_x = cursor_x.saturating_add(sep_width);
+        }
         let start = cursor_x;
         spans.push(Span::styled(plus_text, Style::default().fg(theme.accent)));
-        cursor_x += plus_reserve;
+        cursor_x = cursor_x.saturating_add(plus_reserve);
         Some((start, cursor_x))
     } else {
         None
@@ -185,12 +229,16 @@ pub fn render_group_from_snapshot(
         .map(|d| d.border_color);
 
     let border_style = if is_active {
-        let mode_color = match mode {
-            Mode::Normal => theme.border_normal,
-            Mode::Interact => theme.border_interact,
-            Mode::Scroll => theme.border_scroll,
-            Mode::Copy => theme.border_scroll,
-            _ => theme.border_active,
+        let mode_color = if let Some(ref overlay) = mode.overlay {
+            match overlay {
+                Overlay::Scroll | Overlay::Copy => theme.border_scroll,
+                _ => theme.border_active,
+            }
+        } else {
+            match mode.base {
+                BaseMode::Normal => theme.border_normal,
+                BaseMode::Interact => theme.border_interact,
+            }
         };
         let color = decoration_color.unwrap_or(mode_color);
         Style::default().fg(color)
@@ -215,12 +263,17 @@ pub fn render_group_from_snapshot(
     }
 
     if is_active {
-        let indicator = match mode {
-            Mode::Copy => " COPY ",
-            Mode::Scroll => " SCROLL ",
-            Mode::Select => " SELECT ",
-            Mode::Interact => " INTERACT ",
-            _ => "",
+        let indicator = if let Some(ref overlay) = mode.overlay {
+            match overlay {
+                Overlay::Copy => " COPY ",
+                Overlay::Scroll => " SCROLL ",
+                _ => "",
+            }
+        } else {
+            match mode.base {
+                BaseMode::Interact => " INTERACT ",
+                BaseMode::Normal => "",
+            }
         };
         if !indicator.is_empty() {
             block = block.title_bottom(Line::styled(
@@ -244,34 +297,18 @@ pub fn render_group_from_snapshot(
     let cms = if is_active { copy_mode_state } else { None };
     let show_search = cms.map_or(false, |c| c.search_active);
     let show_tab_bar = group.tabs.len() > 1;
+    let (tab_bar_area, content_area) = split_content_and_tab_areas(padded, show_tab_bar);
 
-    let mut constraints = Vec::new();
-    if show_tab_bar {
-        constraints.push(Constraint::Length(1));
+    if let Some(tab_bar_area) = tab_bar_area {
+        render_tab_bar_from_snapshot(group, theme, frame, tab_bar_area);
     }
-    constraints.push(Constraint::Fill(1));
-    if show_search {
-        constraints.push(Constraint::Length(1));
-    }
-    let areas = Layout::vertical(constraints).split(padded);
 
-    let (content_area, search_area) = if show_tab_bar {
-        // Tab bar from snapshot
-        render_tab_bar_from_snapshot(group, theme, frame, areas[0]);
-        (areas[1], areas.get(2).copied())
-    } else {
-        (areas[0], areas.get(1).copied())
-    };
-
-    // Content
     if let Some(screen) = screen {
         render_content(screen, cms, frame, content_area);
     }
 
-    if show_search {
-        if let Some(search_area) = search_area {
-            render_search_bar(cms.unwrap(), theme, frame, search_area);
-        }
+    if let Some(search_area) = search_overlay_area(content_area, show_search) {
+        render_search_bar(cms.unwrap(), theme, frame, search_area);
     }
 }
 
@@ -282,26 +319,31 @@ fn render_tab_bar_from_snapshot(
     area: Rect,
 ) {
     const SEP: &str = " \u{B7} ";
-    const SEP_WIDTH: u16 = 3;
     const PLUS_TEXT: &str = " + ";
-    const PLUS_RESERVE: u16 = 3;
 
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut cursor_x = area.x;
-    let max_x = area.x + area.width;
+    let max_x = area.x.saturating_add(area.width);
+    let sep_width = display_width_u16(SEP);
+    let plus_reserve = display_width_u16(PLUS_TEXT);
+    let mut has_visible_tabs = false;
 
     for (i, tab) in group.tabs.iter().enumerate() {
         let is_active_tab = i == group.active_tab;
         let label = format!(" {} ", tab.title);
-        let label_width = label.len() as u16;
+        let label_width = display_width_u16(&label);
+        let sep_before = if has_visible_tabs { sep_width } else { 0 };
+        let needed = sep_before
+            .saturating_add(label_width)
+            .saturating_add(plus_reserve);
 
-        if cursor_x + label_width + PLUS_RESERVE > max_x && !is_active_tab {
+        if cursor_x.saturating_add(needed) > max_x && !is_active_tab {
             continue;
         }
 
-        if i > 0 {
+        if has_visible_tabs {
             spans.push(Span::styled(SEP, Style::default().fg(theme.dim)));
-            cursor_x += SEP_WIDTH;
+            cursor_x = cursor_x.saturating_add(sep_width);
         }
 
         let style = if is_active_tab {
@@ -313,11 +355,19 @@ fn render_tab_bar_from_snapshot(
         };
 
         spans.push(Span::styled(label, style));
-        cursor_x += label_width;
+        cursor_x = cursor_x.saturating_add(label_width);
+        has_visible_tabs = true;
     }
 
-    if cursor_x + SEP_WIDTH + PLUS_RESERVE <= max_x {
-        spans.push(Span::styled(SEP, Style::default().fg(theme.dim)));
+    let plus_sep = if has_visible_tabs { sep_width } else { 0 };
+    if cursor_x
+        .saturating_add(plus_sep)
+        .saturating_add(plus_reserve)
+        <= max_x
+    {
+        if has_visible_tabs {
+            spans.push(Span::styled(SEP, Style::default().fg(theme.dim)));
+        }
         spans.push(Span::styled(PLUS_TEXT, Style::default().fg(theme.accent)));
     }
 
@@ -386,4 +436,62 @@ pub fn tab_bar_area(_group: &Window, area: Rect) -> Option<Rect> {
     }
     let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, 1);
     Some(padded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::TabId;
+    use crate::window::{Tab, TabKind, WindowId};
+
+    fn make_window(titles: &[&str], active_tab: usize) -> Window {
+        assert!(!titles.is_empty());
+        let mut first = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "test");
+        first.title = titles[0].to_string();
+        let mut group = Window::new(WindowId::new_v4(), first);
+        for title in titles.iter().skip(1) {
+            let mut tab = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "test");
+            tab.title = (*title).to_string();
+            group.add_tab(tab);
+        }
+        group.active_tab = active_tab;
+        group
+    }
+
+    #[test]
+    fn test_tab_bar_hit_test_uses_display_width_for_wide_title() {
+        let group = make_window(&["中", "abc"], 0);
+        let layout = tab_bar_layout(&group, &Theme::default(), Rect::new(0, 0, 20, 1));
+
+        assert_eq!(layout.tab_ranges[0], (0, 4)); // " 中 " => 4 display cols
+        assert_eq!(layout.tab_ranges[1], (7, 12)); // after " · "
+        assert_eq!(layout.plus_range, Some((15, 18)));
+        assert_eq!(tab_bar_hit_test(&layout, 3, 0), Some(TabBarClick::Tab(0)));
+        assert_eq!(tab_bar_hit_test(&layout, 4, 0), None); // separator
+        assert_eq!(tab_bar_hit_test(&layout, 8, 0), Some(TabBarClick::Tab(1)));
+    }
+
+    #[test]
+    fn test_tab_bar_layout_fit_respects_display_width() {
+        let group = make_window(&["中", "a"], 0);
+        let layout = tab_bar_layout(&group, &Theme::default(), Rect::new(0, 0, 13, 1));
+
+        assert_eq!(layout.tab_ranges[0], (0, 4));
+        assert_eq!(layout.tab_ranges[1], (7, 10));
+        assert_eq!(layout.plus_range, None);
+        assert_eq!(tab_bar_hit_test(&layout, 8, 0), Some(TabBarClick::Tab(1)));
+    }
+
+    #[test]
+    fn test_search_overlay_area_uses_bottom_row_without_resizing_content() {
+        let padded = Rect::new(2, 3, 12, 6);
+        let (_tab_bar, content_area) = split_content_and_tab_areas(padded, true);
+
+        let overlay = search_overlay_area(content_area, true).unwrap();
+        assert_eq!(content_area, Rect::new(2, 4, 12, 5));
+        assert_eq!(overlay, Rect::new(2, 8, 12, 1));
+
+        let (_tab_bar_again, content_area_again) = split_content_and_tab_areas(padded, true);
+        assert_eq!(content_area_again, content_area);
+    }
 }

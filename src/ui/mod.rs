@@ -10,7 +10,7 @@ pub mod workspace_bar;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::Frame;
 
-use crate::app::Mode;
+use crate::app::Overlay;
 use crate::client::Client;
 use crate::layout::LayoutParams;
 
@@ -58,7 +58,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
     // Render workspace body + cursor
     if let Some(ws) = client.active_workspace() {
         let params = LayoutParams::from(&client.config.behavior);
-        let copy_mode_state = if client.mode == Mode::Copy {
+        let copy_mode_state = if client.mode.overlay == Some(Overlay::Copy) {
             client.copy_mode_state.as_ref()
         } else {
             None
@@ -83,7 +83,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                 );
 
                 // Cursor for zoomed window
-                if client.mode == Mode::Interact || client.mode == Mode::Normal {
+                if client.mode.overlay.is_none() {
                     if panes_focused {
                         if let Some(pane) = group.tabs.get(group.active_tab) {
                             if let Some(screen) = client.pane_screen(pane.id) {
@@ -150,7 +150,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
             }
 
             // Cursor position
-            if client.mode == Mode::Interact || client.mode == Mode::Normal {
+            if client.mode.overlay.is_none() {
                 if panes_focused {
                     if let Some(group) = ws.groups.iter().find(|g| g.id == ws.active_group) {
                         if let Some(pane) = group.tabs.get(group.active_tab) {
@@ -212,26 +212,28 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
     }
 
     // Overlays
-    match &client.mode {
-        Mode::CommandPalette => {
-            if let Some(ref cp_state) = client.command_palette_state {
-                command_palette::render(cp_state, theme, frame, frame.area());
+    if let Some(ref overlay) = client.mode.overlay {
+        match overlay {
+            Overlay::CommandPalette => {
+                if let Some(ref cp_state) = client.command_palette_state {
+                    command_palette::render(cp_state, theme, frame, frame.area());
+                }
             }
-        }
-        Mode::Confirm => {
-            render_confirm_dialog(client, theme, frame, frame.area());
-        }
-        Mode::Leader => {
-            if let Some(ref ls) = client.leader_state {
-                which_key::render(ls, theme, frame, frame.area());
+            Overlay::Confirm => {
+                render_confirm_dialog(client, theme, frame, frame.area());
             }
-        }
-        Mode::TabPicker => {
-            if let Some(ref tp_state) = client.tab_picker_state {
-                tab_picker::render(tp_state, theme, frame, frame.area());
+            Overlay::Leader => {
+                if let Some(ref ls) = client.leader_state {
+                    which_key::render(ls, theme, frame, frame.area());
+                }
             }
+            Overlay::TabPicker => {
+                if let Some(ref tp_state) = client.tab_picker_state {
+                    tab_picker::render(tp_state, theme, frame, frame.area());
+                }
+            }
+            _ => {}
         }
-        _ => {}
     }
 }
 

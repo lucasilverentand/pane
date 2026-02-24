@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::Mode;
+use crate::app::{BaseMode, Overlay};
 use crate::client::Client;
 use crate::config::Theme;
 use crate::ui::format::format_string;
@@ -29,64 +29,63 @@ fn format_leader_key(key: &crossterm::event::KeyEvent) -> String {
 
 /// Render the status bar for a daemon-connected client.
 pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Rect) {
-    let (left, right) = match &client.mode {
-        Mode::Normal => {
-            let vars = build_client_vars(client);
-            let left = format!(
-                "NORMAL {}",
-                format_string(&client.config.status_bar.left, &vars)
-            );
-            let right = format_string(&client.config.status_bar.right, &vars);
-            (left, right)
-        }
-        Mode::Interact => {
-            let vars = build_client_vars(client);
-            let left = format_string(&client.config.status_bar.left, &vars);
-            let right = format_string(&client.config.status_bar.right, &vars);
-            (left, right)
-        }
-        Mode::Scroll => {
-            let title = client_pane_title(client);
-            let mode_left = format!("SCROLL {}", title);
-            let right = "j/k up/down  u/d page  g/G top/end  esc quit ".to_string();
-            (mode_left, right)
-        }
-        Mode::Select => {
-            let title = client_pane_title(client);
-            (
-                format!("SELECT {}", title),
-                "hjkl nav  n tab  d split  w close  1-9 pane  esc back ".to_string(),
-            )
-        }
-        Mode::Copy => {
-            let title = client_pane_title(client);
-            (
-                format!("COPY {}", title),
-                "hjkl move  v select  y yank  / search  esc quit ".to_string(),
-            )
-        }
-        Mode::CommandPalette => (
-            "CMD ".to_string(),
-            "type to filter  enter run  esc cancel ".to_string(),
-        ),
-        Mode::Confirm => (String::new(), "enter/y confirm  esc/n cancel ".to_string()),
-        Mode::Leader => {
-            let path_str = if let Some(ref ls) = client.leader_state {
-                let keys: Vec<String> = ls.path.iter().map(|k| format_leader_key(k)).collect();
-                if keys.is_empty() {
-                    "SPC".to_string()
+    let (left, right) = if let Some(ref overlay) = client.mode.overlay {
+        match overlay {
+            Overlay::Scroll => {
+                let title = client_pane_title(client);
+                let mode_left = format!("SCROLL {}", title);
+                let right = "j/k up/down  u/d page  g/G top/end  esc quit ".to_string();
+                (mode_left, right)
+            }
+            Overlay::Copy => {
+                let title = client_pane_title(client);
+                (
+                    format!("COPY {}", title),
+                    "hjkl move  v select  y yank  / search  esc quit ".to_string(),
+                )
+            }
+            Overlay::CommandPalette => (
+                "CMD ".to_string(),
+                "type to filter  enter run  esc cancel ".to_string(),
+            ),
+            Overlay::Confirm => (String::new(), "enter/y confirm  esc/n cancel ".to_string()),
+            Overlay::Leader => {
+                let path_str = if let Some(ref ls) = client.leader_state {
+                    let keys: Vec<String> =
+                        ls.path.iter().map(|k| format_leader_key(k)).collect();
+                    if keys.is_empty() {
+                        "SPC".to_string()
+                    } else {
+                        format!("SPC {}", keys.join(" "))
+                    }
                 } else {
-                    format!("SPC {}", keys.join(" "))
-                }
-            } else {
-                "SPC".to_string()
-            };
-            (format!("LEADER {}", path_str), "esc cancel ".to_string())
+                    "SPC".to_string()
+                };
+                (format!("LEADER {}", path_str), "esc cancel ".to_string())
+            }
+            Overlay::TabPicker => (
+                "NEW TAB ".to_string(),
+                "type to filter  enter spawn  esc cancel ".to_string(),
+            ),
         }
-        Mode::TabPicker => (
-            "NEW TAB ".to_string(),
-            "type to filter  enter spawn  esc cancel ".to_string(),
-        ),
+    } else {
+        match client.mode.base {
+            BaseMode::Normal => {
+                let vars = build_client_vars(client);
+                let left = format!(
+                    "NORMAL {}",
+                    format_string(&client.config.status_bar.left, &vars)
+                );
+                let right = format_string(&client.config.status_bar.right, &vars);
+                (left, right)
+            }
+            BaseMode::Interact => {
+                let vars = build_client_vars(client);
+                let left = format_string(&client.config.status_bar.left, &vars);
+                let right = format_string(&client.config.status_bar.right, &vars);
+                (left, right)
+            }
+        }
     };
 
     // Build plugin segment string

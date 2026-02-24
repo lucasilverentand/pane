@@ -197,7 +197,6 @@ pub fn action_display_name(action: &Action) -> &str {
         Action::RenameWindow => "Rename Window",
         Action::RenamePane => "Rename Pane",
         Action::Detach => "Detach",
-        Action::SelectMode => "Select Mode",
         Action::EnterInteract => "Enter Interact Mode",
         Action::EnterNormal => "Enter Normal Mode",
         Action::MaximizeFocused => "Maximize Focused",
@@ -205,6 +204,8 @@ pub fn action_display_name(action: &Action) -> &str {
         Action::ToggleFold => "Toggle Fold",
         Action::ToggleFloat => "Toggle Float",
         Action::NewFloat => "New Float",
+        Action::PrevWorkspace => "Previous Workspace",
+        Action::NextWorkspace => "Next Workspace",
     }
 }
 
@@ -235,12 +236,6 @@ fn all_actions() -> Vec<(Action, String, String, &'static str)> {
             Action::FocusRight,
             "Focus Right".into(),
             "Move focus to the right window".into(),
-            "Navigation",
-        ),
-        (
-            Action::SelectMode,
-            "Select Mode".into(),
-            "Toggle select mode for window navigation".into(),
             "Navigation",
         ),
         (
@@ -394,6 +389,18 @@ fn all_actions() -> Vec<(Action, String, String, &'static str)> {
             Action::CloseWorkspace,
             "Close Workspace".into(),
             "Close the current workspace".into(),
+            "Workspaces",
+        ),
+        (
+            Action::PrevWorkspace,
+            "Previous Workspace".into(),
+            "Switch to the previous workspace".into(),
+            "Workspaces",
+        ),
+        (
+            Action::NextWorkspace,
+            "Next Workspace".into(),
+            "Switch to the next workspace".into(),
             "Workspaces",
         ),
         // Tools

@@ -2,17 +2,52 @@
 
 use crossterm::event::KeyEvent;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Mode {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BaseMode {
     Normal,
     Interact,
-    Select,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Overlay {
     Scroll,
     Copy,
     CommandPalette,
     Confirm,
     Leader,
     TabPicker,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mode {
+    pub base: BaseMode,
+    pub overlay: Option<Overlay>,
+}
+
+impl Mode {
+    pub fn normal() -> Self {
+        Self {
+            base: BaseMode::Normal,
+            overlay: None,
+        }
+    }
+
+    pub fn interact() -> Self {
+        Self {
+            base: BaseMode::Interact,
+            overlay: None,
+        }
+    }
+
+    /// Push an overlay, preserving the current base mode.
+    pub fn push_overlay(&mut self, overlay: Overlay) {
+        self.overlay = Some(overlay);
+    }
+
+    /// Dismiss the current overlay, returning to the base mode.
+    pub fn dismiss_overlay(&mut self) {
+        self.overlay = None;
+    }
 }
 
 pub struct LeaderState {

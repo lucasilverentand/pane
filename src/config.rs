@@ -48,7 +48,7 @@ pub enum Action {
     RenameWindow,
     RenamePane,
     Detach,
-    SelectMode,
+
     EnterInteract,
     EnterNormal,
     MaximizeFocused,
@@ -56,6 +56,8 @@ pub enum Action {
     ToggleFold,
     ToggleFloat,
     NewFloat,
+    PrevWorkspace,
+    NextWorkspace,
 }
 
 // ---------------------------------------------------------------------------
@@ -191,73 +193,27 @@ pub struct KeyMap {
 
 impl KeyMap {
     pub fn from_defaults() -> Self {
-        let mut map = HashMap::new();
-
-        let defaults: Vec<(&str, Action)> = vec![
-            ("ctrl+q", Action::Quit),
-            ("shift+pageup", Action::ScrollMode),
-        ];
-
-        for (key_str, action) in defaults {
-            if let Some(key) = parse_key(key_str) {
-                map.insert(key, action);
-            }
-        }
-
-        Self { map }
+        Self::from_pairs(&crate::default_keys::global_defaults())
     }
 
-    pub fn select_defaults() -> Self {
-        let mut map = HashMap::new();
-
-        let defaults: Vec<(&str, Action)> = vec![
-            ("h", Action::FocusLeft),
-            ("j", Action::FocusDown),
-            ("k", Action::FocusUp),
-            ("l", Action::FocusRight),
-            ("left", Action::FocusLeft),
-            ("down", Action::FocusDown),
-            ("up", Action::FocusUp),
-            ("right", Action::FocusRight),
-            ("n", Action::NewTab),
-            ("w", Action::CloseTab),
-            ("[", Action::PrevTab),
-            ("]", Action::NextTab),
-            ("d", Action::SplitHorizontal),
-            ("shift+d", Action::SplitVertical),
-            ("t", Action::NewWorkspace),
-            ("shift+w", Action::CloseWorkspace),
-            ("shift+h", Action::ResizeShrinkH),
-            ("shift+l", Action::ResizeGrowH),
-            ("shift+j", Action::ResizeGrowV),
-            ("shift+k", Action::ResizeShrinkV),
-            ("=", Action::Equalize),
-            ("alt+h", Action::MoveTabLeft),
-            ("alt+j", Action::MoveTabDown),
-            ("alt+k", Action::MoveTabUp),
-            ("alt+l", Action::MoveTabRight),
-            ("/", Action::CommandPalette),
-            ("?", Action::CommandPalette),
-            ("s", Action::SessionPicker),
-            ("c", Action::CopyMode),
-            ("p", Action::PasteClipboard),
-            ("r", Action::RestartPane),
-            ("esc", Action::SelectMode),
-        ];
-
-        for (key_str, action) in defaults {
-            if let Some(key) = parse_key(key_str) {
-                map.insert(key, action);
-            }
-        }
-
-        // 1..9 → FocusGroupN
+    pub fn normal_defaults() -> Self {
+        let mut km = Self::from_pairs(&crate::default_keys::normal_defaults());
+        // 1..9 → FocusGroupN (context-dependent: pane focus or workspace switch)
         for n in 1..=9u8 {
             let ch = (b'0' + n) as char;
             let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
-            map.insert(key, Action::FocusGroupN(n));
+            km.map.insert(key, Action::FocusGroupN(n));
         }
+        km
+    }
 
+    fn from_pairs(pairs: &[(&str, Action)]) -> Self {
+        let mut map = HashMap::new();
+        for (key_str, action) in pairs {
+            if let Some(key) = parse_key(key_str) {
+                map.insert(key, action.clone());
+            }
+        }
         Self { map }
     }
 
@@ -335,7 +291,7 @@ fn action_name_map() -> HashMap<&'static str, Action> {
     m.insert("rename_window", Action::RenameWindow);
     m.insert("rename_pane", Action::RenamePane);
     m.insert("detach", Action::Detach);
-    m.insert("select_mode", Action::SelectMode);
+
     m.insert("enter_interact", Action::EnterInteract);
     m.insert("enter_normal", Action::EnterNormal);
     m.insert("maximize_focused", Action::MaximizeFocused);
@@ -343,6 +299,8 @@ fn action_name_map() -> HashMap<&'static str, Action> {
     m.insert("toggle_fold", Action::ToggleFold);
     m.insert("toggle_float", Action::ToggleFloat);
     m.insert("new_float", Action::NewFloat);
+    m.insert("prev_workspace", Action::PrevWorkspace);
+    m.insert("next_workspace", Action::NextWorkspace);
     for n in 1..=9u8 {
         // Leak is fine — these are static strings created once at startup
         let name: &'static str = Box::leak(format!("focus_group_{}", n).into_boxed_str());
@@ -382,165 +340,8 @@ impl Default for LeaderConfig {
         Self {
             key: KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
             timeout_ms: 300,
-            root: default_leader_tree(),
+            root: crate::default_keys::default_leader_tree(),
         }
-    }
-}
-
-fn default_leader_tree() -> LeaderNode {
-    let mut root = HashMap::new();
-
-    // \w → +Window
-    {
-        let mut children = HashMap::new();
-        insert_leaf(&mut children, "h", Action::FocusLeft, "Focus Left");
-        insert_leaf(&mut children, "j", Action::FocusDown, "Focus Down");
-        insert_leaf(&mut children, "k", Action::FocusUp, "Focus Up");
-        insert_leaf(&mut children, "l", Action::FocusRight, "Focus Right");
-        for n in 1..=9u8 {
-            let ch = (b'0' + n) as char;
-            let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
-            children.insert(
-                key,
-                LeaderNode::Leaf {
-                    action: Action::FocusGroupN(n),
-                    label: format!("Focus {}", n),
-                },
-            );
-        }
-        insert_leaf(&mut children, "d", Action::SplitHorizontal, "Split H");
-        insert_leaf(&mut children, "shift+d", Action::SplitVertical, "Split V");
-        insert_leaf(&mut children, "c", Action::CloseTab, "Close");
-        insert_leaf(&mut children, "=", Action::Equalize, "Equalize");
-        insert_leaf(&mut children, "r", Action::RestartPane, "Restart");
-        insert_leaf(&mut children, "m", Action::MaximizeFocused, "Maximize");
-        insert_leaf(&mut children, "z", Action::ToggleZoom, "Zoom");
-        insert_leaf(&mut children, "f", Action::ToggleFloat, "Float");
-        insert_leaf(&mut children, "F", Action::NewFloat, "New Float");
-        let key = parse_key("w").unwrap();
-        root.insert(
-            key,
-            LeaderNode::Group {
-                label: "Window".into(),
-                children,
-            },
-        );
-    }
-
-    // \t → +Tab
-    {
-        let mut children = HashMap::new();
-        insert_leaf(&mut children, "n", Action::NewTab, "New Tab");
-        insert_leaf(&mut children, "c", Action::CloseTab, "Close Tab");
-        insert_leaf(&mut children, "]", Action::NextTab, "Next Tab");
-        insert_leaf(&mut children, "[", Action::PrevTab, "Prev Tab");
-        insert_leaf(&mut children, "h", Action::MoveTabLeft, "Move Left");
-        insert_leaf(&mut children, "j", Action::MoveTabDown, "Move Down");
-        insert_leaf(&mut children, "k", Action::MoveTabUp, "Move Up");
-        insert_leaf(&mut children, "l", Action::MoveTabRight, "Move Right");
-        let key = parse_key("t").unwrap();
-        root.insert(
-            key,
-            LeaderNode::Group {
-                label: "Tab".into(),
-                children,
-            },
-        );
-    }
-
-    // \s → +Session
-    {
-        let mut children = HashMap::new();
-        insert_leaf(&mut children, "s", Action::SessionPicker, "Sessions");
-        insert_leaf(&mut children, "p", Action::CommandPalette, "Palette");
-        insert_leaf(&mut children, "d", Action::Detach, "Detach");
-        let key = parse_key("s").unwrap();
-        root.insert(
-            key,
-            LeaderNode::Group {
-                label: "Session".into(),
-                children,
-            },
-        );
-    }
-
-    // \W → +Workspace
-    {
-        let mut children = HashMap::new();
-        insert_leaf(&mut children, "n", Action::NewWorkspace, "New");
-        insert_leaf(&mut children, "c", Action::CloseWorkspace, "Close");
-        for n in 1..=9u8 {
-            let ch = (b'0' + n) as char;
-            let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
-            children.insert(
-                key,
-                LeaderNode::Leaf {
-                    action: Action::SwitchWorkspace(n),
-                    label: format!("Switch {}", n),
-                },
-            );
-        }
-        let key = parse_key("shift+w").unwrap();
-        root.insert(
-            key,
-            LeaderNode::Group {
-                label: "Workspace".into(),
-                children,
-            },
-        );
-    }
-
-    // \r → +Resize
-    {
-        let mut children = HashMap::new();
-        insert_leaf(&mut children, "h", Action::ResizeShrinkH, "Shrink H");
-        insert_leaf(&mut children, "l", Action::ResizeGrowH, "Grow H");
-        insert_leaf(&mut children, "j", Action::ResizeGrowV, "Grow V");
-        insert_leaf(&mut children, "k", Action::ResizeShrinkV, "Shrink V");
-        insert_leaf(&mut children, "=", Action::Equalize, "Equalize");
-        let key = parse_key("r").unwrap();
-        root.insert(
-            key,
-            LeaderNode::Group {
-                label: "Resize".into(),
-                children,
-            },
-        );
-    }
-
-    // Quick splits at root level (2-keystroke access)
-    insert_leaf(&mut root, "d", Action::SplitHorizontal, "Split H");
-    insert_leaf(&mut root, "shift+d", Action::SplitVertical, "Split V");
-
-    // \y → Paste
-    insert_leaf(&mut root, "y", Action::PasteClipboard, "Paste");
-    // \/ → Command Palette
-    insert_leaf(&mut root, "/", Action::CommandPalette, "Command Palette");
-
-    // Space Space → PassThrough (literal space)
-    let space_key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
-    root.insert(space_key, LeaderNode::PassThrough);
-
-    LeaderNode::Group {
-        label: "Leader".into(),
-        children: root,
-    }
-}
-
-fn insert_leaf(
-    map: &mut HashMap<KeyEvent, LeaderNode>,
-    key_str: &str,
-    action: Action,
-    label: &str,
-) {
-    if let Some(key) = parse_key(key_str) {
-        map.insert(
-            key,
-            LeaderNode::Leaf {
-                action,
-                label: label.to_string(),
-            },
-        );
     }
 }
 
@@ -629,7 +430,8 @@ pub struct Config {
     pub theme: Theme,
     pub behavior: Behavior,
     pub keys: KeyMap,
-    pub select_keys: KeyMap,
+    pub normal_keys: KeyMap,
+
     pub status_bar: StatusBarConfig,
     pub decorations: Vec<PaneDecoration>,
     pub leader: LeaderConfig,
@@ -642,7 +444,8 @@ impl Default for Config {
             theme: Theme::default(),
             behavior: Behavior::default(),
             keys: KeyMap::from_defaults(),
-            select_keys: KeyMap::select_defaults(),
+            normal_keys: KeyMap::normal_defaults(),
+
             status_bar: StatusBarConfig::default(),
             decorations: PaneDecoration::defaults(),
             leader: LeaderConfig::default(),
@@ -782,9 +585,9 @@ impl Config {
             config.keys.merge(&keys);
         }
 
-        // Select keys
-        if let Some(select_keys) = raw.select_keys {
-            config.select_keys.merge(&select_keys);
+        // Normal keys
+        if let Some(normal_keys) = raw.normal_keys {
+            config.normal_keys.merge(&normal_keys);
         }
 
         // Status bar
@@ -873,7 +676,8 @@ struct RawConfig {
     theme: Option<RawTheme>,
     behavior: Option<RawBehavior>,
     keys: Option<HashMap<String, String>>,
-    select_keys: Option<HashMap<String, String>>,
+    normal_keys: Option<HashMap<String, String>>,
+
     status_bar: Option<RawStatusBar>,
     decorations: Option<Vec<RawDecoration>>,
     leader: Option<RawLeader>,
@@ -1303,10 +1107,7 @@ min_pane_width = 80
     #[test]
     fn test_leader_config_default_key_and_timeout() {
         let leader = LeaderConfig::default();
-        assert_eq!(
-            leader.key,
-            make_key(KeyCode::Char(' '), KeyModifiers::NONE)
-        );
+        assert_eq!(leader.key, make_key(KeyCode::Char(' '), KeyModifiers::NONE));
         assert_eq!(leader.timeout_ms, 300);
     }
 
@@ -1323,7 +1124,7 @@ min_pane_width = 80
 
     #[test]
     fn test_default_leader_tree_has_window_group() {
-        let tree = default_leader_tree();
+        let tree = crate::default_keys::default_leader_tree();
         let children = match &tree {
             LeaderNode::Group { children, .. } => children,
             _ => panic!("root should be a Group"),
@@ -1352,7 +1153,7 @@ min_pane_width = 80
 
     #[test]
     fn test_default_leader_tree_has_tab_group() {
-        let tree = default_leader_tree();
+        let tree = crate::default_keys::default_leader_tree();
         let children = match &tree {
             LeaderNode::Group { children, .. } => children,
             _ => panic!("root should be a Group"),
@@ -1375,7 +1176,7 @@ min_pane_width = 80
 
     #[test]
     fn test_default_leader_tree_has_session_group() {
-        let tree = default_leader_tree();
+        let tree = crate::default_keys::default_leader_tree();
         let children = match &tree {
             LeaderNode::Group { children, .. } => children,
             _ => panic!("root should be a Group"),
@@ -1389,7 +1190,7 @@ min_pane_width = 80
 
     #[test]
     fn test_default_leader_tree_has_workspace_group() {
-        let tree = default_leader_tree();
+        let tree = crate::default_keys::default_leader_tree();
         let children = match &tree {
             LeaderNode::Group { children, .. } => children,
             _ => panic!("root should be a Group"),
@@ -1415,7 +1216,7 @@ min_pane_width = 80
 
     #[test]
     fn test_default_leader_tree_has_resize_group() {
-        let tree = default_leader_tree();
+        let tree = crate::default_keys::default_leader_tree();
         let children = match &tree {
             LeaderNode::Group { children, .. } => children,
             _ => panic!("root should be a Group"),
@@ -1429,7 +1230,7 @@ min_pane_width = 80
 
     #[test]
     fn test_default_leader_tree_has_paste_and_help() {
-        let tree = default_leader_tree();
+        let tree = crate::default_keys::default_leader_tree();
         let children = match &tree {
             LeaderNode::Group { children, .. } => children,
             _ => panic!("root should be a Group"),
@@ -1448,7 +1249,7 @@ min_pane_width = 80
 
     #[test]
     fn test_default_leader_tree_has_passthrough() {
-        let tree = default_leader_tree();
+        let tree = crate::default_keys::default_leader_tree();
         let children = match &tree {
             LeaderNode::Group { children, .. } => children,
             _ => panic!("root should be a Group"),
@@ -1464,7 +1265,7 @@ min_pane_width = 80
 
     #[test]
     fn test_build_leader_tree_add_custom_leaf() {
-        let defaults = default_leader_tree();
+        let defaults = crate::default_keys::default_leader_tree();
         let mut raw = HashMap::new();
         raw.insert("x".to_string(), "quit".to_string());
         let tree = build_leader_tree(&raw, defaults);
@@ -1484,7 +1285,7 @@ min_pane_width = 80
 
     #[test]
     fn test_build_leader_tree_passthrough_value() {
-        let defaults = default_leader_tree();
+        let defaults = crate::default_keys::default_leader_tree();
         let mut raw = HashMap::new();
         raw.insert("z".to_string(), "passthrough".to_string());
         let tree = build_leader_tree(&raw, defaults);
@@ -1501,7 +1302,7 @@ min_pane_width = 80
 
     #[test]
     fn test_build_leader_tree_group_label() {
-        let defaults = default_leader_tree();
+        let defaults = crate::default_keys::default_leader_tree();
         let mut raw = HashMap::new();
         raw.insert("g".to_string(), "+Custom".to_string());
         let tree = build_leader_tree(&raw, defaults);
@@ -1518,7 +1319,7 @@ min_pane_width = 80
 
     #[test]
     fn test_build_leader_tree_nested_path() {
-        let defaults = default_leader_tree();
+        let defaults = crate::default_keys::default_leader_tree();
         let mut raw = HashMap::new();
         raw.insert("g q".to_string(), "quit".to_string());
         let tree = build_leader_tree(&raw, defaults);
@@ -1541,7 +1342,7 @@ min_pane_width = 80
 
     #[test]
     fn test_build_leader_tree_invalid_action_ignored() {
-        let defaults = default_leader_tree();
+        let defaults = crate::default_keys::default_leader_tree();
         let mut raw = HashMap::new();
         raw.insert("x".to_string(), "nonexistent_action".to_string());
         let tree = build_leader_tree(&raw, defaults);
@@ -1555,7 +1356,7 @@ min_pane_width = 80
 
     #[test]
     fn test_build_leader_tree_invalid_key_ignored() {
-        let defaults = default_leader_tree();
+        let defaults = crate::default_keys::default_leader_tree();
         let mut raw = HashMap::new();
         raw.insert("".to_string(), "quit".to_string());
         let tree = build_leader_tree(&raw, defaults);
@@ -1777,7 +1578,6 @@ min_pane_width = 80
         assert_eq!(map.get("help"), Some(&Action::Help));
         assert_eq!(map.get("scroll_mode"), Some(&Action::ScrollMode));
         assert_eq!(map.get("detach"), Some(&Action::Detach));
-        assert_eq!(map.get("select_mode"), Some(&Action::SelectMode));
         assert_eq!(map.get("toggle_fold"), Some(&Action::ToggleFold));
     }
 }

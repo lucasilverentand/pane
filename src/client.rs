@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 
-use crate::app::{LeaderState, Mode};
+use crate::app::{BaseMode, LeaderState, Mode, Overlay};
 use crate::clipboard;
 use crate::config::{self, Action, Config};
 use crate::copy_mode::{CopyModeAction, CopyModeState};
@@ -53,7 +53,7 @@ enum UiFocus {
 impl Client {
     pub fn new(config: Config, session_name: &str) -> Self {
         Self {
-            mode: Mode::Interact,
+            mode: Mode::interact(),
             render_state: RenderState {
                 workspaces: Vec::new(),
                 active_workspace: 0,
@@ -315,23 +315,20 @@ impl Client {
                 .await;
             }
             AppEvent::MouseDown { x, y } => {
-                if self.mode == Mode::Confirm {
+                if self.mode.overlay == Some(Overlay::Confirm) {
                     let size = tui.size()?;
                     let area = Rect::new(0, 0, size.width, size.height);
                     if let Some(click) = ui::confirm_dialog_hit_test(area, x, y) {
                         match click {
                             ui::ConfirmDialogClick::Confirm => {
-                                self.mode = Mode::Normal;
+                                self.mode.dismiss_overlay();
                             }
                             ui::ConfirmDialogClick::Cancel => {
-                                self.mode = Mode::Normal;
+                                self.mode.dismiss_overlay();
                             }
                         }
                     }
-                } else if self.mode == Mode::Normal
-                    || self.mode == Mode::Interact
-                    || self.mode == Mode::Select
-                {
+                } else if self.mode.overlay.is_none() {
                     // Check workspace bar clicks (client-side)
                     let show_workspace_bar = !self.render_state.workspaces.is_empty();
                     let workspace_bar_hit =
@@ -433,54 +430,45 @@ impl Client {
         tui: &Tui,
         writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     ) -> Result<()> {
-        // Modal modes handled client-side
-        match &self.mode {
-            Mode::Scroll => return self.handle_scroll_key(key, writer).await,
-            Mode::Copy => return self.handle_copy_mode_key(key),
-            Mode::CommandPalette => return self.handle_command_palette_key(key, tui, writer).await,
-            Mode::TabPicker => return self.handle_tab_picker_key(key, writer).await,
-            Mode::Confirm => return self.handle_confirm_key(key),
-            Mode::Leader => return self.handle_leader_key(key, tui, writer).await,
-            Mode::Select => {
-                // Falls through to action handling below
-            }
-            Mode::Normal => return self.handle_normal_key(key, tui, writer).await,
-            Mode::Interact => return self.handle_interact_key(key, tui, writer).await,
+        // Overlay modes are handled first — they consume all input
+        if let Some(ref overlay) = self.mode.overlay {
+            return match overlay {
+                Overlay::Scroll => self.handle_scroll_key(key, writer).await,
+                Overlay::Copy => self.handle_copy_mode_key(key),
+                Overlay::CommandPalette => {
+                    self.handle_command_palette_key(key, tui, writer).await
+                }
+                Overlay::TabPicker => self.handle_tab_picker_key(key, writer).await,
+                Overlay::Confirm => self.handle_confirm_key(key),
+                Overlay::Leader => self.handle_leader_key(key, tui, writer).await,
+            };
         }
 
-        // Select mode: check leader key, then select keymap
-        let normalized = config::normalize_key(key);
-        let leader_key = config::normalize_key(self.config.leader.key);
-        if normalized == leader_key {
-            self.enter_leader_mode();
-            return Ok(());
+        // Base modes
+        match self.mode.base {
+            BaseMode::Normal => self.handle_normal_key(key, tui, writer).await,
+            BaseMode::Interact => self.handle_interact_key(key, tui, writer).await,
         }
-
-        if let Some(action) = self.config.select_keys.lookup(&normalized).cloned() {
-            return self.execute_action(action, tui, writer).await;
-        }
-
-        Ok(())
     }
 
     /// Interact mode: forward ALL keys to PTY except Escape (→ Normal).
     async fn handle_interact_key(
         &mut self,
         key: KeyEvent,
-        _tui: &Tui,
+        tui: &Tui,
         writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     ) -> Result<()> {
         let normalized = config::normalize_key(key);
 
         // Escape → Normal mode
         if normalized.code == KeyCode::Esc {
-            self.mode = Mode::Normal;
+            self.mode.base = BaseMode::Normal;
             return Ok(());
         }
 
         // Check global keymap (ctrl+q etc.)
         if let Some(action) = self.config.keys.lookup(&normalized).cloned() {
-            return self.execute_action(action, _tui, writer).await;
+            return self.execute_action(action, tui, writer).await;
         }
 
         // Forward to PTY
@@ -494,6 +482,9 @@ impl Client {
     }
 
     /// Normal mode: strict vim-style. No PTY fallback.
+    ///
+    /// Navigation actions (FocusLeft/Right/Up/Down, FocusGroupN) are
+    /// context-dependent based on UiFocus and handled in execute_action.
     async fn handle_normal_key(
         &mut self,
         key: KeyEvent,
@@ -509,390 +500,16 @@ impl Client {
             return Ok(());
         }
 
-        let mut highlight_workspace_bar = false;
-        let action = match normalized.code {
-            KeyCode::Char('[') if normalized.modifiers == KeyModifiers::NONE => {
-                let next_workspace = if self.render_state.active_workspace > 0 {
-                    Some(Action::SwitchWorkspace(
-                        self.render_state.active_workspace as u8,
-                    ))
-                } else {
-                    None
-                };
-                next_workspace
-            }
-            KeyCode::Char(']') if normalized.modifiers == KeyModifiers::NONE => {
-                let next_workspace = if self.render_state.active_workspace + 1
-                    < self.render_state.workspaces.len()
-                {
-                    Some(Action::SwitchWorkspace(
-                        (self.render_state.active_workspace + 2) as u8,
-                    ))
-                } else {
-                    None
-                };
-                next_workspace
-            }
-            _ => {
-                let config_action = self.config.keys.lookup(&normalized).cloned();
-                match self.ui_focus {
-                    UiFocus::WorkspaceBar => match normalized.code {
-                        KeyCode::Left if normalized.modifiers == KeyModifiers::NONE => {
-                            highlight_workspace_bar = true;
-                            if self.render_state.active_workspace > 0 {
-                                Some(Action::SwitchWorkspace(
-                                    self.render_state.active_workspace as u8,
-                                ))
-                            } else {
-                                None
-                            }
-                        }
-                        KeyCode::Right if normalized.modifiers == KeyModifiers::NONE => {
-                            highlight_workspace_bar = true;
-                            if self.render_state.active_workspace + 1
-                                < self.render_state.workspaces.len()
-                            {
-                                Some(Action::SwitchWorkspace(
-                                    (self.render_state.active_workspace + 2) as u8,
-                                ))
-                            } else {
-                                None
-                            }
-                        }
-                        KeyCode::Char('h') if normalized.modifiers == KeyModifiers::NONE => {
-                            highlight_workspace_bar = true;
-                            if self.render_state.active_workspace > 0 {
-                                Some(Action::SwitchWorkspace(
-                                    self.render_state.active_workspace as u8,
-                                ))
-                            } else {
-                                None
-                            }
-                        }
-                        KeyCode::Char('l') if normalized.modifiers == KeyModifiers::NONE => {
-                            highlight_workspace_bar = true;
-                            if self.render_state.active_workspace + 1
-                                < self.render_state.workspaces.len()
-                            {
-                                Some(Action::SwitchWorkspace(
-                                    (self.render_state.active_workspace + 2) as u8,
-                                ))
-                            } else {
-                                None
-                            }
-                        }
-                        KeyCode::Char('j') if normalized.modifiers == KeyModifiers::NONE => {
-                            self.ui_focus = UiFocus::Panes;
-                            None
-                        }
-                        KeyCode::Char('k') if normalized.modifiers == KeyModifiers::NONE => None,
-                        KeyCode::Char(c)
-                            if c.is_ascii_digit()
-                                && c != '0'
-                                && normalized.modifiers == KeyModifiers::NONE =>
-                        {
-                            highlight_workspace_bar = true;
-                            let n = c as u8 - b'0';
-                            if (n as usize) <= self.render_state.workspaces.len() {
-                                Some(Action::SwitchWorkspace(n))
-                            } else {
-                                None
-                            }
-                        }
-                        _ => match config_action {
-                            Some(action) => match action {
-                                Action::EnterInteract => {
-                                    self.mode = Mode::Interact;
-                                    None
-                                }
-                                _ => Some(action),
-                            },
-                            None => match normalized.code {
-                                KeyCode::Tab if normalized.modifiers == KeyModifiers::NONE => {
-                                    Some(Action::NextTab)
-                                }
-                                KeyCode::BackTab => Some(Action::PrevTab),
-                                KeyCode::Char('i')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    self.mode = Mode::Interact;
-                                    None
-                                }
-                                KeyCode::Char('d')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::SplitHorizontal)
-                                }
-                                KeyCode::Char('D')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::SplitVertical)
-                                }
-                                KeyCode::Char('x')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::CloseTab)
-                                }
-                                KeyCode::Char('n')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::NewTab)
-                                }
-                                KeyCode::Char('m')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::MaximizeFocused)
-                                }
-                                KeyCode::Char('z')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::ToggleZoom)
-                                }
-                                KeyCode::Char('f')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::ToggleFold)
-                                }
-                                KeyCode::Char('F')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::NewFloat)
-                                }
-                                KeyCode::Char('s')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::ScrollMode)
-                                }
-                                KeyCode::Char('c')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::CopyMode)
-                                }
-                                KeyCode::Char('p')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::PasteClipboard)
-                                }
-                                KeyCode::Char('/')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::CommandPalette)
-                                }
-                                KeyCode::Char('?')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::CommandPalette)
-                                }
-                                KeyCode::Char('=')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::Equalize)
-                                }
-                                KeyCode::Char('H')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::ResizeShrinkH)
-                                }
-                                KeyCode::Char('L')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::ResizeGrowH)
-                                }
-                                KeyCode::Char('J')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::ResizeGrowV)
-                                }
-                                KeyCode::Char('K')
-                                    if normalized.modifiers == KeyModifiers::NONE =>
-                                {
-                                    Some(Action::ResizeShrinkV)
-                                }
-                                _ => {
-                                    // No PTY fallback in Normal mode — keys are consumed
-                                    None
-                                }
-                            },
-                        },
-                    },
-                    UiFocus::Panes => {
-                        match normalized.code {
-                            KeyCode::Char('h') if normalized.modifiers == KeyModifiers::NONE => {
-                                Some(Action::FocusLeft)
-                            }
-                            KeyCode::Char('j') if normalized.modifiers == KeyModifiers::NONE => {
-                                Some(Action::FocusDown)
-                            }
-                            KeyCode::Down if normalized.modifiers == KeyModifiers::NONE => {
-                                Some(Action::FocusDown)
-                            }
-                            KeyCode::Char('k') if normalized.modifiers == KeyModifiers::NONE => {
-                                if self.has_pane_neighbor_up() {
-                                    Some(Action::FocusUp)
-                                } else {
-                                    self.ui_focus = UiFocus::WorkspaceBar;
-                                    None
-                                }
-                            }
-                            KeyCode::Up if normalized.modifiers == KeyModifiers::NONE => {
-                                if self.has_pane_neighbor_up() {
-                                    Some(Action::FocusUp)
-                                } else {
-                                    self.ui_focus = UiFocus::WorkspaceBar;
-                                    None
-                                }
-                            }
-                            KeyCode::Char('l') if normalized.modifiers == KeyModifiers::NONE => {
-                                Some(Action::FocusRight)
-                            }
-                            KeyCode::Left if normalized.modifiers == KeyModifiers::NONE => {
-                                Some(Action::FocusLeft)
-                            }
-                            KeyCode::Right if normalized.modifiers == KeyModifiers::NONE => {
-                                Some(Action::FocusRight)
-                            }
-                            _ => {
-                                if let Some(action) = config_action {
-                                    match action {
-                                        Action::EnterInteract => {
-                                            self.mode = Mode::Interact;
-                                            None
-                                        }
-                                        _ => Some(action),
-                                    }
-                                } else {
-                                    match normalized.code {
-                                        KeyCode::Tab
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::NextTab)
-                                        }
-                                        KeyCode::BackTab => Some(Action::PrevTab),
-                                        KeyCode::Char('i')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            self.mode = Mode::Interact;
-                                            None
-                                        }
-                                        KeyCode::Char('d')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::SplitHorizontal)
-                                        }
-                                        KeyCode::Char('D')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::SplitVertical)
-                                        }
-                                        KeyCode::Char('x')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::CloseTab)
-                                        }
-                                        KeyCode::Char('n')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::NewTab)
-                                        }
-                                        KeyCode::Char('m')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::MaximizeFocused)
-                                        }
-                                        KeyCode::Char('z')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::ToggleZoom)
-                                        }
-                                        KeyCode::Char('f')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::ToggleFold)
-                                        }
-                                        KeyCode::Char('F')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::NewFloat)
-                                        }
-                                        KeyCode::Char('s')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::ScrollMode)
-                                        }
-                                        KeyCode::Char('c')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::CopyMode)
-                                        }
-                                        KeyCode::Char('p')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::PasteClipboard)
-                                        }
-                                        KeyCode::Char('/')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::CommandPalette)
-                                        }
-                                        KeyCode::Char('?')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::CommandPalette)
-                                        }
-                                        KeyCode::Char('=')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::Equalize)
-                                        }
-                                        KeyCode::Char('H')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::ResizeShrinkH)
-                                        }
-                                        KeyCode::Char('L')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::ResizeGrowH)
-                                        }
-                                        KeyCode::Char('J')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::ResizeGrowV)
-                                        }
-                                        KeyCode::Char('K')
-                                            if normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::ResizeShrinkV)
-                                        }
-                                        KeyCode::Char(c)
-                                            if c.is_ascii_digit()
-                                                && c != '0'
-                                                && normalized.modifiers == KeyModifiers::NONE =>
-                                        {
-                                            Some(Action::FocusGroupN(c as u8 - b'0'))
-                                        }
-                                        _ => {
-                                            // No PTY fallback in Normal mode — keys are consumed
-                                            None
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        };
-        if self.ui_focus == UiFocus::Panes || highlight_workspace_bar {
-            self.ui_focus = if highlight_workspace_bar {
-                UiFocus::WorkspaceBar
-            } else {
-                self.ui_focus
-            };
-        }
-        if let Some(action) = action {
+        // Global keys (ctrl+q, shift+pageup, etc.)
+        if let Some(action) = self.config.keys.lookup(&normalized).cloned() {
             return self.execute_action(action, tui, writer).await;
         }
+
+        // Normal mode keymap (defined in src/default_keys.rs, overridable via config)
+        if let Some(action) = self.config.normal_keys.lookup(&normalized).cloned() {
+            return self.execute_action(action, tui, writer).await;
+        }
+
         Ok(())
     }
 
@@ -904,7 +521,7 @@ impl Client {
             entered_at: std::time::Instant::now(),
             popup_visible: false,
         });
-        self.mode = Mode::Leader;
+        self.mode.push_overlay(Overlay::Leader);
     }
 
     async fn execute_action(
@@ -921,11 +538,11 @@ impl Client {
             }
             Action::Help => {
                 self.command_palette_state = Some(CommandPaletteState::new(&self.config.keys));
-                self.mode = Mode::CommandPalette;
+                self.mode.push_overlay(Overlay::CommandPalette);
                 return Ok(());
             }
             Action::ScrollMode => {
-                self.mode = Mode::Scroll;
+                self.mode.push_overlay(Overlay::Scroll);
                 return Ok(());
             }
             Action::CopyMode => {
@@ -943,7 +560,7 @@ impl Client {
                                     cursor_row as usize,
                                     cursor_col as usize,
                                 ));
-                                self.mode = Mode::Copy;
+                                self.mode.push_overlay(Overlay::Copy);
                             }
                         }
                     }
@@ -952,23 +569,15 @@ impl Client {
             }
             Action::CommandPalette => {
                 self.command_palette_state = Some(CommandPaletteState::new(&self.config.keys));
-                self.mode = Mode::CommandPalette;
-                return Ok(());
-            }
-            Action::SelectMode => {
-                self.mode = if self.mode == Mode::Select {
-                    Mode::Normal
-                } else {
-                    Mode::Select
-                };
+                self.mode.push_overlay(Overlay::CommandPalette);
                 return Ok(());
             }
             Action::EnterInteract => {
-                self.mode = Mode::Interact;
+                self.mode = Mode::interact();
                 return Ok(());
             }
             Action::EnterNormal => {
-                self.mode = Mode::Normal;
+                self.mode = Mode::normal();
                 return Ok(());
             }
             Action::Detach => {
@@ -977,7 +586,7 @@ impl Client {
             }
             Action::NewTab => {
                 self.tab_picker_state = Some(TabPickerState::new());
-                self.mode = Mode::TabPicker;
+                self.mode.push_overlay(Overlay::TabPicker);
                 return Ok(());
             }
             Action::PasteClipboard => {
@@ -993,6 +602,120 @@ impl Client {
                 }
                 return Ok(());
             }
+
+            // Context-dependent navigation: workspace bar vs panes
+            Action::FocusLeft => {
+                if self.ui_focus == UiFocus::WorkspaceBar {
+                    self.ui_focus = UiFocus::WorkspaceBar;
+                    if self.render_state.active_workspace > 0 {
+                        let cmd = format!(
+                            "select-workspace -t {}",
+                            self.render_state.active_workspace - 1
+                        );
+                        let mut w = writer.lock().await;
+                        let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                    }
+                } else {
+                    let mut w = writer.lock().await;
+                    let _ = send_request(
+                        &mut *w,
+                        &ClientRequest::Command("select-pane -L".to_string()),
+                    )
+                    .await;
+                }
+                return Ok(());
+            }
+            Action::FocusRight => {
+                if self.ui_focus == UiFocus::WorkspaceBar {
+                    self.ui_focus = UiFocus::WorkspaceBar;
+                    if self.render_state.active_workspace + 1
+                        < self.render_state.workspaces.len()
+                    {
+                        let cmd = format!(
+                            "select-workspace -t {}",
+                            self.render_state.active_workspace + 1
+                        );
+                        let mut w = writer.lock().await;
+                        let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                    }
+                } else {
+                    let mut w = writer.lock().await;
+                    let _ = send_request(
+                        &mut *w,
+                        &ClientRequest::Command("select-pane -R".to_string()),
+                    )
+                    .await;
+                }
+                return Ok(());
+            }
+            Action::FocusDown => {
+                if self.ui_focus == UiFocus::WorkspaceBar {
+                    self.ui_focus = UiFocus::Panes;
+                } else {
+                    let mut w = writer.lock().await;
+                    let _ = send_request(
+                        &mut *w,
+                        &ClientRequest::Command("select-pane -D".to_string()),
+                    )
+                    .await;
+                }
+                return Ok(());
+            }
+            Action::FocusUp => {
+                if self.ui_focus == UiFocus::WorkspaceBar {
+                    // Already at top, do nothing
+                } else if self.has_pane_neighbor_up() {
+                    let mut w = writer.lock().await;
+                    let _ = send_request(
+                        &mut *w,
+                        &ClientRequest::Command("select-pane -U".to_string()),
+                    )
+                    .await;
+                } else {
+                    self.ui_focus = UiFocus::WorkspaceBar;
+                }
+                return Ok(());
+            }
+            Action::FocusGroupN(n) => {
+                let n = *n;
+                if self.ui_focus == UiFocus::WorkspaceBar {
+                    self.ui_focus = UiFocus::WorkspaceBar;
+                    if (n as usize) <= self.render_state.workspaces.len() {
+                        let cmd = format!("select-workspace -t {}", (n as usize) - 1);
+                        let mut w = writer.lock().await;
+                        let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                    }
+                } else {
+                    let cmd = format!("select-window -t {}", (n as usize) - 1);
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                }
+                return Ok(());
+            }
+
+            Action::PrevWorkspace => {
+                if self.render_state.active_workspace > 0 {
+                    let cmd = format!(
+                        "select-workspace -t {}",
+                        self.render_state.active_workspace - 1
+                    );
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                }
+                return Ok(());
+            }
+            Action::NextWorkspace => {
+                if self.render_state.active_workspace + 1 < self.render_state.workspaces.len() {
+                    let cmd = format!(
+                        "select-workspace -t {}",
+                        self.render_state.active_workspace + 1
+                    );
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                }
+                return Ok(());
+            }
+
             _ => {}
         }
 
@@ -1012,7 +735,7 @@ impl Client {
         let state = match self.tab_picker_state.as_mut() {
             Some(s) => s,
             None => {
-                self.mode = Mode::Normal;
+                self.mode.dismiss_overlay();
                 return Ok(());
             }
         };
@@ -1020,7 +743,7 @@ impl Client {
         match key.code {
             KeyCode::Esc => {
                 self.tab_picker_state = None;
-                self.mode = Mode::Normal;
+                self.mode.dismiss_overlay();
             }
             KeyCode::Enter => {
                 if let Some(cmd) = state.selected_command() {
@@ -1028,7 +751,8 @@ impl Client {
                     let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
                 }
                 self.tab_picker_state = None;
-                self.mode = Mode::Interact;
+                // After spawning a new tab, go to interact so the user can type
+                self.mode = Mode::interact();
             }
             KeyCode::Up => state.move_up(),
             KeyCode::Down => state.move_down(),
@@ -1048,10 +772,10 @@ impl Client {
     fn handle_confirm_key(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Enter | KeyCode::Char('y') => {
-                self.mode = Mode::Normal;
+                self.mode.dismiss_overlay();
             }
             KeyCode::Esc | KeyCode::Char('n') => {
-                self.mode = Mode::Normal;
+                self.mode.dismiss_overlay();
             }
             _ => {}
         }
@@ -1069,7 +793,7 @@ impl Client {
         let pane_id = match pane_id {
             Some(id) => id,
             None => {
-                self.mode = Mode::Normal;
+                self.mode.dismiss_overlay();
                 self.copy_mode_state = None;
                 return Ok(());
             }
@@ -1078,7 +802,7 @@ impl Client {
         let screen = match self.screens.get(&pane_id) {
             Some(parser) => parser.screen(),
             None => {
-                self.mode = Mode::Normal;
+                self.mode.dismiss_overlay();
                 self.copy_mode_state = None;
                 return Ok(());
             }
@@ -1090,11 +814,11 @@ impl Client {
                 CopyModeAction::YankSelection(text) => {
                     let _ = clipboard::copy_to_clipboard(&text);
                     self.copy_mode_state = None;
-                    self.mode = Mode::Normal;
+                    self.mode.dismiss_overlay();
                 }
                 CopyModeAction::Exit => {
                     self.copy_mode_state = None;
-                    self.mode = Mode::Normal;
+                    self.mode.dismiss_overlay();
                 }
             }
         }
@@ -1108,7 +832,7 @@ impl Client {
     ) -> Result<()> {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('G') | KeyCode::End => {
-                self.mode = Mode::Normal;
+                self.mode.dismiss_overlay();
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 let mut w = writer.lock().await;
@@ -1131,7 +855,7 @@ impl Client {
                 }
             }
             _ => {
-                self.mode = Mode::Normal;
+                self.mode.dismiss_overlay();
                 // Forward the key to PTY
                 let mut w = writer.lock().await;
                 let _ = send_request(
@@ -1154,12 +878,12 @@ impl Client {
             match key.code {
                 KeyCode::Esc => {
                     self.command_palette_state = None;
-                    self.mode = Mode::Normal;
+                    self.mode.dismiss_overlay();
                 }
                 KeyCode::Enter => {
                     if let Some(action) = cp.selected_action() {
                         self.command_palette_state = None;
-                        self.mode = Mode::Normal;
+                        self.mode.dismiss_overlay();
                         return self.execute_action(action, tui, writer).await;
                     }
                 }
@@ -1176,7 +900,7 @@ impl Client {
                 _ => {}
             }
         } else {
-            self.mode = Mode::Normal;
+            self.mode.dismiss_overlay();
         }
         Ok(())
     }
@@ -1191,7 +915,7 @@ impl Client {
 
         if key.code == KeyCode::Esc {
             self.leader_state = None;
-            self.mode = Mode::Normal;
+            self.mode.dismiss_overlay();
             return Ok(());
         }
 
@@ -1208,12 +932,12 @@ impl Client {
         match next {
             Some(LeaderNode::Leaf { action, .. }) => {
                 self.leader_state = None;
-                self.mode = Mode::Normal;
+                self.mode.dismiss_overlay();
                 return self.execute_action(action, tui, writer).await;
             }
             Some(LeaderNode::PassThrough) => {
                 self.leader_state = None;
-                self.mode = Mode::Normal;
+                self.mode.dismiss_overlay();
                 let leader_key = self.config.leader.key;
                 let mut w = writer.lock().await;
                 let _ = send_request(
@@ -1231,7 +955,7 @@ impl Client {
             }
             None => {
                 self.leader_state = None;
-                self.mode = Mode::Normal;
+                self.mode.dismiss_overlay();
             }
         }
         Ok(())
@@ -1306,10 +1030,6 @@ fn action_to_command(action: &Action) -> Option<String> {
         Action::SplitHorizontal => Some("split-window -h".to_string()),
         Action::SplitVertical => Some("split-window -v".to_string()),
         Action::RestartPane => Some("restart-pane".to_string()),
-        Action::FocusLeft => Some("select-pane -L".to_string()),
-        Action::FocusDown => Some("select-pane -D".to_string()),
-        Action::FocusUp => Some("select-pane -U".to_string()),
-        Action::FocusRight => Some("select-pane -R".to_string()),
         Action::MoveTabLeft => Some("move-tab -L".to_string()),
         Action::MoveTabDown => Some("move-tab -D".to_string()),
         Action::MoveTabUp => Some("move-tab -U".to_string()),
@@ -1321,10 +1041,6 @@ fn action_to_command(action: &Action) -> Option<String> {
         Action::Equalize => Some("equalize-layout".to_string()),
         Action::ToggleSyncPanes => Some("toggle-sync".to_string()),
         Action::SelectLayout(name) => Some(format!("select-layout {}", name)),
-        Action::FocusGroupN(n) => {
-            let ws_idx = (*n as usize) - 1;
-            Some(format!("select-window -t {}", ws_idx))
-        }
         Action::DevServerInput => Some("new-window".to_string()),
         Action::MaximizeFocused => Some("maximize-focused".to_string()),
         Action::ToggleZoom => Some("toggle-zoom".to_string()),
@@ -1339,11 +1055,17 @@ fn action_to_command(action: &Action) -> Option<String> {
         | Action::CopyMode
         | Action::CommandPalette
         | Action::PasteClipboard
-        | Action::SelectMode
         | Action::EnterInteract
         | Action::EnterNormal
         | Action::Detach
         | Action::SessionPicker
-        | Action::NewTab => None, // NewTab opens picker client-side
+        | Action::FocusLeft
+        | Action::FocusRight
+        | Action::FocusUp
+        | Action::FocusDown
+        | Action::FocusGroupN(_)
+        | Action::PrevWorkspace
+        | Action::NextWorkspace
+        | Action::NewTab => None,
     }
 }
