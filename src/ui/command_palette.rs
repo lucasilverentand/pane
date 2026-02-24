@@ -16,6 +16,7 @@ pub struct CommandEntry {
     pub name: String,
     pub keybind: Option<String>,
     pub description: String,
+    pub category: &'static str,
 }
 
 /// State for the command palette overlay.
@@ -72,7 +73,7 @@ pub fn build_command_list(keymap: &KeyMap) -> Vec<CommandEntry> {
 
     actions
         .into_iter()
-        .map(|(action, display_name, description)| {
+        .map(|(action, display_name, description, category)| {
             let keybind = reverse.get(&action).map(|keys| {
                 keys.iter()
                     .map(|k| key_event_to_string(k))
@@ -84,12 +85,13 @@ pub fn build_command_list(keymap: &KeyMap) -> Vec<CommandEntry> {
                 name: display_name,
                 keybind,
                 description,
+                category,
             }
         })
         .collect()
 }
 
-/// Filter commands by substring match on display name or description (case-insensitive).
+/// Filter commands by substring match on display name, description, or category (case-insensitive).
 pub fn filter_commands(commands: &[CommandEntry], query: &str) -> Vec<CommandEntry> {
     if query.is_empty() {
         return commands.to_vec();
@@ -100,6 +102,7 @@ pub fn filter_commands(commands: &[CommandEntry], query: &str) -> Vec<CommandEnt
         .filter(|e| {
             e.name.to_lowercase().contains(&query_lower)
                 || e.description.to_lowercase().contains(&query_lower)
+                || e.category.to_lowercase().contains(&query_lower)
         })
         .cloned()
         .collect()
@@ -206,220 +209,275 @@ pub fn action_display_name(action: &Action) -> &str {
 }
 
 /// All actions available for the command palette (excludes parameterized ones).
-/// Returns (Action, display_name, description).
-fn all_actions() -> Vec<(Action, String, String)> {
+/// Returns (Action, display_name, description, category).
+fn all_actions() -> Vec<(Action, String, String, &'static str)> {
     vec![
-        (
-            Action::Quit,
-            "Quit".into(),
-            "Exit pane and close the session".into(),
-        ),
-        (
-            Action::NewWorkspace,
-            "New Workspace".into(),
-            "Create a new workspace".into(),
-        ),
-        (
-            Action::CloseWorkspace,
-            "Close Workspace".into(),
-            "Close the current workspace".into(),
-        ),
-        (
-            Action::NewTab,
-            "New Tab".into(),
-            "Open a new tab in the current window".into(),
-        ),
-        (
-            Action::DevServerInput,
-            "New Dev Server Tab".into(),
-            "Open a dev server tab".into(),
-        ),
-        (
-            Action::NextTab,
-            "Next Tab".into(),
-            "Switch to the next tab".into(),
-        ),
-        (
-            Action::PrevTab,
-            "Previous Tab".into(),
-            "Switch to the previous tab".into(),
-        ),
-        (
-            Action::CloseTab,
-            "Close Tab".into(),
-            "Close the current tab".into(),
-        ),
-        (
-            Action::SplitHorizontal,
-            "Split Right".into(),
-            "Split the focused window horizontally".into(),
-        ),
-        (
-            Action::SplitVertical,
-            "Split Down".into(),
-            "Split the focused window vertically".into(),
-        ),
-        (
-            Action::RestartPane,
-            "Restart Pane".into(),
-            "Restart the exited pane process".into(),
-        ),
+        // Navigation
         (
             Action::FocusLeft,
             "Focus Left".into(),
             "Move focus to the left window".into(),
+            "Navigation",
         ),
         (
             Action::FocusDown,
             "Focus Down".into(),
             "Move focus to the window below".into(),
+            "Navigation",
         ),
         (
             Action::FocusUp,
             "Focus Up".into(),
             "Move focus to the window above".into(),
+            "Navigation",
         ),
         (
             Action::FocusRight,
             "Focus Right".into(),
             "Move focus to the right window".into(),
-        ),
-        (
-            Action::MoveTabLeft,
-            "Move Tab Left".into(),
-            "Move the current tab to the left window".into(),
-        ),
-        (
-            Action::MoveTabDown,
-            "Move Tab Down".into(),
-            "Move the current tab to the window below".into(),
-        ),
-        (
-            Action::MoveTabUp,
-            "Move Tab Up".into(),
-            "Move the current tab to the window above".into(),
-        ),
-        (
-            Action::MoveTabRight,
-            "Move Tab Right".into(),
-            "Move the current tab to the right window".into(),
-        ),
-        (
-            Action::ResizeShrinkH,
-            "Shrink Horizontally".into(),
-            "Decrease the focused window width".into(),
-        ),
-        (
-            Action::ResizeGrowH,
-            "Grow Horizontally".into(),
-            "Increase the focused window width".into(),
-        ),
-        (
-            Action::ResizeGrowV,
-            "Grow Vertically".into(),
-            "Increase the focused window height".into(),
-        ),
-        (
-            Action::ResizeShrinkV,
-            "Shrink Vertically".into(),
-            "Decrease the focused window height".into(),
-        ),
-        (
-            Action::Equalize,
-            "Equalize Panes".into(),
-            "Reset all split ratios to equal".into(),
-        ),
-        (
-            Action::MaximizeFocused,
-            "Maximize Focused".into(),
-            "Toggle maximize the focused window".into(),
-        ),
-        (
-            Action::ToggleZoom,
-            "Toggle Zoom".into(),
-            "Toggle full-screen zoom on the focused window".into(),
-        ),
-        (
-            Action::ToggleFold,
-            "Toggle Fold".into(),
-            "Fold/unfold panes by moving focus across neighboring groups".into(),
-        ),
-        (
-            Action::ToggleFloat,
-            "Toggle Float".into(),
-            "Toggle floating mode for the focused window".into(),
-        ),
-        (
-            Action::NewFloat,
-            "New Float".into(),
-            "Create a new floating window".into(),
-        ),
-        (
-            Action::SessionPicker,
-            "Session Picker".into(),
-            "Open the session picker".into(),
-        ),
-        (Action::Help, "Help".into(), "Show keybinding help".into()),
-        (
-            Action::ScrollMode,
-            "Scroll Mode".into(),
-            "Enter scroll mode for the focused pane".into(),
-        ),
-        (
-            Action::CopyMode,
-            "Copy Mode".into(),
-            "Enter copy mode with vim-style selection".into(),
-        ),
-        (
-            Action::PasteClipboard,
-            "Paste from Clipboard".into(),
-            "Paste system clipboard into the focused pane".into(),
-        ),
-        (
-            Action::ToggleSyncPanes,
-            "Toggle Sync Panes".into(),
-            "Broadcast input to all panes in workspace".into(),
-        ),
-        (
-            Action::RenameWindow,
-            "Rename Window".into(),
-            "Rename the current window".into(),
-        ),
-        (
-            Action::RenamePane,
-            "Rename Pane".into(),
-            "Rename the current pane".into(),
-        ),
-        (
-            Action::Detach,
-            "Detach".into(),
-            "Detach from the session".into(),
+            "Navigation",
         ),
         (
             Action::SelectMode,
             "Select Mode".into(),
             "Toggle select mode for window navigation".into(),
+            "Navigation",
         ),
         (
             Action::EnterInteract,
             "Enter Interact Mode".into(),
             "Switch to interact mode (forward keys to PTY)".into(),
+            "Navigation",
         ),
         (
             Action::EnterNormal,
             "Enter Normal Mode".into(),
             "Switch to normal mode (vim-style navigation)".into(),
+            "Navigation",
+        ),
+        // Layout
+        (
+            Action::SplitHorizontal,
+            "Split Right".into(),
+            "Split the focused window horizontally".into(),
+            "Layout",
+        ),
+        (
+            Action::SplitVertical,
+            "Split Down".into(),
+            "Split the focused window vertically".into(),
+            "Layout",
+        ),
+        (
+            Action::ResizeShrinkH,
+            "Shrink Horizontally".into(),
+            "Decrease the focused window width".into(),
+            "Layout",
+        ),
+        (
+            Action::ResizeGrowH,
+            "Grow Horizontally".into(),
+            "Increase the focused window width".into(),
+            "Layout",
+        ),
+        (
+            Action::ResizeGrowV,
+            "Grow Vertically".into(),
+            "Increase the focused window height".into(),
+            "Layout",
+        ),
+        (
+            Action::ResizeShrinkV,
+            "Shrink Vertically".into(),
+            "Decrease the focused window height".into(),
+            "Layout",
+        ),
+        (
+            Action::Equalize,
+            "Equalize Panes".into(),
+            "Reset all split ratios to equal".into(),
+            "Layout",
+        ),
+        (
+            Action::MaximizeFocused,
+            "Maximize Focused".into(),
+            "Toggle maximize the focused window".into(),
+            "Layout",
+        ),
+        (
+            Action::ToggleZoom,
+            "Toggle Zoom".into(),
+            "Toggle full-screen zoom on the focused window".into(),
+            "Layout",
+        ),
+        (
+            Action::ToggleFold,
+            "Toggle Fold".into(),
+            "Fold/unfold panes by moving focus across groups".into(),
+            "Layout",
+        ),
+        (
+            Action::ToggleFloat,
+            "Toggle Float".into(),
+            "Toggle floating mode for the focused window".into(),
+            "Layout",
+        ),
+        (
+            Action::NewFloat,
+            "New Float".into(),
+            "Create a new floating window".into(),
+            "Layout",
+        ),
+        // Tabs
+        (
+            Action::NewTab,
+            "New Tab".into(),
+            "Open a new tab in the current window".into(),
+            "Tabs",
+        ),
+        (
+            Action::DevServerInput,
+            "New Dev Server Tab".into(),
+            "Open a dev server tab".into(),
+            "Tabs",
+        ),
+        (
+            Action::NextTab,
+            "Next Tab".into(),
+            "Switch to the next tab".into(),
+            "Tabs",
+        ),
+        (
+            Action::PrevTab,
+            "Previous Tab".into(),
+            "Switch to the previous tab".into(),
+            "Tabs",
+        ),
+        (
+            Action::CloseTab,
+            "Close Tab".into(),
+            "Close the current tab".into(),
+            "Tabs",
+        ),
+        (
+            Action::MoveTabLeft,
+            "Move Tab Left".into(),
+            "Move the current tab to the left window".into(),
+            "Tabs",
+        ),
+        (
+            Action::MoveTabDown,
+            "Move Tab Down".into(),
+            "Move the current tab to the window below".into(),
+            "Tabs",
+        ),
+        (
+            Action::MoveTabUp,
+            "Move Tab Up".into(),
+            "Move the current tab to the window above".into(),
+            "Tabs",
+        ),
+        (
+            Action::MoveTabRight,
+            "Move Tab Right".into(),
+            "Move the current tab to the right window".into(),
+            "Tabs",
+        ),
+        // Workspaces
+        (
+            Action::NewWorkspace,
+            "New Workspace".into(),
+            "Create a new workspace".into(),
+            "Workspaces",
+        ),
+        (
+            Action::CloseWorkspace,
+            "Close Workspace".into(),
+            "Close the current workspace".into(),
+            "Workspaces",
+        ),
+        // Tools
+        (
+            Action::ScrollMode,
+            "Scroll Mode".into(),
+            "Enter scroll mode for the focused pane".into(),
+            "Tools",
+        ),
+        (
+            Action::CopyMode,
+            "Copy Mode".into(),
+            "Enter copy mode with vim-style selection".into(),
+            "Tools",
+        ),
+        (
+            Action::PasteClipboard,
+            "Paste from Clipboard".into(),
+            "Paste system clipboard into the focused pane".into(),
+            "Tools",
+        ),
+        (
+            Action::RestartPane,
+            "Restart Pane".into(),
+            "Restart the exited pane process".into(),
+            "Tools",
+        ),
+        (
+            Action::RenameWindow,
+            "Rename Window".into(),
+            "Rename the current window".into(),
+            "Tools",
+        ),
+        (
+            Action::RenamePane,
+            "Rename Pane".into(),
+            "Rename the current pane".into(),
+            "Tools",
+        ),
+        (
+            Action::ToggleSyncPanes,
+            "Toggle Sync Panes".into(),
+            "Broadcast input to all panes in workspace".into(),
+            "Tools",
+        ),
+        // Session
+        (
+            Action::SessionPicker,
+            "Session Picker".into(),
+            "Open the session picker".into(),
+            "Session",
+        ),
+        (
+            Action::Detach,
+            "Detach".into(),
+            "Detach from the session".into(),
+            "Session",
+        ),
+        (
+            Action::Quit,
+            "Quit".into(),
+            "Exit pane and close the session".into(),
+            "Session",
         ),
     ]
 }
 
+/// Category display order.
+const CATEGORY_ORDER: &[&str] = &[
+    "Navigation",
+    "Layout",
+    "Tabs",
+    "Workspaces",
+    "Tools",
+    "Session",
+];
+
 /// Render the command palette overlay.
 pub fn render(state: &CommandPaletteState, theme: &Theme, frame: &mut Frame, area: Rect) {
-    let popup_area = centered_rect(60, 50, area);
+    let popup_area = centered_rect(60, 70, area);
     frame.render_widget(Clear, popup_area);
 
     let block = Block::default()
-        .title(" command palette ")
+        .title(" commands ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.accent));
@@ -431,10 +489,11 @@ pub fn render(state: &CommandPaletteState, theme: &Theme, frame: &mut Frame, are
         return;
     }
 
-    let [input_area, _, list_area] = Layout::vertical([
+    let [input_area, _, list_area, hint_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Fill(1),
+        Constraint::Length(1),
     ])
     .areas(inner);
 
@@ -448,51 +507,138 @@ pub fn render(state: &CommandPaletteState, theme: &Theme, frame: &mut Frame, are
     ]);
     frame.render_widget(Paragraph::new(input_line), input_area);
 
-    // Render filtered command list
+    // Build display lines
+    let is_filtering = !state.input.is_empty();
+    let inner_width = list_area.width as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    // Track which visual line index maps to which entry index (for selection highlight)
+    let mut line_to_entry: Vec<Option<usize>> = Vec::new();
+
+    if is_filtering {
+        // Flat filtered list — no category headers
+        for (i, entry) in state.filtered.iter().enumerate() {
+            let line = render_entry(entry, i == state.selected, inner_width, theme);
+            lines.push(line);
+            line_to_entry.push(Some(i));
+        }
+    } else {
+        // Grouped by category
+        for &cat in CATEGORY_ORDER {
+            let entries: Vec<(usize, &CommandEntry)> = state
+                .filtered
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.category == cat)
+                .collect();
+            if entries.is_empty() {
+                continue;
+            }
+
+            // Category header
+            lines.push(Line::styled(
+                format!("  {}", cat),
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            line_to_entry.push(None);
+
+            for (i, entry) in entries {
+                let line = render_entry(entry, i == state.selected, inner_width, theme);
+                lines.push(line);
+                line_to_entry.push(Some(i));
+            }
+
+            // Blank line after section
+            lines.push(Line::raw(""));
+            line_to_entry.push(None);
+        }
+    }
+
+    // Find the scroll offset to keep selected visible
     let visible_count = list_area.height as usize;
-    let scroll_offset = if state.selected >= visible_count {
-        state.selected - visible_count + 1
+    let selected_line = line_to_entry
+        .iter()
+        .position(|e| *e == Some(state.selected))
+        .unwrap_or(0);
+    let scroll_offset = if selected_line >= visible_count {
+        selected_line - visible_count + 1
     } else {
         0
     };
 
-    let lines: Vec<Line> = state
-        .filtered
-        .iter()
-        .enumerate()
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
         .skip(scroll_offset)
         .take(visible_count)
-        .map(|(i, entry)| {
-            let is_selected = i == state.selected;
-            let name_style = if is_selected {
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let hint_text = entry
-                .keybind
-                .as_ref()
-                .map(|h| format!("  {}", h))
-                .unwrap_or_default();
-            let desc_text = if is_selected && !entry.description.is_empty() {
-                format!("  {}", entry.description)
-            } else {
-                String::new()
-            };
-            let indicator = if is_selected { "  > " } else { "    " };
-            Line::from(vec![
-                Span::styled(indicator, name_style),
-                Span::styled(entry.name.clone(), name_style),
-                Span::styled(hint_text, Style::default().fg(theme.dim)),
-                Span::styled(desc_text, Style::default().fg(theme.dim)),
-            ])
-        })
         .collect();
 
-    let paragraph = Paragraph::new(lines);
+    let paragraph = Paragraph::new(visible_lines);
     frame.render_widget(paragraph, list_area);
+
+    // Hint footer
+    let hint = Line::from(vec![Span::styled(
+        "  esc close  enter run  type to filter",
+        Style::default().fg(theme.dim),
+    )]);
+    frame.render_widget(Paragraph::new(hint), hint_area);
+}
+
+fn render_entry<'a>(
+    entry: &CommandEntry,
+    is_selected: bool,
+    width: usize,
+    theme: &Theme,
+) -> Line<'a> {
+    let indicator = if is_selected { "  > " } else { "    " };
+    let name_style = if is_selected {
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let keybind_text = entry
+        .keybind
+        .as_ref()
+        .map(|k| k.clone())
+        .unwrap_or_default();
+
+    // Calculate right-aligned keybind position
+    let name_part_len = indicator.len() + entry.name.len();
+    let keybind_len = keybind_text.len();
+    let gap = if keybind_len > 0 {
+        width.saturating_sub(name_part_len + keybind_len + 2)
+    } else {
+        0
+    };
+
+    let mut spans = vec![
+        Span::styled(indicator.to_string(), name_style),
+        Span::styled(entry.name.clone(), name_style),
+    ];
+
+    if !keybind_text.is_empty() {
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.push(Span::styled(
+            keybind_text,
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+
+    // Show description inline on selected row
+    if is_selected && !entry.description.is_empty() {
+        // Clear keybind right-align, add description below-ish by appending
+        // Actually, for a cleaner look, only show desc if there's room
+        // We'll show it after the name with dim style
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            entry.description.clone(),
+            Style::default().fg(theme.dim),
+        ));
+    }
+
+    Line::from(spans)
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
@@ -531,7 +677,20 @@ mod tests {
         assert!(quit.is_some());
         let entry = quit.unwrap();
         assert_eq!(entry.name, "Quit");
-        assert!(entry.keybind.is_some());
+        assert_eq!(entry.category, "Session");
+    }
+
+    #[test]
+    fn test_build_command_list_has_categories() {
+        let keymap = KeyMap::from_defaults();
+        let commands = build_command_list(&keymap);
+        let categories: Vec<&str> = commands.iter().map(|e| e.category).collect();
+        assert!(categories.contains(&"Navigation"));
+        assert!(categories.contains(&"Layout"));
+        assert!(categories.contains(&"Tabs"));
+        assert!(categories.contains(&"Workspaces"));
+        assert!(categories.contains(&"Tools"));
+        assert!(categories.contains(&"Session"));
     }
 
     #[test]
@@ -548,6 +707,14 @@ mod tests {
         let commands = build_command_list(&keymap);
         let filtered = filter_commands(&commands, "quit");
         assert!(filtered.iter().any(|e| e.action == Action::Quit));
+    }
+
+    #[test]
+    fn test_filter_commands_by_category() {
+        let keymap = KeyMap::from_defaults();
+        let commands = build_command_list(&keymap);
+        let filtered = filter_commands(&commands, "navigation");
+        assert!(filtered.iter().any(|e| e.action == Action::FocusLeft));
     }
 
     #[test]
@@ -622,6 +789,8 @@ mod tests {
         assert!(state
             .filtered
             .iter()
-            .all(|e| e.name.to_lowercase().contains("tab")));
+            .all(|e| e.name.to_lowercase().contains("tab")
+                || e.description.to_lowercase().contains("tab")
+                || e.category.to_lowercase().contains("tab")));
     }
 }

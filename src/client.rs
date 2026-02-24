@@ -22,7 +22,6 @@ use crate::system_stats::SystemStats;
 use crate::tui::Tui;
 use crate::ui;
 use crate::ui::command_palette::CommandPaletteState;
-use crate::ui::help::HelpState;
 use crate::ui::tab_picker::TabPickerState;
 
 /// TUI client that connects to a pane daemon via Unix socket.
@@ -38,7 +37,6 @@ pub struct Client {
 
     // Client-only UI state
     pub leader_state: Option<LeaderState>,
-    pub help_state: HelpState,
     pub command_palette_state: Option<CommandPaletteState>,
     pub copy_mode_state: Option<CopyModeState>,
     pub tab_picker_state: Option<TabPickerState>,
@@ -68,7 +66,6 @@ impl Client {
             plugin_segments: Vec::new(),
 
             leader_state: None,
-            help_state: HelpState::default(),
             command_palette_state: None,
             copy_mode_state: None,
             tab_picker_state: None,
@@ -438,7 +435,6 @@ impl Client {
     ) -> Result<()> {
         // Modal modes handled client-side
         match &self.mode {
-            Mode::Help => return self.handle_help_key(key),
             Mode::Scroll => return self.handle_scroll_key(key, writer).await,
             Mode::Copy => return self.handle_copy_mode_key(key),
             Mode::CommandPalette => return self.handle_command_palette_key(key, tui, writer).await,
@@ -479,13 +475,6 @@ impl Client {
         // Escape → Normal mode
         if normalized.code == KeyCode::Esc {
             self.mode = Mode::Normal;
-            return Ok(());
-        }
-
-        // Check for leader key (allows accessing leader from Interact)
-        let leader_key = config::normalize_key(self.config.leader.key);
-        if normalized == leader_key {
-            self.enter_leader_mode();
             return Ok(());
         }
 
@@ -692,7 +681,7 @@ impl Client {
                                 KeyCode::Char('?')
                                     if normalized.modifiers == KeyModifiers::NONE =>
                                 {
-                                    Some(Action::Help)
+                                    Some(Action::CommandPalette)
                                 }
                                 KeyCode::Char('=')
                                     if normalized.modifiers == KeyModifiers::NONE =>
@@ -848,7 +837,7 @@ impl Client {
                                         KeyCode::Char('?')
                                             if normalized.modifiers == KeyModifiers::NONE =>
                                         {
-                                            Some(Action::Help)
+                                            Some(Action::CommandPalette)
                                         }
                                         KeyCode::Char('=')
                                             if normalized.modifiers == KeyModifiers::NONE =>
@@ -931,8 +920,8 @@ impl Client {
                 return Ok(());
             }
             Action::Help => {
-                self.help_state = HelpState::default();
-                self.mode = Mode::Help;
+                self.command_palette_state = Some(CommandPaletteState::new(&self.config.keys));
+                self.mode = Mode::CommandPalette;
                 return Ok(());
             }
             Action::ScrollMode => {
@@ -1065,43 +1054,6 @@ impl Client {
                 self.mode = Mode::Normal;
             }
             _ => {}
-        }
-        Ok(())
-    }
-
-    fn handle_help_key(&mut self, key: KeyEvent) -> Result<()> {
-        if let Some(ref mut search) = self.help_state.search_input {
-            match key.code {
-                KeyCode::Esc => {
-                    self.help_state.search_input = None;
-                }
-                KeyCode::Backspace => {
-                    search.pop();
-                    if search.is_empty() {
-                        self.help_state.search_input = None;
-                    }
-                }
-                KeyCode::Char(c) => {
-                    search.push(c);
-                }
-                _ => {}
-            }
-        } else {
-            match key.code {
-                KeyCode::Esc => {
-                    self.mode = Mode::Normal;
-                }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    self.help_state.scroll_offset += 1;
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    self.help_state.scroll_offset = self.help_state.scroll_offset.saturating_sub(1);
-                }
-                KeyCode::Char('/') => {
-                    self.help_state.search_input = Some(String::new());
-                }
-                _ => {}
-            }
         }
         Ok(())
     }

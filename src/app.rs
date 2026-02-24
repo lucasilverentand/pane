@@ -8,7 +8,6 @@ pub enum Mode {
     Interact,
     Select,
     Scroll,
-    Help,
     Copy,
     CommandPalette,
     Confirm,

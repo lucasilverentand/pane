@@ -1,6 +1,5 @@
 pub mod command_palette;
 pub mod format;
-pub mod help;
 pub mod layout_render;
 pub mod status_bar;
 pub mod tab_picker;
@@ -214,15 +213,6 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
 
     // Overlays
     match &client.mode {
-        Mode::Help => {
-            help::render(
-                &client.config.keys,
-                &client.help_state,
-                theme,
-                frame,
-                frame.area(),
-            );
-        }
         Mode::CommandPalette => {
             if let Some(ref cp_state) = client.command_palette_state {
                 command_palette::render(cp_state, theme, frame, frame.area());

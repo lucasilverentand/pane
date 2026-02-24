@@ -51,10 +51,6 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
             let right = "j/k up/down  u/d page  g/G top/end  esc quit ".to_string();
             (mode_left, right)
         }
-        Mode::Help => (
-            String::new(),
-            "esc close  / search  j/k scroll ".to_string(),
-        ),
         Mode::Select => {
             let title = client_pane_title(client);
             (
@@ -78,12 +74,12 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
             let path_str = if let Some(ref ls) = client.leader_state {
                 let keys: Vec<String> = ls.path.iter().map(|k| format_leader_key(k)).collect();
                 if keys.is_empty() {
-                    "\\".to_string()
+                    "SPC".to_string()
                 } else {
-                    format!("\\ {}", keys.join(" "))
+                    format!("SPC {}", keys.join(" "))
                 }
             } else {
-                "\\".to_string()
+                "SPC".to_string()
             };
             (format!("LEADER {}", path_str), "esc cancel ".to_string())
         }

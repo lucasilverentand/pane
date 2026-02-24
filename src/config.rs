@@ -175,7 +175,7 @@ impl Default for StatusBarConfig {
             show_disk: false,
             update_interval_secs: 3,
             left: "".to_string(),
-            right: "#{cpu} #{mem} #{load}  \\ leader ".to_string(),
+            right: "#{cpu} #{mem} #{load}  SPC leader ".to_string(),
         }
     }
 }
@@ -237,7 +237,7 @@ impl KeyMap {
             ("alt+k", Action::MoveTabUp),
             ("alt+l", Action::MoveTabRight),
             ("/", Action::CommandPalette),
-            ("?", Action::Help),
+            ("?", Action::CommandPalette),
             ("s", Action::SessionPicker),
             ("c", Action::CopyMode),
             ("p", Action::PasteClipboard),
@@ -380,7 +380,7 @@ pub struct LeaderConfig {
 impl Default for LeaderConfig {
     fn default() -> Self {
         Self {
-            key: KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE),
+            key: KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
             timeout_ms: 300,
             root: default_leader_tree(),
         }
@@ -514,12 +514,12 @@ fn default_leader_tree() -> LeaderNode {
 
     // \y → Paste
     insert_leaf(&mut root, "y", Action::PasteClipboard, "Paste");
-    // \/ → Help
-    insert_leaf(&mut root, "/", Action::Help, "Help");
+    // \/ → Command Palette
+    insert_leaf(&mut root, "/", Action::CommandPalette, "Command Palette");
 
-    // \\ → PassThrough (literal backslash)
-    let bs_key = KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE);
-    root.insert(bs_key, LeaderNode::PassThrough);
+    // Space Space → PassThrough (literal space)
+    let space_key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+    root.insert(space_key, LeaderNode::PassThrough);
 
     LeaderNode::Group {
         label: "Leader".into(),
@@ -1305,7 +1305,7 @@ min_pane_width = 80
         let leader = LeaderConfig::default();
         assert_eq!(
             leader.key,
-            make_key(KeyCode::Char('\\'), KeyModifiers::NONE)
+            make_key(KeyCode::Char(' '), KeyModifiers::NONE)
         );
         assert_eq!(leader.timeout_ms, 300);
     }
@@ -1441,8 +1441,8 @@ min_pane_width = 80
         }
         let slash_key = parse_key("/").unwrap();
         match children.get(&slash_key) {
-            Some(LeaderNode::Leaf { action, .. }) => assert_eq!(*action, Action::Help),
-            _ => panic!("expected Help leaf at '/'"),
+            Some(LeaderNode::Leaf { action, .. }) => assert_eq!(*action, Action::CommandPalette),
+            _ => panic!("expected CommandPalette leaf at '/'"),
         }
     }
 
@@ -1453,10 +1453,10 @@ min_pane_width = 80
             LeaderNode::Group { children, .. } => children,
             _ => panic!("root should be a Group"),
         };
-        let bs_key = KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE);
-        match children.get(&bs_key) {
+        let space_key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        match children.get(&space_key) {
             Some(LeaderNode::PassThrough) => {}
-            _ => panic!("expected PassThrough at '\\\\'"),
+            _ => panic!("expected PassThrough at space"),
         }
     }
 
