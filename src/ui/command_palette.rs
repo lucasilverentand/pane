@@ -28,8 +28,8 @@ pub struct CommandPaletteState {
 }
 
 impl CommandPaletteState {
-    pub fn new(keymap: &KeyMap) -> Self {
-        let all_commands = build_command_list(keymap);
+    pub fn new(global_keys: &KeyMap, normal_keys: &KeyMap) -> Self {
+        let all_commands = build_command_list(global_keys, normal_keys);
         let filtered = all_commands.clone();
         Self {
             input: String::new(),
@@ -67,19 +67,27 @@ impl CommandPaletteState {
 }
 
 /// Build a list of all available commands with display names, keybinding hints, and descriptions.
-pub fn build_command_list(keymap: &KeyMap) -> Vec<CommandEntry> {
+pub fn build_command_list(global_keys: &KeyMap, normal_keys: &KeyMap) -> Vec<CommandEntry> {
     let actions = all_actions();
-    let reverse = keymap.reverse_map();
+    let global_reverse = global_keys.reverse_map();
+    let normal_reverse = normal_keys.reverse_map();
 
     actions
         .into_iter()
         .map(|(action, display_name, description, category)| {
-            let keybind = reverse.get(&action).map(|keys| {
-                keys.iter()
-                    .map(|k| key_event_to_string(k))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            });
+            // Merge keybinds from both keymaps
+            let mut keys: Vec<String> = Vec::new();
+            if let Some(k) = normal_reverse.get(&action) {
+                keys.extend(k.iter().map(|k| key_event_to_string(k)));
+            }
+            if let Some(k) = global_reverse.get(&action) {
+                keys.extend(k.iter().map(|k| key_event_to_string(k)));
+            }
+            let keybind = if keys.is_empty() {
+                None
+            } else {
+                Some(keys.join(", "))
+            };
             CommandEntry {
                 action,
                 name: display_name,
@@ -680,15 +688,17 @@ mod tests {
 
     #[test]
     fn test_build_command_list_not_empty() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
+        let global_keys = KeyMap::from_defaults();
+        let normal_keys = KeyMap::normal_defaults();
+        let commands = build_command_list(&global_keys, &normal_keys);
         assert!(!commands.is_empty());
     }
 
     #[test]
     fn test_build_command_list_has_quit() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
+        let global_keys = KeyMap::from_defaults();
+        let normal_keys = KeyMap::normal_defaults();
+        let commands = build_command_list(&global_keys, &normal_keys);
         let quit = commands.iter().find(|e| e.action == Action::Quit);
         assert!(quit.is_some());
         let entry = quit.unwrap();
@@ -698,8 +708,9 @@ mod tests {
 
     #[test]
     fn test_build_command_list_has_categories() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
+        let global_keys = KeyMap::from_defaults();
+        let normal_keys = KeyMap::normal_defaults();
+        let commands = build_command_list(&global_keys, &normal_keys);
         let categories: Vec<&str> = commands.iter().map(|e| e.category).collect();
         assert!(categories.contains(&"Navigation"));
         assert!(categories.contains(&"Layout"));
@@ -711,40 +722,45 @@ mod tests {
 
     #[test]
     fn test_filter_commands_empty_query() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
+        let global_keys = KeyMap::from_defaults();
+        let normal_keys = KeyMap::normal_defaults();
+        let commands = build_command_list(&global_keys, &normal_keys);
         let filtered = filter_commands(&commands, "");
         assert_eq!(filtered.len(), commands.len());
     }
 
     #[test]
     fn test_filter_commands_by_name() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
+        let global_keys = KeyMap::from_defaults();
+        let normal_keys = KeyMap::normal_defaults();
+        let commands = build_command_list(&global_keys, &normal_keys);
         let filtered = filter_commands(&commands, "quit");
         assert!(filtered.iter().any(|e| e.action == Action::Quit));
     }
 
     #[test]
     fn test_filter_commands_by_category() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
+        let global_keys = KeyMap::from_defaults();
+        let normal_keys = KeyMap::normal_defaults();
+        let commands = build_command_list(&global_keys, &normal_keys);
         let filtered = filter_commands(&commands, "navigation");
         assert!(filtered.iter().any(|e| e.action == Action::FocusLeft));
     }
 
     #[test]
     fn test_filter_commands_case_insensitive() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
+        let global_keys = KeyMap::from_defaults();
+        let normal_keys = KeyMap::normal_defaults();
+        let commands = build_command_list(&global_keys, &normal_keys);
         let filtered = filter_commands(&commands, "QUIT");
         assert!(filtered.iter().any(|e| e.action == Action::Quit));
     }
 
     #[test]
     fn test_filter_commands_no_match() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
+        let global_keys = KeyMap::from_defaults();
+        let normal_keys = KeyMap::normal_defaults();
+        let commands = build_command_list(&global_keys, &normal_keys);
         let filtered = filter_commands(&commands, "zzzzzzzzz");
         assert!(filtered.is_empty());
     }
@@ -782,8 +798,9 @@ mod tests {
 
     #[test]
     fn test_command_palette_state_navigation() {
-        let keymap = KeyMap::from_defaults();
-        let mut state = CommandPaletteState::new(&keymap);
+        let global_keys = KeyMap::from_defaults();
+        let normal_keys = KeyMap::normal_defaults();
+        let mut state = CommandPaletteState::new(&global_keys, &normal_keys);
         assert_eq!(state.selected, 0);
         state.move_down();
         assert_eq!(state.selected, 1);
@@ -796,8 +813,9 @@ mod tests {
 
     #[test]
     fn test_command_palette_state_filter() {
-        let keymap = KeyMap::from_defaults();
-        let mut state = CommandPaletteState::new(&keymap);
+        let global_keys = KeyMap::from_defaults();
+        let normal_keys = KeyMap::normal_defaults();
+        let mut state = CommandPaletteState::new(&global_keys, &normal_keys);
         let total = state.filtered.len();
         state.input = "tab".to_string();
         state.update_filter();

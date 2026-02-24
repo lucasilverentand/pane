@@ -180,7 +180,7 @@ impl Default for StatusBarConfig {
             show_disk: false,
             update_interval_secs: 3,
             left: "".to_string(),
-            right: "#{cpu} #{mem} #{load}  SPC leader ".to_string(),
+            right: "#{cpu} #{mem} #{load}  SPC commands ".to_string(),
         }
     }
 }
@@ -1045,10 +1045,10 @@ mod tests {
     // --- KeyMap ---
 
     #[test]
-    fn test_keymap_defaults_quit() {
+    fn test_keymap_defaults_scroll_mode() {
         let km = KeyMap::from_defaults();
-        let key = make_key(KeyCode::Char('q'), KeyModifiers::CONTROL);
-        assert_eq!(km.lookup(&key), Some(&Action::Quit));
+        let key = make_key(KeyCode::PageUp, KeyModifiers::SHIFT);
+        assert_eq!(km.lookup(&key), Some(&Action::ScrollMode));
     }
 
     #[test]

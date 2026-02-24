@@ -19,7 +19,6 @@ use crate::config::{parse_key, Action, LeaderNode};
 
 pub fn global_defaults() -> Vec<(&'static str, Action)> {
     vec![
-        ("ctrl+q", Action::Quit),             // Quit pane entirely
         ("shift+pageup", Action::ScrollMode), // Enter scroll mode to browse output history
     ]
 }
@@ -51,6 +50,10 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         // ── Tabs ────────────────────────────────────────────────────────
         ("tab", Action::NextTab),       // Cycle to next tab in the active window
         ("shift+tab", Action::PrevTab), // Cycle to previous tab in the active window
+        ("]", Action::NextTab),         // Next tab (bracket)
+        ("[", Action::PrevTab),         // Previous tab (bracket)
+        ("shift+l", Action::NextTab),   // Next tab (shift+l)
+        ("shift+h", Action::PrevTab),   // Previous tab (shift+h)
         ("n", Action::NewTab),          // Open the tab picker to create a new tab
         ("x", Action::CloseTab),        // Close the active tab (and its pane)
         // ── Splits ──────────────────────────────────────────────────────
@@ -63,13 +66,8 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         ("shift+f", Action::NewFloat),  // Create a new floating pane
         ("=", Action::Equalize),        // Reset all panes to equal sizes
         // ── Resize ──────────────────────────────────────────────────────
-        ("shift+h", Action::ResizeShrinkH), // Shrink focused pane horizontally
-        ("shift+l", Action::ResizeGrowH),   // Grow focused pane horizontally
         ("shift+j", Action::ResizeGrowV),   // Grow focused pane vertically
         ("shift+k", Action::ResizeShrinkV), // Shrink focused pane vertically
-        // ── Workspaces ──────────────────────────────────────────────────
-        ("[", Action::PrevWorkspace),  // Switch to previous workspace
-        ("]", Action::NextWorkspace),  // Switch to next workspace
         // ── Move tabs ───────────────────────────────────────────────────
         ("alt+h", Action::MoveTabLeft),  // Move active tab to the window on the left
         ("alt+j", Action::MoveTabDown),  // Move active tab to the window below
@@ -82,6 +80,7 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         ("/", Action::CommandPalette), // Open the command palette
         ("?", Action::CommandPalette), // Open the command palette (alias)
         ("r", Action::RestartPane),    // Kill and restart the active pane's process
+        ("q", Action::CloseTab),       // Close the active tab (quit pane, server keeps running)
     ]
 }
 

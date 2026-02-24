@@ -69,7 +69,7 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
                 } else {
                     "SPC".to_string()
                 };
-                (format!("LEADER {}", path_str), "esc cancel ".to_string())
+                (format!("{} ...", path_str), "esc cancel ".to_string())
             }
             Overlay::TabPicker => (
                 "NEW TAB ".to_string(),

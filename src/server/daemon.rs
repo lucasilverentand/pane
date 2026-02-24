@@ -678,6 +678,14 @@ async fn handle_client(
             ClientRequest::KickClient(target_id) => {
                 let _ = broadcast_tx.send(ServerResponse::Kicked(target_id));
             }
+            ClientRequest::SetActiveWorkspace(ws) => {
+                let ws_count = state.lock().await.workspaces.len();
+                if ws < ws_count {
+                    clients.set_active_workspace(client_id, ws).await;
+                    let client_list = clients.list().await;
+                    let _ = broadcast_tx.send(ServerResponse::ClientListChanged(client_list));
+                }
+            }
             ClientRequest::Attach => {
                 // Already attached, ignore
             }

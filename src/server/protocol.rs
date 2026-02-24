@@ -144,6 +144,8 @@ pub enum ClientRequest {
     CommandSync(String),
     /// Kick another client by its ID.
     KickClient(u64),
+    /// Set this client's active workspace (client-side navigation, no broadcast).
+    SetActiveWorkspace(usize),
 }
 
 // ---------------------------------------------------------------------------

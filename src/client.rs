@@ -46,6 +46,8 @@ pub struct Client {
     pub client_picker_state: Option<crate::ui::client_picker::ClientPickerState>,
     ui_focus: UiFocus,
     pub should_quit: bool,
+    /// When true, auto-switch to the newest workspace on next layout update.
+    pending_new_workspace: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +79,7 @@ impl Client {
             client_picker_state: None,
             ui_focus: UiFocus::Panes,
             should_quit: false,
+            pending_new_workspace: false,
         }
     }
 
@@ -211,7 +214,9 @@ impl Client {
         Ok(())
     }
 
-    fn apply_layout(&mut self, render_state: RenderState) {
+    /// Apply a layout update from the server. Returns `Some(ws_index)` if the
+    /// client's active workspace changed and needs syncing back to the server.
+    fn apply_layout(&mut self, mut render_state: RenderState) -> Option<usize> {
         // Reconcile screen map: add new panes, remove dead ones
         let mut live_pane_ids: std::collections::HashSet<TabId> = std::collections::HashSet::new();
         for ws in &render_state.workspaces {
@@ -227,7 +232,27 @@ impl Client {
         }
         // Remove screens for panes that no longer exist
         self.screens.retain(|id, _| live_pane_ids.contains(id));
+
+        // Preserve this client's active workspace instead of using the broadcast value.
+        let prev_ws = self.render_state.active_workspace;
+        let new_ws_count = render_state.workspaces.len();
+        if self.pending_new_workspace && new_ws_count > self.render_state.workspaces.len() {
+            // Auto-switch to the newly created workspace.
+            render_state.active_workspace = new_ws_count.saturating_sub(1);
+            self.pending_new_workspace = false;
+        } else {
+            // Clamp to valid range (workspace may have been deleted)
+            render_state.active_workspace = self
+                .render_state
+                .active_workspace
+                .min(new_ws_count.saturating_sub(1));
+        }
+
+        let needs_sync = render_state.active_workspace != prev_ws;
+        let new_ws = render_state.active_workspace;
         self.render_state = render_state;
+
+        if needs_sync { Some(new_ws) } else { None }
     }
 
     async fn handle_event(
@@ -241,7 +266,11 @@ impl Client {
                 self.handle_terminal_event(app_event, tui, writer).await?;
             }
             ServerEvent::Server(response) => {
-                self.handle_server_response(response);
+                if let Some(ws_sync) = self.handle_server_response(response) {
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut *w, &ClientRequest::SetActiveWorkspace(ws_sync))
+                        .await;
+                }
             }
             ServerEvent::Disconnected => {
                 self.should_quit = true;
@@ -250,7 +279,9 @@ impl Client {
         Ok(())
     }
 
-    fn handle_server_response(&mut self, response: ServerResponse) {
+    /// Handle a server response. Returns `Some(ws_index)` if the client's workspace
+    /// changed and needs syncing back to the server registry.
+    fn handle_server_response(&mut self, response: ServerResponse) -> Option<usize> {
         match response {
             ServerResponse::PaneOutput { pane_id, data } => {
                 if let Some(parser) = self.screens.get_mut(&pane_id) {
@@ -263,8 +294,9 @@ impl Client {
                 }
             }
             ServerResponse::LayoutChanged { render_state } => {
-                self.apply_layout(render_state);
+                let sync = self.apply_layout(render_state);
                 self.update_terminal_title();
+                return sync;
             }
             ServerResponse::PaneExited { pane_id } => {
                 // Mark locally if needed — the server handles cleanup
@@ -292,6 +324,7 @@ impl Client {
             | ServerResponse::Attached { .. }
             | ServerResponse::CommandOutput { .. } => {}
         }
+        None
     }
 
     async fn handle_terminal_event(
@@ -355,18 +388,17 @@ impl Client {
                             match click {
                                 crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
                                     self.ui_focus = UiFocus::WorkspaceBar;
+                                    self.render_state.active_workspace = i;
                                     let mut w = writer.lock().await;
                                     let _ = send_request(
                                         &mut *w,
-                                        &ClientRequest::Command(format!(
-                                            "select-workspace -t {}",
-                                            i
-                                        )),
+                                        &ClientRequest::SetActiveWorkspace(i),
                                     )
                                     .await;
                                 }
                                 crate::ui::workspace_bar::WorkspaceBarClick::NewWorkspace => {
                                     self.ui_focus = UiFocus::WorkspaceBar;
+                                    self.pending_new_workspace = true;
                                     let mut w = writer.lock().await;
                                     let _ = send_request(
                                         &mut *w,
@@ -410,13 +442,20 @@ impl Client {
                 // Right-click handled client-side in future
             }
             AppEvent::Tick => {
-                if let Some(ref mut ls) = self.leader_state {
-                    if !ls.popup_visible {
-                        let elapsed = ls.entered_at.elapsed().as_millis() as u64;
-                        if elapsed >= self.config.leader.timeout_ms {
-                            ls.popup_visible = true;
-                        }
-                    }
+                // After leader timeout, open command palette instead of which_key popup
+                let should_open_palette = if let Some(ref ls) = self.leader_state {
+                    ls.entered_at.elapsed().as_millis() as u64 >= self.config.leader.timeout_ms
+                } else {
+                    false
+                };
+                if should_open_palette {
+                    self.leader_state = None;
+                    self.mode.dismiss_overlay();
+                    self.command_palette_state = Some(CommandPaletteState::new(
+                        &self.config.keys,
+                        &self.config.normal_keys,
+                    ));
+                    self.mode.push_overlay(Overlay::CommandPalette);
                 }
             }
             AppEvent::PtyOutput { .. } | AppEvent::PtyExited { .. } | AppEvent::SystemStats(_) => {
@@ -470,7 +509,7 @@ impl Client {
             return Ok(());
         }
 
-        // Check global keymap (ctrl+q etc.)
+        // Check global keymap (shift+pageup etc.)
         if let Some(action) = self.config.keys.lookup(&normalized).cloned() {
             return self.execute_action(action, tui, writer).await;
         }
@@ -504,7 +543,7 @@ impl Client {
             return Ok(());
         }
 
-        // Global keys (ctrl+q, shift+pageup, etc.)
+        // Global keys (shift+pageup, etc.)
         if let Some(action) = self.config.keys.lookup(&normalized).cloned() {
             return self.execute_action(action, tui, writer).await;
         }
@@ -541,7 +580,10 @@ impl Client {
                 return Ok(());
             }
             Action::Help => {
-                self.command_palette_state = Some(CommandPaletteState::new(&self.config.keys));
+                self.command_palette_state = Some(CommandPaletteState::new(
+                    &self.config.keys,
+                    &self.config.normal_keys,
+                ));
                 self.mode.push_overlay(Overlay::CommandPalette);
                 return Ok(());
             }
@@ -586,7 +628,10 @@ impl Client {
                 return Ok(());
             }
             Action::CommandPalette => {
-                self.command_palette_state = Some(CommandPaletteState::new(&self.config.keys));
+                self.command_palette_state = Some(CommandPaletteState::new(
+                    &self.config.keys,
+                    &self.config.normal_keys,
+                ));
                 self.mode.push_overlay(Overlay::CommandPalette);
                 return Ok(());
             }
@@ -624,14 +669,14 @@ impl Client {
             // Context-dependent navigation: workspace bar vs panes
             Action::FocusLeft => {
                 if self.ui_focus == UiFocus::WorkspaceBar {
-                    self.ui_focus = UiFocus::WorkspaceBar;
                     if self.render_state.active_workspace > 0 {
-                        let cmd = format!(
-                            "select-workspace -t {}",
-                            self.render_state.active_workspace - 1
-                        );
+                        self.render_state.active_workspace -= 1;
                         let mut w = writer.lock().await;
-                        let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                        let _ = send_request(
+                            &mut *w,
+                            &ClientRequest::SetActiveWorkspace(self.render_state.active_workspace),
+                        )
+                        .await;
                     }
                 } else {
                     let mut w = writer.lock().await;
@@ -645,16 +690,16 @@ impl Client {
             }
             Action::FocusRight => {
                 if self.ui_focus == UiFocus::WorkspaceBar {
-                    self.ui_focus = UiFocus::WorkspaceBar;
                     if self.render_state.active_workspace + 1
                         < self.render_state.workspaces.len()
                     {
-                        let cmd = format!(
-                            "select-workspace -t {}",
-                            self.render_state.active_workspace + 1
-                        );
+                        self.render_state.active_workspace += 1;
                         let mut w = writer.lock().await;
-                        let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                        let _ = send_request(
+                            &mut *w,
+                            &ClientRequest::SetActiveWorkspace(self.render_state.active_workspace),
+                        )
+                        .await;
                     }
                 } else {
                     let mut w = writer.lock().await;
@@ -697,11 +742,15 @@ impl Client {
             Action::FocusGroupN(n) => {
                 let n = *n;
                 if self.ui_focus == UiFocus::WorkspaceBar {
-                    self.ui_focus = UiFocus::WorkspaceBar;
-                    if (n as usize) <= self.render_state.workspaces.len() {
-                        let cmd = format!("select-workspace -t {}", (n as usize) - 1);
+                    let target = (n as usize) - 1;
+                    if target < self.render_state.workspaces.len() {
+                        self.render_state.active_workspace = target;
                         let mut w = writer.lock().await;
-                        let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                        let _ = send_request(
+                            &mut *w,
+                            &ClientRequest::SetActiveWorkspace(target),
+                        )
+                        .await;
                     }
                 } else {
                     let cmd = format!("select-window -t {}", (n as usize) - 1);
@@ -713,23 +762,98 @@ impl Client {
 
             Action::PrevWorkspace => {
                 if self.render_state.active_workspace > 0 {
-                    let cmd = format!(
-                        "select-workspace -t {}",
-                        self.render_state.active_workspace - 1
-                    );
+                    self.render_state.active_workspace -= 1;
                     let mut w = writer.lock().await;
-                    let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                    let _ = send_request(
+                        &mut *w,
+                        &ClientRequest::SetActiveWorkspace(self.render_state.active_workspace),
+                    )
+                    .await;
                 }
                 return Ok(());
             }
             Action::NextWorkspace => {
                 if self.render_state.active_workspace + 1 < self.render_state.workspaces.len() {
-                    let cmd = format!(
-                        "select-workspace -t {}",
-                        self.render_state.active_workspace + 1
-                    );
+                    self.render_state.active_workspace += 1;
                     let mut w = writer.lock().await;
-                    let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                    let _ = send_request(
+                        &mut *w,
+                        &ClientRequest::SetActiveWorkspace(self.render_state.active_workspace),
+                    )
+                    .await;
+                }
+                return Ok(());
+            }
+            Action::SwitchWorkspace(n) => {
+                let target = (*n as usize).saturating_sub(1);
+                if target < self.render_state.workspaces.len() {
+                    self.render_state.active_workspace = target;
+                    let mut w = writer.lock().await;
+                    let _ = send_request(
+                        &mut *w,
+                        &ClientRequest::SetActiveWorkspace(target),
+                    )
+                    .await;
+                }
+                return Ok(());
+            }
+            Action::NewWorkspace => {
+                self.pending_new_workspace = true;
+                let mut w = writer.lock().await;
+                let _ = send_request(
+                    &mut *w,
+                    &ClientRequest::Command("new-session -d -s workspace".to_string()),
+                )
+                .await;
+                return Ok(());
+            }
+
+            // NextTab/PrevTab: switch workspaces on workspace bar, switch tabs on panes
+            Action::NextTab => {
+                if self.ui_focus == UiFocus::WorkspaceBar {
+                    if self.render_state.active_workspace + 1
+                        < self.render_state.workspaces.len()
+                    {
+                        self.render_state.active_workspace += 1;
+                        let mut w = writer.lock().await;
+                        let _ = send_request(
+                            &mut *w,
+                            &ClientRequest::SetActiveWorkspace(
+                                self.render_state.active_workspace,
+                            ),
+                        )
+                        .await;
+                    }
+                } else {
+                    let mut w = writer.lock().await;
+                    let _ = send_request(
+                        &mut *w,
+                        &ClientRequest::Command("next-window".to_string()),
+                    )
+                    .await;
+                }
+                return Ok(());
+            }
+            Action::PrevTab => {
+                if self.ui_focus == UiFocus::WorkspaceBar {
+                    if self.render_state.active_workspace > 0 {
+                        self.render_state.active_workspace -= 1;
+                        let mut w = writer.lock().await;
+                        let _ = send_request(
+                            &mut *w,
+                            &ClientRequest::SetActiveWorkspace(
+                                self.render_state.active_workspace,
+                            ),
+                        )
+                        .await;
+                    }
+                } else {
+                    let mut w = writer.lock().await;
+                    let _ = send_request(
+                        &mut *w,
+                        &ClientRequest::Command("previous-window".to_string()),
+                    )
+                    .await;
                 }
                 return Ok(());
             }
@@ -1094,12 +1218,14 @@ async fn send_request(
 /// Translate an Action to a server command string.
 fn action_to_command(action: &Action) -> Option<String> {
     match action {
-        Action::NewWorkspace => Some("new-session -d -s workspace".to_string()),
+        // NewWorkspace is handled client-side in execute_action (sets pending flag)
+        Action::NewWorkspace => None,
         Action::CloseWorkspace => Some("close-workspace".to_string()),
-        Action::SwitchWorkspace(n) => Some(format!("select-workspace -t {}", (*n as usize) - 1)),
+        // SwitchWorkspace is handled client-side in execute_action
+        Action::SwitchWorkspace(_) => None,
         // Action::NewTab is handled client-side (opens picker)
-        Action::NextTab => Some("next-window".to_string()),
-        Action::PrevTab => Some("previous-window".to_string()),
+        // NextTab/PrevTab handled client-side in execute_action (context-dependent)
+        Action::NextTab | Action::PrevTab => None,
         Action::CloseTab => Some("kill-pane".to_string()),
         Action::SplitHorizontal => Some("split-window -h".to_string()),
         Action::SplitVertical => Some("split-window -v".to_string()),
