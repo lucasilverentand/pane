@@ -236,7 +236,10 @@ impl Client {
         // Preserve this client's active workspace instead of using the broadcast value.
         let prev_ws = self.render_state.active_workspace;
         let new_ws_count = render_state.workspaces.len();
-        if self.pending_new_workspace && new_ws_count > self.render_state.workspaces.len() {
+        if self.render_state.workspaces.is_empty() {
+            // First layout update — accept the server-provided workspace.
+            // (render_state.active_workspace is already set correctly by the server)
+        } else if self.pending_new_workspace && new_ws_count > self.render_state.workspaces.len() {
             // Auto-switch to the newly created workspace.
             render_state.active_workspace = new_ws_count.saturating_sub(1);
             self.pending_new_workspace = false;
