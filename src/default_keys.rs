@@ -165,6 +165,7 @@ pub fn default_leader_tree() -> LeaderNode {
         let mut children = HashMap::new();
         insert_leaf(&mut children, "p", Action::CommandPalette, "Palette");
         insert_leaf(&mut children, "d", Action::Detach, "Detach");
+        insert_leaf(&mut children, "c", Action::ClientPicker, "Clients");
         let key = parse_key("s").unwrap();
         root.insert(
             key,
@@ -202,24 +203,9 @@ pub fn default_leader_tree() -> LeaderNode {
         );
     }
 
-    // ── Resize group (space r) ──────────────────────────────────────────
-    // Grow or shrink the focused pane.
-    {
-        let mut children = HashMap::new();
-        insert_leaf(&mut children, "h", Action::ResizeShrinkH, "Shrink H");
-        insert_leaf(&mut children, "l", Action::ResizeGrowH, "Grow H");
-        insert_leaf(&mut children, "j", Action::ResizeGrowV, "Grow V");
-        insert_leaf(&mut children, "k", Action::ResizeShrinkV, "Shrink V");
-        insert_leaf(&mut children, "=", Action::Equalize, "Equalize");
-        let key = parse_key("r").unwrap();
-        root.insert(
-            key,
-            LeaderNode::Group {
-                label: "Resize".into(),
-                children,
-            },
-        );
-    }
+    // ── Resize mode (space r) ────────────────────────────────────────────
+    // Enter sticky resize mode (hjkl to resize, esc to exit).
+    insert_leaf(&mut root, "r", Action::ResizeMode, "Resize");
 
     // ── Root-level shortcuts ────────────────────────────────────────────
     // Two-key shortcuts that skip the group step for common actions.

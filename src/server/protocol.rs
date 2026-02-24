@@ -142,6 +142,8 @@ pub enum ClientRequest {
     /// Synchronous command: execute and return result on this stream, then disconnect.
     /// Used by the tmux shim for fire-and-forget commands.
     CommandSync(String),
+    /// Kick another client by its ID.
+    KickClient(u64),
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +152,7 @@ pub enum ClientRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerResponse {
-    Attached,
+    Attached { client_id: u64 },
     PaneOutput {
         pane_id: TabId,
         data: Vec<u8>,
@@ -169,8 +171,10 @@ pub enum ServerResponse {
         pane_id: TabId,
         data: Vec<u8>,
     },
-    /// Notify clients when the number of connected clients changes.
-    ClientCountChanged(u32),
+    /// Notify clients of the current client list (sent on connect/disconnect/kick).
+    ClientListChanged(Vec<ClientListEntry>),
+    /// Tells a specific client it has been kicked.
+    Kicked(u64),
     Error(String),
     /// Synchronous command result: output text, optional pane/window IDs, and success flag.
     CommandOutput {
@@ -179,6 +183,18 @@ pub enum ServerResponse {
         window_id: Option<u32>,
         success: bool,
     },
+}
+
+// ---------------------------------------------------------------------------
+// ClientListEntry: info about a connected client
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClientListEntry {
+    pub id: u64,
+    pub width: u16,
+    pub height: u16,
+    pub active_workspace: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +424,7 @@ mod tests {
     #[test]
     fn test_server_response_serialization() {
         let responses = vec![
-            ServerResponse::Attached,
+            ServerResponse::Attached { client_id: 0 },
             ServerResponse::PaneOutput {
                 pane_id: TabId::new_v4(),
                 data: vec![0x1b, b'[', b'H', b'e', b'l', b'l', b'o'],

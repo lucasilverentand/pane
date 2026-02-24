@@ -185,6 +185,8 @@ pub fn action_display_name(action: &Action) -> &str {
         Action::ResizeGrowH => "Grow Horizontally",
         Action::ResizeGrowV => "Grow Vertically",
         Action::ResizeShrinkV => "Shrink Vertically",
+        Action::ResizeMode => "Resize Mode",
+        Action::ClientPicker => "Manage Clients",
         Action::Equalize => "Equalize Panes",
         Action::SessionPicker => "Session Picker",
         Action::Help => "Help",
@@ -285,6 +287,12 @@ fn all_actions() -> Vec<(Action, String, String, &'static str)> {
             Action::ResizeShrinkV,
             "Shrink Vertically".into(),
             "Decrease the focused window height".into(),
+            "Layout",
+        ),
+        (
+            Action::ResizeMode,
+            "Resize Mode".into(),
+            "Enter resize mode (hjkl to resize, esc to exit)".into(),
             "Layout",
         ),
         (
@@ -445,6 +453,13 @@ fn all_actions() -> Vec<(Action, String, String, &'static str)> {
             "Toggle Sync Panes".into(),
             "Broadcast input to all panes in workspace".into(),
             "Tools",
+        ),
+        // Clients
+        (
+            Action::ClientPicker,
+            "Manage Clients".into(),
+            "View connected clients and kick sessions".into(),
+            "Session",
         ),
         // Session
         (

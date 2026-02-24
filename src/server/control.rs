@@ -72,7 +72,7 @@ pub async fn run_control_mode(
                     let _ = out.flush();
                     break;
                 }
-                ServerResponse::Attached => {
+                ServerResponse::Attached { .. } => {
                     let _ = writeln!(out, "%session-changed pane");
                 }
                 ServerResponse::Error(msg) => {
@@ -82,9 +82,10 @@ pub async fn run_control_mode(
                     let encoded = base64_encode(&data);
                     let _ = writeln!(out, "%screen-dump {} {}", pane_id, encoded);
                 }
-                ServerResponse::ClientCountChanged(count) => {
-                    let _ = writeln!(out, "%client-count {}", count);
+                ServerResponse::ClientListChanged(ref list) => {
+                    let _ = writeln!(out, "%client-count {}", list.len());
                 }
+                ServerResponse::Kicked(_) => {}
                 ServerResponse::CommandOutput { .. } => {
                     // CommandSync responses are sent directly, not broadcast
                 }

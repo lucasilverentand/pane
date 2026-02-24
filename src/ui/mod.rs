@@ -1,3 +1,4 @@
+pub mod client_picker;
 pub mod command_palette;
 pub mod format;
 pub mod layout_render;
@@ -230,6 +231,11 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
             Overlay::TabPicker => {
                 if let Some(ref tp_state) = client.tab_picker_state {
                     tab_picker::render(tp_state, theme, frame, frame.area());
+                }
+            }
+            Overlay::ClientPicker => {
+                if let Some(ref cp_state) = client.client_picker_state {
+                    client_picker::render(cp_state, theme, frame, frame.area());
                 }
             }
             _ => {}

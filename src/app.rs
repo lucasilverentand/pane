@@ -12,6 +12,8 @@ pub enum BaseMode {
 pub enum Overlay {
     Scroll,
     Copy,
+    Resize,
+    ClientPicker,
     CommandPalette,
     Confirm,
     Leader,

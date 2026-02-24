@@ -16,7 +16,8 @@ use crate::layout::{Side, SplitDirection, TabId};
 use crate::server::daemon;
 use crate::server::framing;
 use crate::server::protocol::{
-    ClientRequest, RenderState, SerializableKeyEvent, ServerResponse, WorkspaceSnapshot,
+    ClientListEntry, ClientRequest, RenderState, SerializableKeyEvent, ServerResponse,
+    WorkspaceSnapshot,
 };
 use crate::system_stats::SystemStats;
 use crate::tui::Tui;
@@ -32,7 +33,9 @@ pub struct Client {
     pub screens: HashMap<TabId, vt100::Parser>,
     pub system_stats: SystemStats,
     pub config: Config,
+    pub client_id: u64,
     pub client_count: u32,
+    pub client_list: Vec<ClientListEntry>,
     pub plugin_segments: Vec<Vec<crate::plugin::PluginSegment>>,
 
     // Client-only UI state
@@ -40,6 +43,7 @@ pub struct Client {
     pub command_palette_state: Option<CommandPaletteState>,
     pub copy_mode_state: Option<CopyModeState>,
     pub tab_picker_state: Option<TabPickerState>,
+    pub client_picker_state: Option<crate::ui::client_picker::ClientPickerState>,
     ui_focus: UiFocus,
     pub should_quit: bool,
 }
@@ -51,9 +55,9 @@ enum UiFocus {
 }
 
 impl Client {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, client_id: u64) -> Self {
         Self {
-            mode: Mode::interact(),
+            mode: Mode::normal(),
             render_state: RenderState {
                 workspaces: Vec::new(),
                 active_workspace: 0,
@@ -61,13 +65,16 @@ impl Client {
             screens: HashMap::new(),
             system_stats: SystemStats::default(),
             config,
+            client_id,
             client_count: 1,
+            client_list: Vec::new(),
             plugin_segments: Vec::new(),
 
             leader_state: None,
             command_palette_state: None,
             copy_mode_state: None,
             tab_picker_state: None,
+            client_picker_state: None,
             ui_focus: UiFocus::Panes,
             should_quit: false,
         }
@@ -100,13 +107,13 @@ impl Client {
 
         // Wait for Attached
         let resp: ServerResponse = framing::recv_required(&mut stream).await?;
-        match resp {
-            ServerResponse::Attached => {}
+        let my_client_id = match resp {
+            ServerResponse::Attached { client_id } => client_id,
             ServerResponse::Error(e) => anyhow::bail!("server error: {}", e),
             _ => anyhow::bail!("unexpected response: {:?}", resp),
         };
 
-        let mut client = Client::new(config);
+        let mut client = Client::new(config, my_client_id);
 
         // Read initial LayoutChanged
         let resp: ServerResponse = framing::recv_required(&mut stream).await?;
@@ -269,8 +276,14 @@ impl Client {
             ServerResponse::SessionEnded => {
                 self.should_quit = true;
             }
-            ServerResponse::ClientCountChanged(count) => {
-                self.client_count = count;
+            ServerResponse::ClientListChanged(list) => {
+                self.client_count = list.len() as u32;
+                self.client_list = list;
+            }
+            ServerResponse::Kicked(target_id) => {
+                if target_id == self.client_id {
+                    self.should_quit = true;
+                }
             }
             ServerResponse::PluginSegments(segments) => {
                 self.plugin_segments = segments;
@@ -424,6 +437,8 @@ impl Client {
             return match overlay {
                 Overlay::Scroll => self.handle_scroll_key(key, writer).await,
                 Overlay::Copy => self.handle_copy_mode_key(key),
+                Overlay::Resize => self.handle_resize_mode_key(key, writer).await,
+                Overlay::ClientPicker => self.handle_client_picker_key(key, writer).await,
                 Overlay::CommandPalette => {
                     self.handle_command_palette_key(key, tui, writer).await
                 }
@@ -532,6 +547,20 @@ impl Client {
             }
             Action::ScrollMode => {
                 self.mode.push_overlay(Overlay::Scroll);
+                return Ok(());
+            }
+            Action::ResizeMode => {
+                self.mode.push_overlay(Overlay::Resize);
+                return Ok(());
+            }
+            Action::ClientPicker => {
+                self.client_picker_state = Some(
+                    crate::ui::client_picker::ClientPickerState::new(
+                        &self.client_list,
+                        self.client_id,
+                    ),
+                );
+                self.mode.push_overlay(Overlay::ClientPicker);
                 return Ok(());
             }
             Action::CopyMode => {
@@ -857,6 +886,65 @@ impl Client {
         Ok(())
     }
 
+    async fn handle_resize_mode_key(
+        &mut self,
+        key: KeyEvent,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        let cmd = match key.code {
+            KeyCode::Esc => {
+                self.mode.dismiss_overlay();
+                return Ok(());
+            }
+            KeyCode::Char('h') | KeyCode::Left => Some("resize-pane -L"),
+            KeyCode::Char('l') | KeyCode::Right => Some("resize-pane -R"),
+            KeyCode::Char('j') | KeyCode::Down => Some("resize-pane -D"),
+            KeyCode::Char('k') | KeyCode::Up => Some("resize-pane -U"),
+            KeyCode::Char('=') => Some("equalize-layout"),
+            _ => None,
+        };
+        if let Some(cmd) = cmd {
+            let mut w = writer.lock().await;
+            let _ = send_request(&mut *w, &ClientRequest::Command(cmd.to_string())).await;
+        }
+        Ok(())
+    }
+
+    async fn handle_client_picker_key(
+        &mut self,
+        key: KeyEvent,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        let state = match self.client_picker_state.as_mut() {
+            Some(s) => s,
+            None => {
+                self.mode.dismiss_overlay();
+                return Ok(());
+            }
+        };
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.client_picker_state = None;
+                self.mode.dismiss_overlay();
+            }
+            KeyCode::Up | KeyCode::Char('k') => state.move_up(),
+            KeyCode::Down | KeyCode::Char('j') => state.move_down(),
+            KeyCode::Enter | KeyCode::Char('x') => {
+                if let Some(target_id) = state.selected_client_id() {
+                    if target_id != self.client_id {
+                        let mut w = writer.lock().await;
+                        let _ = send_request(&mut *w, &ClientRequest::KickClient(target_id)).await;
+                    }
+                }
+                self.client_picker_state = None;
+                self.mode.dismiss_overlay();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     async fn handle_command_palette_key(
         &mut self,
         key: KeyEvent,
@@ -1039,6 +1127,8 @@ fn action_to_command(action: &Action) -> Option<String> {
         | Action::Help
         | Action::ScrollMode
         | Action::CopyMode
+        | Action::ResizeMode
+        | Action::ClientPicker
         | Action::CommandPalette
         | Action::PasteClipboard
         | Action::EnterInteract

@@ -44,6 +44,14 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
                     "hjkl move  v select  y yank  / search  esc quit ".to_string(),
                 )
             }
+            Overlay::Resize => (
+                "RESIZE ".to_string(),
+                "hjkl resize  = equalize  esc exit ".to_string(),
+            ),
+            Overlay::ClientPicker => (
+                "CLIENTS ".to_string(),
+                "j/k select  x kick  esc close ".to_string(),
+            ),
             Overlay::CommandPalette => (
                 "CMD ".to_string(),
                 "type to filter  enter run  esc cancel ".to_string(),

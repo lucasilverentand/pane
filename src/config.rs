@@ -36,6 +36,8 @@ pub enum Action {
     ResizeGrowH,
     ResizeGrowV,
     ResizeShrinkV,
+    ResizeMode,
+    ClientPicker,
     Equalize,
     #[allow(dead_code)]
     SessionPicker,
@@ -281,6 +283,8 @@ fn action_name_map() -> HashMap<&'static str, Action> {
     m.insert("resize_grow_h", Action::ResizeGrowH);
     m.insert("resize_grow_v", Action::ResizeGrowV);
     m.insert("resize_shrink_v", Action::ResizeShrinkV);
+    m.insert("resize_mode", Action::ResizeMode);
+    m.insert("client_picker", Action::ClientPicker);
     m.insert("equalize", Action::Equalize);
     m.insert("session_picker", Action::SessionPicker);
     m.insert("help", Action::Help);
@@ -1216,7 +1220,7 @@ min_pane_width = 80
     }
 
     #[test]
-    fn test_default_leader_tree_has_resize_group() {
+    fn test_default_leader_tree_has_resize_mode() {
         let tree = crate::default_keys::default_leader_tree();
         let children = match &tree {
             LeaderNode::Group { children, .. } => children,
@@ -1224,8 +1228,11 @@ min_pane_width = 80
         };
         let r_key = parse_key("r").unwrap();
         match children.get(&r_key) {
-            Some(LeaderNode::Group { label, .. }) => assert_eq!(label, "Resize"),
-            _ => panic!("expected Resize group at 'r'"),
+            Some(LeaderNode::Leaf { action, label }) => {
+                assert_eq!(*action, Action::ResizeMode);
+                assert_eq!(label, "Resize");
+            }
+            _ => panic!("expected Resize leaf at 'r'"),
         }
     }
 

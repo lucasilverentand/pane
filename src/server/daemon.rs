@@ -92,6 +92,20 @@ impl ClientRegistry {
     async fn count(&self) -> usize {
         self.inner.lock().await.len()
     }
+
+    async fn list(&self) -> Vec<crate::server::protocol::ClientListEntry> {
+        self.inner
+            .lock()
+            .await
+            .iter()
+            .map(|(&id, info)| crate::server::protocol::ClientListEntry {
+                id,
+                width: info.width,
+                height: info.height,
+                active_workspace: info.active_workspace,
+            })
+            .collect()
+    }
 }
 
 /// Returns the socket directory: $TMPDIR/pane-{uid}/ or /tmp/pane-{uid}/
@@ -501,8 +515,8 @@ async fn handle_client(
         }
     };
 
-    // Send attached confirmation
-    framing::send(&mut stream, &ServerResponse::Attached).await?;
+    // Send attached confirmation with this client's ID
+    framing::send(&mut stream, &ServerResponse::Attached { client_id }).await?;
 
     // Register client with default size and current active workspace
     {
@@ -511,8 +525,8 @@ async fn handle_client(
         clients
             .register(client_id, w, h, state_guard.active_workspace)
             .await;
-        let count = clients.count().await as u32;
-        let _ = broadcast_tx.send(ServerResponse::ClientCountChanged(count));
+        let client_list = clients.list().await;
+        let _ = broadcast_tx.send(ServerResponse::ClientListChanged(client_list));
     }
 
     // Send initial layout state using this client's active workspace
@@ -661,6 +675,9 @@ async fn handle_client(
                     break;
                 }
             }
+            ClientRequest::KickClient(target_id) => {
+                let _ = broadcast_tx.send(ServerResponse::Kicked(target_id));
+            }
             ClientRequest::Attach => {
                 // Already attached, ignore
             }
@@ -675,8 +692,8 @@ async fn handle_client(
     // Client disconnected: unregister and recalculate effective size
     clients.unregister(client_id).await;
     {
-        let count = clients.count().await as u32;
-        let _ = broadcast_tx.send(ServerResponse::ClientCountChanged(count));
+        let client_list = clients.list().await;
+        let _ = broadcast_tx.send(ServerResponse::ClientListChanged(client_list));
     }
     if let Some((eff_w, eff_h)) = clients.min_size().await {
         let mut state = state.lock().await;
@@ -1036,21 +1053,21 @@ mod tests {
         (client_stream, handle, state)
     }
 
-    /// Helper: attach to the server and consume the initial Attached + LayoutChanged + ClientCountChanged messages.
+    /// Helper: attach to the server and consume the initial Attached + LayoutChanged + ClientListChanged messages.
     async fn attach_and_consume_initial(stream: &mut UnixStream) {
         framing::send(stream, &ClientRequest::Attach).await.unwrap();
 
         // Read Attached
         let resp: ServerResponse = framing::recv_required(stream).await.unwrap();
-        assert!(matches!(resp, ServerResponse::Attached));
+        assert!(matches!(resp, ServerResponse::Attached { .. }));
 
-        // Consume LayoutChanged and ClientCountChanged in any order
+        // Consume LayoutChanged and ClientListChanged in any order
         for _ in 0..2 {
             let resp: ServerResponse = framing::recv_required(stream).await.unwrap();
             match resp {
-                ServerResponse::LayoutChanged { .. } | ServerResponse::ClientCountChanged(_) => {}
+                ServerResponse::LayoutChanged { .. } | ServerResponse::ClientListChanged(_) => {}
                 other => panic!(
-                    "expected LayoutChanged or ClientCountChanged, got {:?}",
+                    "expected LayoutChanged or ClientListChanged, got {:?}",
                     other
                 ),
             }
