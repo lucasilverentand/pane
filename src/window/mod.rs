@@ -305,6 +305,10 @@ impl Tab {
     }
 
     pub fn resize_pty(&mut self, cols: u16, rows: u16) {
+        let screen = self.vt.screen();
+        if screen.size() == (rows, cols) {
+            return;
+        }
         if self.scroll_offset > 0 {
             self.scroll_to_bottom();
         }
