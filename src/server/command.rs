@@ -282,7 +282,7 @@ pub fn execute(
             }
             if let Some(new_focus) = ws.layout.close_pane(group_id) {
                 ws.groups.remove(&group_id);
-                ws.prune_leaf_min_sizes();
+                ws.prune_folded_windows();
                 ws.active_group = new_focus;
                 id_map.unregister_window(&group_id);
             }
@@ -292,8 +292,7 @@ pub fn execute(
 
         Command::SelectWindow { target } => {
             let group_id = resolve_window_target(Some(target), state, id_map)?;
-            let bar_h = state.workspace_bar_height();
-            state.focus_group(group_id, bar_h);
+            state.focus_group(group_id);
             broadcast_layout(state, broadcast_tx);
             Ok(CommandResult::LayoutChanged)
         }
@@ -406,7 +405,7 @@ pub fn execute(
                     let ws = state.active_workspace_mut();
                     if let Some(new_focus) = ws.layout.close_pane(_group_id) {
                         ws.groups.remove(&_group_id);
-                        ws.prune_leaf_min_sizes();
+                        ws.prune_folded_windows();
                         ws.active_group = new_focus;
                         id_map.unregister_window(&_group_id);
                         id_map.unregister_pane(&pane_id);
@@ -422,8 +421,7 @@ pub fn execute(
 
         Command::SelectPane { target, title } => {
             let group_id = resolve_pane_to_group(target, state, id_map)?;
-            let bar_h = state.workspace_bar_height();
-            state.focus_group(group_id, bar_h);
+            state.focus_group(group_id);
             if let Some(t) = title {
                 let ws = state.active_workspace_mut();
                 if let Some(group) = ws.groups.get_mut(&group_id) {
@@ -505,7 +503,6 @@ pub fn execute(
             for _ in 0..*amount {
                 state.active_workspace_mut().layout.resize(active, delta);
             }
-            state.update_leaf_mins();
             let (w, h) = state.last_size;
             state.resize_all_tabs(w, h);
             broadcast_layout(state, broadcast_tx);
@@ -575,7 +572,7 @@ pub fn execute(
 
         Command::EqualizeLayout => {
             state.active_workspace_mut().layout.equalize();
-            state.active_workspace_mut().leaf_min_sizes.clear();
+            state.active_workspace_mut().folded_windows.clear();
             let (w, h) = state.last_size;
             state.resize_all_tabs(w, h);
             broadcast_layout(state, broadcast_tx);
@@ -612,7 +609,7 @@ pub fn execute(
                 ws.saved_ratios = Some(ws.layout.clone());
                 ws.layout.maximize_leaf(active);
             }
-            ws.leaf_min_sizes.clear();
+            ws.folded_windows.clear();
             let (w, h) = state.last_size;
             state.resize_all_tabs(w, h);
             broadcast_layout(state, broadcast_tx);
@@ -929,7 +926,7 @@ mod tests {
     use crate::server::id_map::IdMap;
     use crate::window::{Tab, TabKind, Window, WindowId};
     use crate::workspace::Workspace;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use tokio::sync::mpsc;
 
     /// Build a ServerState without PTY spawning using spawn_error panes.
@@ -993,7 +990,7 @@ mod tests {
             layout,
             groups,
             active_group: gid1,
-            leaf_min_sizes: HashMap::new(),
+            folded_windows: HashSet::new(),
             sync_panes: false,
             zoomed_window: None,
             saved_ratios: None,
@@ -1317,15 +1314,11 @@ mod tests {
         // Active group changed to the second group
         let second_layout_id = layout_ids[1];
         assert_eq!(state.active_workspace().active_group, second_layout_id);
-        match &state.active_workspace().layout {
-            crate::layout::LayoutNode::Split { ratio, .. } => {
-                assert!(
-                    *ratio <= 0.1,
-                    "selecting a folded pane should unfold it and skew ratio"
-                );
-            }
-            _ => panic!("expected split layout"),
-        }
+        // With manual fold, focusing a window unfolds it but doesn't change the ratio
+        assert!(
+            !state.active_workspace().folded_windows.contains(&second_layout_id),
+            "focused window should not be folded"
+        );
     }
 
     #[test]
@@ -1395,12 +1388,12 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_kill_window_cleans_leaf_min_sizes() {
+    fn test_execute_kill_window_cleans_folded_windows() {
         let (mut state, mut id_map, broadcast_tx, gid1, gid2) = make_split_state();
         {
             let ws = state.active_workspace_mut();
-            ws.leaf_min_sizes.insert(gid1, (50, 10));
-            ws.leaf_min_sizes.insert(gid2, (60, 12));
+            ws.folded_windows.insert(gid1);
+            ws.folded_windows.insert(gid2);
         }
         let win_n = id_map.window_number(&gid1).unwrap();
         let cmd = Command::KillWindow {
@@ -1410,8 +1403,8 @@ mod tests {
 
         assert!(matches!(result, CommandResult::LayoutChanged));
         let ws = state.active_workspace();
-        assert!(!ws.leaf_min_sizes.contains_key(&gid1));
-        assert!(ws.leaf_min_sizes.contains_key(&gid2));
+        assert!(!ws.folded_windows.contains(&gid1));
+        assert!(ws.folded_windows.contains(&gid2));
     }
 
     #[test]
@@ -1467,15 +1460,11 @@ mod tests {
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(matches!(result, CommandResult::LayoutChanged));
         assert_eq!(state.active_workspace().active_group, gid2);
-        match &state.active_workspace().layout {
-            crate::layout::LayoutNode::Split { ratio, .. } => {
-                assert!(
-                    *ratio <= 0.1,
-                    "moving focus to a folded right pane should unfold it"
-                );
-            }
-            _ => panic!("expected split layout"),
-        }
+        // With manual fold, focusing a window unfolds it but doesn't change the ratio
+        assert!(
+            !state.active_workspace().folded_windows.contains(&gid2),
+            "focused window should not be folded"
+        );
     }
 
     #[test]

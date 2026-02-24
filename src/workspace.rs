@@ -18,9 +18,8 @@ pub struct Workspace {
     pub layout: LayoutNode,
     pub groups: HashMap<WindowId, Window>,
     pub active_group: WindowId,
-    /// Per-leaf custom minimum sizes set by user drag/resize.
-    /// Falls back to global config defaults when absent.
-    pub leaf_min_sizes: HashMap<WindowId, (u16, u16)>,
+    /// Windows that are manually folded (collapsed to a fold bar).
+    pub folded_windows: HashSet<WindowId>,
     /// When true, key input is broadcast to all panes in this workspace.
     pub sync_panes: bool,
     /// Zoomed window: when Some, this window renders fullscreen.
@@ -42,7 +41,7 @@ impl Workspace {
             layout,
             groups,
             active_group,
-            leaf_min_sizes: HashMap::new(),
+            folded_windows: HashSet::new(),
             sync_panes: false,
             zoomed_window: None,
             saved_ratios: None,
@@ -64,9 +63,10 @@ impl Workspace {
         self.layout.pane_ids()
     }
 
-    pub fn prune_leaf_min_sizes(&mut self) {
+    /// Remove folded entries for windows that no longer exist.
+    pub fn prune_folded_windows(&mut self) {
         let live_ids: HashSet<_> = self.layout.pane_ids().into_iter().collect();
-        self.leaf_min_sizes.retain(|id, _| live_ids.contains(id));
+        self.folded_windows.retain(|id| live_ids.contains(id));
     }
 }
 
@@ -212,34 +212,6 @@ mod tests {
     }
 
     #[test]
-    fn test_leaf_min_sizes_stale_entries_are_pruned() {
-        let (mut ws, gid1, _) = make_workspace();
-
-        // Add a second group and set leaf_min_sizes for both
-        let gid2 = WindowId::new_v4();
-        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t2");
-        ws.layout
-            .split_pane(gid1, crate::layout::SplitDirection::Horizontal, gid2);
-        ws.groups.insert(gid2, Window::new(gid2, p2));
-        ws.leaf_min_sizes.insert(gid1, (50, 10));
-        ws.leaf_min_sizes.insert(gid2, (60, 12));
-
-        // Close gid2 — leaf_min_sizes still has the entry for gid2 (stale)
-        ws.layout.close_pane(gid2);
-        ws.groups.remove(&gid2);
-
-        // Verify stale entry exists
-        assert!(ws.leaf_min_sizes.contains_key(&gid2));
-        assert!(!ws.layout.contains(gid2));
-
-        ws.prune_leaf_min_sizes();
-
-        // After cleanup, only gid1's entry remains
-        assert_eq!(ws.leaf_min_sizes.len(), 1);
-        assert!(ws.leaf_min_sizes.contains_key(&gid1));
-    }
-
-    #[test]
     fn test_multiple_groups_in_workspace() {
         let (mut ws, gid1, _) = make_workspace();
 
@@ -331,7 +303,6 @@ mod tests {
 
         // Equalize
         ws.layout.equalize();
-        ws.leaf_min_sizes.clear();
 
         fn check_ratios(n: &LayoutNode) {
             if let LayoutNode::Split {
@@ -347,6 +318,5 @@ mod tests {
             }
         }
         check_ratios(&ws.layout);
-        assert!(ws.leaf_min_sizes.is_empty());
     }
 }

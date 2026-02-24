@@ -1,39 +1,9 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use serde::{Deserialize, Serialize};
 
-use crate::config::Behavior;
-
 pub type TabId = uuid::Uuid;
-
-#[derive(Clone, Copy, Debug)]
-pub struct LayoutParams {
-    pub min_pane_width: u16,
-    pub min_pane_height: u16,
-    #[allow(dead_code)]
-    pub fold_bar_size: u16,
-}
-
-impl Default for LayoutParams {
-    fn default() -> Self {
-        Self {
-            min_pane_width: 80,
-            min_pane_height: 20,
-            fold_bar_size: 1,
-        }
-    }
-}
-
-impl From<&Behavior> for LayoutParams {
-    fn from(b: &Behavior) -> Self {
-        Self {
-            min_pane_width: b.min_pane_width,
-            min_pane_height: b.min_pane_height,
-            fold_bar_size: b.fold_bar_size,
-        }
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolvedPane {
@@ -129,33 +99,39 @@ impl LayoutNode {
         (chunks[0], chunks[1])
     }
 
-    /// Resolve with automatic folding: panes too small get collapsed to a fold bar.
-    /// `leaf_mins` provides per-leaf custom minimum sizes (from user drag/resize),
-    /// falling back to params.min_pane_width / min_pane_height when absent.
-    pub fn resolve_with_fold(
+    /// Resolve layout with manual folds: windows in `folded` are collapsed
+    /// to a fold bar while siblings get proportionally more space.
+    pub fn resolve_with_folds(
         &self,
         area: Rect,
-        params: LayoutParams,
-        leaf_mins: &HashMap<TabId, (u16, u16)>,
+        folded: &HashSet<TabId>,
     ) -> Vec<ResolvedPane> {
         let mut result = Vec::new();
-        self.resolve_fold_inner(area, params, leaf_mins, &mut result);
+        self.resolve_folds_inner(area, folded, &mut result);
         result
     }
 
-    fn resolve_fold_inner(
+    fn resolve_folds_inner(
         &self,
         area: Rect,
-        params: LayoutParams,
-        leaf_mins: &HashMap<TabId, (u16, u16)>,
+        folded: &HashSet<TabId>,
         result: &mut Vec<ResolvedPane>,
     ) {
         match self {
             LayoutNode::Leaf(id) => {
-                result.push(ResolvedPane::Visible {
-                    id: *id,
-                    rect: area,
-                });
+                if folded.contains(id) {
+                    // Should not happen at top level — a lone leaf can't be folded.
+                    // Render it visible as a fallback.
+                    result.push(ResolvedPane::Visible {
+                        id: *id,
+                        rect: area,
+                    });
+                } else {
+                    result.push(ResolvedPane::Visible {
+                        id: *id,
+                        rect: area,
+                    });
+                }
             }
             LayoutNode::Split {
                 direction,
@@ -163,145 +139,43 @@ impl LayoutNode {
                 first,
                 second,
             } => {
-                let (first_rect, second_rect) = Self::split_rects(direction, *ratio, area);
+                let first_all_folded = first.all_leaves_folded(folded);
+                let second_all_folded = second.all_leaves_folded(folded);
 
-                let (first_min_w, first_min_h) = first.subtree_min_size(params, leaf_mins);
-                let (second_min_w, second_min_h) = second.subtree_min_size(params, leaf_mins);
-
-                let (total, first_size, first_min, second_min) = match direction {
-                    SplitDirection::Horizontal => {
-                        (area.width, first_rect.width, first_min_w, second_min_w)
-                    }
-                    SplitDirection::Vertical => {
-                        (area.height, first_rect.height, first_min_h, second_min_h)
-                    }
-                };
-                let second_size = total.saturating_sub(first_size);
-
-                // Case 1: Both fit at proportional sizes — no fold
-                if first_size >= first_min && second_size >= second_min {
-                    first.resolve_fold_inner(first_rect, params, leaf_mins, result);
-                    second.resolve_fold_inner(second_rect, params, leaf_mins, result);
-                }
-                // Case 2: Total can fit both minimums — clamp sizes
-                else if total >= first_min + second_min {
-                    let (adj_first, adj_second) = if first_size < first_min {
-                        Self::split_rects_clamped(direction, area, first_min, total - first_min)
-                    } else {
-                        Self::split_rects_clamped(direction, area, total - second_min, second_min)
-                    };
-                    first.resolve_fold_inner(adj_first, params, leaf_mins, result);
-                    second.resolve_fold_inner(adj_second, params, leaf_mins, result);
-                }
-                // Case 3: Not enough space for both — must fold one
-                else {
+                if first_all_folded && second_all_folded {
+                    // Both sides fully folded — fold everything
+                    Self::fold_subtree(self, area, *direction, result);
+                } else if first_all_folded {
+                    // Fold first, give remaining space to second
                     let fl = first.fold_cell_count(*direction);
+                    let (bar, expanded) =
+                        Self::fold_redistribute(direction, area, false, fl);
+                    Self::fold_subtree(first, bar, *direction, result);
+                    second.resolve_folds_inner(expanded, folded, result);
+                } else if second_all_folded {
+                    // Fold second, give remaining space to first
                     let sl = second.fold_cell_count(*direction);
-                    // Folding a subtree costs fold_cell_count cells
-                    let first_fits_alone = total >= first_min + sl;
-                    let second_fits_alone = total >= second_min + fl;
-
-                    match (first_fits_alone, second_fits_alone) {
-                        (true, true) => {
-                            // Both could fit alone. Use ratio to decide which to fold.
-                            // ratio < 0.5 → first intended small → fold first
-                            // ratio >= 0.5 → second intended small → fold second (right/bottom)
-                            if *ratio < 0.5 {
-                                let (bar, expanded) =
-                                    Self::fold_redistribute(direction, area, false, fl);
-                                Self::fold_subtree(first, bar, *direction, result);
-                                second.resolve_fold_inner(expanded, params, leaf_mins, result);
-                            } else {
-                                let (expanded, bar) =
-                                    Self::fold_redistribute(direction, area, true, sl);
-                                first.resolve_fold_inner(expanded, params, leaf_mins, result);
-                                Self::fold_subtree(second, bar, *direction, result);
-                            }
-                        }
-                        (true, false) => {
-                            // Only first fits alone — fold second
-                            let (expanded, bar) =
-                                Self::fold_redistribute(direction, area, true, sl);
-                            first.resolve_fold_inner(expanded, params, leaf_mins, result);
-                            Self::fold_subtree(second, bar, *direction, result);
-                        }
-                        (false, true) => {
-                            // Only second fits alone — fold first
-                            let (bar, expanded) =
-                                Self::fold_redistribute(direction, area, false, fl);
-                            Self::fold_subtree(first, bar, *direction, result);
-                            second.resolve_fold_inner(expanded, params, leaf_mins, result);
-                        }
-                        (false, false) => {
-                            // Neither fits alone — keep first (left/top), fold second
-                            let (expanded, bar) =
-                                Self::fold_redistribute(direction, area, true, sl);
-                            Self::fold_subtree(second, bar, *direction, result);
-                            first.resolve_fold_inner(expanded, params, leaf_mins, result);
-                        }
-                    }
+                    let (expanded, bar) =
+                        Self::fold_redistribute(direction, area, true, sl);
+                    first.resolve_folds_inner(expanded, folded, result);
+                    Self::fold_subtree(second, bar, *direction, result);
+                } else {
+                    // Neither fully folded — proportional split as normal
+                    let (first_rect, second_rect) = Self::split_rects(direction, *ratio, area);
+                    first.resolve_folds_inner(first_rect, folded, result);
+                    second.resolve_folds_inner(second_rect, folded, result);
                 }
             }
         }
     }
 
-    /// Compute the minimum size a subtree needs to display at least one pane.
-    fn subtree_min_size(
-        &self,
-        params: LayoutParams,
-        leaf_mins: &HashMap<TabId, (u16, u16)>,
-    ) -> (u16, u16) {
+    /// Check if all leaves in a subtree are in the folded set.
+    fn all_leaves_folded(&self, folded: &HashSet<TabId>) -> bool {
         match self {
-            LayoutNode::Leaf(id) => leaf_mins
-                .get(id)
-                .copied()
-                .unwrap_or((params.min_pane_width, params.min_pane_height)),
-            LayoutNode::Split {
-                direction,
-                first,
-                second,
-                ..
-            } => {
-                let (fw, fh) = first.subtree_min_size(params, leaf_mins);
-                let (sw, sh) = second.subtree_min_size(params, leaf_mins);
-                let fl = first.fold_cell_count(*direction);
-                let sl = second.fold_cell_count(*direction);
-                // When one child folds, it takes fold_cell_count cells.
-                // Option A: show first, fold second → first_min + second_fold_cells
-                // Option B: show second, fold first → second_min + first_fold_cells
-                // Min = whichever option is smaller.
-                match direction {
-                    SplitDirection::Horizontal => {
-                        let a = fw + sl;
-                        let b = sw + fl;
-                        (a.min(b), fh.max(sh))
-                    }
-                    SplitDirection::Vertical => {
-                        let a = fh + sl;
-                        let b = sh + fl;
-                        (fw.max(sw), a.min(b))
-                    }
-                }
+            LayoutNode::Leaf(id) => folded.contains(id),
+            LayoutNode::Split { first, second, .. } => {
+                first.all_leaves_folded(folded) && second.all_leaves_folded(folded)
             }
-        }
-    }
-
-    /// Create two rects with exact pixel sizes (for clamping).
-    fn split_rects_clamped(
-        direction: &SplitDirection,
-        area: Rect,
-        first_size: u16,
-        second_size: u16,
-    ) -> (Rect, Rect) {
-        match direction {
-            SplitDirection::Horizontal => (
-                Rect::new(area.x, area.y, first_size, area.height),
-                Rect::new(area.x + first_size, area.y, second_size, area.height),
-            ),
-            SplitDirection::Vertical => (
-                Rect::new(area.x, area.y, area.width, first_size),
-                Rect::new(area.x, area.y + first_size, area.width, second_size),
-            ),
         }
     }
 
@@ -420,92 +294,6 @@ impl LayoutNode {
                     Self::fold_subtree(first, first_bar, fold_direction, result);
                     Self::fold_subtree(second, second_bar, fold_direction, result);
                 }
-            }
-        }
-    }
-
-    /// Unfold a pane by resetting its parent split ratio to 0.5.
-    /// Returns true if the target was found and the parent ratio was reset.
-    #[cfg(test)]
-    pub fn unfold(&mut self, target: TabId) -> bool {
-        match self {
-            LayoutNode::Leaf(_) => false,
-            LayoutNode::Split {
-                ratio,
-                first,
-                second,
-                ..
-            } => {
-                let in_first = first.contains(target);
-                let in_second = second.contains(target);
-                if in_first || in_second {
-                    // Check if target is a direct child
-                    let is_direct = matches!(first.as_ref(), LayoutNode::Leaf(id) if *id == target)
-                        || matches!(second.as_ref(), LayoutNode::Leaf(id) if *id == target);
-                    if is_direct {
-                        *ratio = 0.5;
-                        return true;
-                    }
-                    // Also check if target is the first leaf of a subtree child
-                    if (in_first && first.first_leaf() == target)
-                        || (in_second && second.first_leaf() == target)
-                    {
-                        *ratio = 0.5;
-                        return true;
-                    }
-                    // Recurse
-                    if in_first {
-                        return first.unfold(target);
-                    }
-                    return second.unfold(target);
-                }
-                false
-            }
-        }
-    }
-
-    /// Unfold a pane by skewing the ratio at the split responsible for
-    /// folding the target. Skews only that one split — inner ratios are
-    /// preserved so subtree proportions remain stable across fold/unfold.
-    pub fn unfold_towards(&mut self, target: TabId) -> bool {
-        match self {
-            LayoutNode::Leaf(_) => false,
-            LayoutNode::Split {
-                direction,
-                ratio,
-                first,
-                second,
-                ..
-            } => {
-                let in_first = first.contains(target);
-                let in_second = second.contains(target);
-                if !(in_first || in_second) {
-                    return false;
-                }
-
-                // Check if the child containing the target is a same-direction
-                // split — if so, the fold might be internal and we should try
-                // recursing first to avoid changing our ratio unnecessarily.
-                let child_is_same_dir_split = {
-                    let child: &LayoutNode = if in_first { first } else { second };
-                    matches!(child, LayoutNode::Split { direction: d, .. } if *d == *direction)
-                };
-                if child_is_same_dir_split {
-                    let child = if in_first {
-                        first.as_mut()
-                    } else {
-                        second.as_mut()
-                    };
-                    if child.unfold_towards(target) {
-                        return true;
-                    }
-                }
-
-                // The fold is at this level (target is a direct child, in a
-                // cross-direction subtree, or same-direction recursion didn't
-                // find a deeper match). Skew ratio to give space to the target.
-                *ratio = if in_first { 0.9 } else { 0.1 };
-                true
             }
         }
     }
@@ -1270,448 +1058,179 @@ mod tests {
         assert_eq!(node.pane_ids(), deserialized.pane_ids());
     }
 
-    // --- Fold tests ---
+
+    // --- Manual fold tests ---
 
     #[test]
-    fn test_fold_both_fit() {
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        let node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.5,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        // Plenty of space — no folding (each side gets 150, well above MIN_PANE_WIDTH=100)
-        let area = Rect::new(0, 0, 300, 50);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-        assert_eq!(resolved.len(), 2);
-        assert!(matches!(resolved[0], ResolvedPane::Visible { id, .. } if id == id1));
-        assert!(matches!(resolved[1], ResolvedPane::Visible { id, .. } if id == id2));
-    }
-
-    #[test]
-    fn test_fold_second_too_narrow() {
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        // Ratio 0.9 on 120 wide: second gets ~12 cols, which is < MIN_PANE_WIDTH(100)
-        let node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.9,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        let area = Rect::new(0, 0, 120, 10);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-        assert_eq!(resolved.len(), 2);
-        assert!(matches!(resolved[0], ResolvedPane::Visible { id, .. } if id == id1));
-        assert!(
-            matches!(resolved[1], ResolvedPane::Folded { id, rect, direction: SplitDirection::Horizontal } if id == id2 && rect.width == LayoutParams::default().fold_bar_size)
-        );
-    }
-
-    #[test]
-    fn test_fold_first_too_narrow() {
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        // Ratio 0.1 on 120 wide: first gets ~12 cols, which is < MIN_PANE_WIDTH(100)
-        let node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.1,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        let area = Rect::new(0, 0, 120, 10);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-        assert_eq!(resolved.len(), 2);
-        assert!(
-            matches!(resolved[0], ResolvedPane::Folded { id, rect, direction: SplitDirection::Horizontal } if id == id1 && rect.width == LayoutParams::default().fold_bar_size)
-        );
-        assert!(matches!(resolved[1], ResolvedPane::Visible { id, .. } if id == id2));
-    }
-
-    #[test]
-    fn test_fold_both_too_small_keeps_one_visible() {
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        // Total width 80 with 50/50 split → each gets ~40, both < MIN_PANE_WIDTH(80)
-        // Neither fits alone with fold bar (80 < 81). Fallback: fold second, keep first.
-        let node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.5,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        let area = Rect::new(0, 0, 80, 10);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-        assert_eq!(resolved.len(), 2);
-        // (false,false) case: fold_subtree pushes second first, then first resolves
-        let second_folded = resolved
-            .iter()
-            .any(|rp| matches!(rp, ResolvedPane::Folded { id, .. } if *id == id2));
-        let first_visible = resolved
-            .iter()
-            .any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id1));
-        assert!(first_visible, "first (left) should be visible");
-        assert!(second_folded, "second (right) should be folded");
-    }
-
-    #[test]
-    fn test_fold_nested_subtree() {
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        let id3 = TabId::new_v4();
-        // Right subtree is a split of id2/id3. With ratio 0.9 on 150 wide,
-        // right gets ~15 cols which is < MIN_PANE_WIDTH(80), so entire subtree folds.
-        let node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.9,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Split {
-                direction: SplitDirection::Horizontal,
-                ratio: 0.5,
-                first: Box::new(LayoutNode::Leaf(id2)),
-                second: Box::new(LayoutNode::Leaf(id3)),
-            }),
-        };
-        let area = Rect::new(0, 0, 150, 10);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-        assert_eq!(resolved.len(), 3);
-        // First visible (gets 148 cols, 2 taken by fold bars)
-        assert!(matches!(resolved[0], ResolvedPane::Visible { id, .. } if id == id1));
-        // Each folded leaf gets its own 1-cell bar
-        assert!(
-            matches!(resolved[1], ResolvedPane::Folded { id, rect, .. } if id == id2 && rect.width == 1)
-        );
-        assert!(
-            matches!(resolved[2], ResolvedPane::Folded { id, rect, .. } if id == id3 && rect.width == 1)
-        );
-    }
-
-    #[test]
-    fn test_single_leaf_never_folds() {
+    fn test_manual_fold_single_leaf_stays_visible() {
         let id = TabId::new_v4();
         let node = LayoutNode::Leaf(id);
-        // Even with very small area, a lone leaf is always Visible
-        let area = Rect::new(0, 0, 3, 2);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
+        let area = Rect::new(0, 0, 100, 50);
+        // A lone leaf in the folded set is still visible (can't fold the only pane)
+        let mut folded = HashSet::new();
+        folded.insert(id);
+        let resolved = node.resolve_with_folds(area, &folded);
         assert_eq!(resolved.len(), 1);
         assert!(matches!(resolved[0], ResolvedPane::Visible { id: rid, .. } if rid == id));
     }
 
     #[test]
-    fn test_unfold_resets_ratio() {
+    fn test_manual_fold_one_side() {
         let id1 = TabId::new_v4();
         let id2 = TabId::new_v4();
-        let mut node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.9,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        assert!(node.unfold(id2));
-        if let LayoutNode::Split { ratio, .. } = &node {
-            assert!((*ratio - 0.5).abs() < f64::EPSILON);
-        } else {
-            panic!("Expected Split");
-        }
-    }
-
-    #[test]
-    fn test_unfold_towards_skews_ratio() {
-        // Two panes in horizontal split, ratio=0.9 means id1 is big, id2 is folded.
-        // Clicking id2 should skew ratio to 0.1 so id2 gets the space.
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        let mut node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.9,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        assert!(node.unfold_towards(id2));
-        if let LayoutNode::Split { ratio, .. } = &node {
-            assert!((*ratio - 0.1).abs() < f64::EPSILON);
-        } else {
-            panic!("Expected Split");
-        }
-    }
-
-    #[test]
-    fn test_unfold_towards_first_child() {
-        // id1 is folded (ratio=0.1), clicking it should set ratio to 0.9
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        let mut node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.1,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        assert!(node.unfold_towards(id1));
-        if let LayoutNode::Split { ratio, .. } = &node {
-            assert!((*ratio - 0.9).abs() < f64::EPSILON);
-        } else {
-            panic!("Expected Split");
-        }
-    }
-
-    #[test]
-    fn test_unfold_towards_same_direction_recurses() {
-        // [id1 | [id2 | id3]] both horizontal. Inner ratio 0.9 causes id3 to fold.
-        // unfold_towards(id3) recurses into the same-direction child and skews
-        // the inner ratio to 0.1 (give space to id3). Outer ratio is preserved.
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        let id3 = TabId::new_v4();
-        let mut node = LayoutNode::Split {
+        let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
             first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Split {
-                direction: SplitDirection::Horizontal,
-                ratio: 0.9,
-                first: Box::new(LayoutNode::Leaf(id2)),
-                second: Box::new(LayoutNode::Leaf(id3)),
-            }),
-        };
-        assert!(node.unfold_towards(id3));
-
-        if let LayoutNode::Split { ratio, second, .. } = &node {
-            // Outer ratio preserved — the inner split handled the unfold
-            assert!((*ratio - 0.5).abs() < f64::EPSILON);
-            // Inner ratio skewed to give id3 space
-            if let LayoutNode::Split {
-                ratio: inner_ratio, ..
-            } = second.as_ref()
-            {
-                assert!((*inner_ratio - 0.1).abs() < f64::EPSILON);
-            }
-        }
-    }
-
-    #[test]
-    fn test_unfold_towards_cross_direction_preserves_inner() {
-        // [id1 | Split(V) → [id2, id3]] with outer ratio 0.9.
-        // The vertical subtree is cross-direction, folds as a unit at outer level.
-        // Clicking id3 should skew outer ratio to 0.1 (give space to second),
-        // preserving inner vertical ratio at 0.3.
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        let id3 = TabId::new_v4();
-        let mut node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.9,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Split {
-                direction: SplitDirection::Vertical,
-                ratio: 0.3,
-                first: Box::new(LayoutNode::Leaf(id2)),
-                second: Box::new(LayoutNode::Leaf(id3)),
-            }),
-        };
-        assert!(node.unfold_towards(id3));
-
-        if let LayoutNode::Split { ratio, second, .. } = &node {
-            // Outer ratio skewed to give space to right subtree
-            assert!((*ratio - 0.1).abs() < f64::EPSILON);
-            // Inner vertical ratio preserved at 0.3
-            if let LayoutNode::Split {
-                ratio: inner_ratio, ..
-            } = second.as_ref()
-            {
-                assert!((*inner_ratio - 0.3).abs() < f64::EPSILON);
-            }
-        }
-    }
-
-    #[test]
-    fn test_fold_vertical_split() {
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        // Ratio 0.9 vertical on 30 rows: first=27, second=3.
-        // 3 < min_pane_height(20), total 30 < 20+21=41 → case 3.
-        // first_fits_alone: 30 >= 20+1 → true. second_fits_alone: 30 >= 20+1 → true.
-        // ratio 0.9 >= 0.5 → fold second.
-        let node = LayoutNode::Split {
-            direction: SplitDirection::Vertical,
-            ratio: 0.9,
-            first: Box::new(LayoutNode::Leaf(id1)),
             second: Box::new(LayoutNode::Leaf(id2)),
         };
-        let area = Rect::new(0, 0, 200, 30);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
+        let area = Rect::new(0, 0, 200, 50);
+        let mut folded = HashSet::new();
+        folded.insert(id2);
+        let resolved = node.resolve_with_folds(area, &folded);
         assert_eq!(resolved.len(), 2);
         assert!(matches!(resolved[0], ResolvedPane::Visible { id, .. } if id == id1));
-        assert!(
-            matches!(resolved[1], ResolvedPane::Folded { id, rect, direction: SplitDirection::Vertical } if id == id2 && rect.height == LayoutParams::default().fold_bar_size)
-        );
+        assert!(matches!(resolved[1], ResolvedPane::Folded { id, direction: SplitDirection::Horizontal, .. } if id == id2));
+        // Visible pane should get most of the space
+        if let ResolvedPane::Visible { rect, .. } = &resolved[0] {
+            assert!(rect.width > 190, "visible pane should get most space");
+        }
     }
 
-    // --- Clamping & leaf_min tests ---
-
     #[test]
-    fn test_leaf_min_prevents_fold() {
+    fn test_manual_fold_first_side() {
         let id1 = TabId::new_v4();
         let id2 = TabId::new_v4();
-        // 140 wide, ratio 0.7: first=98, second=42
-        // Without leaf_mins: total 140 < 80+80=160 → fold. ratio 0.7 → fold second.
-        // With leaf_min(id2)=(50,4): total 140 >= 80+50=130 → clamp. Both visible!
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
-            ratio: 0.7,
+            ratio: 0.5,
             first: Box::new(LayoutNode::Leaf(id1)),
             second: Box::new(LayoutNode::Leaf(id2)),
         };
-        let area = Rect::new(0, 0, 140, 10);
+        let area = Rect::new(0, 0, 200, 50);
+        let mut folded = HashSet::new();
+        folded.insert(id1);
+        let resolved = node.resolve_with_folds(area, &folded);
+        assert_eq!(resolved.len(), 2);
+        assert!(matches!(resolved[0], ResolvedPane::Folded { id, .. } if id == id1));
+        assert!(matches!(resolved[1], ResolvedPane::Visible { id, .. } if id == id2));
+    }
 
-        // Without leaf_mins: second folds
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-        let second_folded = resolved
-            .iter()
-            .any(|rp| matches!(rp, ResolvedPane::Folded { id, .. } if *id == id2));
-        assert!(second_folded, "second should fold without leaf_mins");
+    #[test]
+    fn test_manual_fold_both_sides() {
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        let area = Rect::new(0, 0, 200, 50);
+        let mut folded = HashSet::new();
+        folded.insert(id1);
+        folded.insert(id2);
+        let resolved = node.resolve_with_folds(area, &folded);
+        assert_eq!(resolved.len(), 2);
+        assert!(matches!(resolved[0], ResolvedPane::Folded { id, .. } if id == id1));
+        assert!(matches!(resolved[1], ResolvedPane::Folded { id, .. } if id == id2));
+    }
 
-        // With leaf_min for id2: no fold (clamping works)
-        let mut leaf_mins = HashMap::new();
-        leaf_mins.insert(id2, (50u16, 4u16));
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &leaf_mins);
+    #[test]
+    fn test_manual_fold_no_folds() {
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        let area = Rect::new(0, 0, 200, 50);
+        let folded = HashSet::new();
+        let resolved = node.resolve_with_folds(area, &folded);
         assert_eq!(resolved.len(), 2);
         assert!(matches!(resolved[0], ResolvedPane::Visible { id, .. } if id == id1));
         assert!(matches!(resolved[1], ResolvedPane::Visible { id, .. } if id == id2));
     }
 
     #[test]
-    fn test_clamping_respects_minimums() {
+    fn test_manual_fold_nested_subtree() {
         let id1 = TabId::new_v4();
         let id2 = TabId::new_v4();
-        // 200 wide, ratio 0.8 → first=160, second=40
-        // leaf_min for id2=60: total 200 >= 80+60=140, case 2 (clamp)
-        // second should get at least 60
-        let node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.8,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        let area = Rect::new(0, 0, 200, 10);
-        let mut leaf_mins = HashMap::new();
-        leaf_mins.insert(id2, (60u16, 4u16));
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &leaf_mins);
-        assert_eq!(resolved.len(), 2);
-        assert!(matches!(resolved[0], ResolvedPane::Visible { id, .. } if id == id1));
-        assert!(
-            matches!(resolved[1], ResolvedPane::Visible { id, rect, .. } if id == id2 && rect.width >= 60)
-        );
-    }
-
-    #[test]
-    fn test_fold_prefers_second_at_equal_ratio() {
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        // 120 wide, ratio 0.5 → each gets 60, both < 80
-        // Both could fit alone (119 >= 80). ratio == 0.5 → fold second (right)
+        let id3 = TabId::new_v4();
         let node = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
             first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        let area = Rect::new(0, 0, 120, 10);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-        // First visible, second folded (right/bottom folds at equal ratio)
-        let first_visible = resolved
-            .iter()
-            .any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id1));
-        let second_folded = resolved
-            .iter()
-            .any(|rp| matches!(rp, ResolvedPane::Folded { id, .. } if *id == id2));
-        assert!(first_visible, "first (left) should be visible");
-        assert!(second_folded, "second (right) should be folded");
-    }
-
-    #[test]
-    fn test_fold_subtree_cross_direction_preserves_structure() {
-        // Layout: horizontal split, right child is a vertical split with 2 leaves.
-        // When the right subtree folds horizontally, the cross-direction vertical split
-        // is preserved: both leaves share a single column, split vertically by ratio.
-        let id_left = TabId::new_v4();
-        let id_top_right = TabId::new_v4();
-        let id_bot_right = TabId::new_v4();
-        let node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.5,
-            first: Box::new(LayoutNode::Leaf(id_left)),
             second: Box::new(LayoutNode::Split {
-                direction: SplitDirection::Vertical,
+                direction: SplitDirection::Horizontal,
                 ratio: 0.5,
-                first: Box::new(LayoutNode::Leaf(id_top_right)),
-                second: Box::new(LayoutNode::Leaf(id_bot_right)),
+                first: Box::new(LayoutNode::Leaf(id2)),
+                second: Box::new(LayoutNode::Leaf(id3)),
             }),
         };
-        // 120 wide, right subtree needs 80+1=81 (cross-direction: fold_cell_count=1)
-        let area = Rect::new(0, 0, 120, 40);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-
-        // Left should be visible
-        let left_visible = resolved
-            .iter()
-            .any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id_left));
-        assert!(left_visible, "left pane should be visible");
-
+        let area = Rect::new(0, 0, 200, 50);
+        // Fold entire right subtree
+        let mut folded = HashSet::new();
+        folded.insert(id2);
+        folded.insert(id3);
+        let resolved = node.resolve_with_folds(area, &folded);
+        assert_eq!(resolved.len(), 3);
+        assert!(matches!(resolved[0], ResolvedPane::Visible { id, .. } if id == id1));
         // Both right panes should be folded
-        let right_folded: Vec<_> = resolved
-            .iter()
-            .filter(|rp| matches!(rp, ResolvedPane::Folded { .. }))
-            .collect();
-        assert_eq!(right_folded.len(), 2, "both right panes should be folded");
-
-        // Both fold bars should be 1 cell wide (same column) and fold direction = Horizontal
-        for bar in &right_folded {
-            if let ResolvedPane::Folded {
-                rect, direction, ..
-            } = bar
-            {
-                assert_eq!(rect.width, 1, "fold bar should be 1 cell wide");
-                assert_eq!(*direction, SplitDirection::Horizontal);
-            }
-        }
-
-        // Bars should share the same x (single column), split vertically
-        if let (ResolvedPane::Folded { rect: r1, .. }, ResolvedPane::Folded { rect: r2, .. }) =
-            (right_folded[0], right_folded[1])
-        {
-            assert_eq!(r1.x, r2.x, "bars should share the same column");
-            assert_eq!(r1.y + r1.height, r2.y, "bars should be stacked vertically");
-            assert_eq!(
-                r1.height + r2.height,
-                40,
-                "bars should span full height together"
-            );
-        }
+        let fold_count = resolved.iter().filter(|rp| matches!(rp, ResolvedPane::Folded { .. })).count();
+        assert_eq!(fold_count, 2);
     }
 
     #[test]
-    fn test_subtree_min_size_leaf() {
-        let id = TabId::new_v4();
-        let node = LayoutNode::Leaf(id);
-        let params = LayoutParams::default();
-
-        // Without overrides: use global defaults
-        let (w, h) = node.subtree_min_size(params, &HashMap::new());
-        assert_eq!(w, 80);
-        assert_eq!(h, 20);
-
-        // With override
-        let mut leaf_mins = HashMap::new();
-        leaf_mins.insert(id, (30u16, 2u16));
-        let (w, h) = node.subtree_min_size(params, &leaf_mins);
-        assert_eq!(w, 30);
-        assert_eq!(h, 2);
+    fn test_manual_fold_partial_subtree() {
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
+        let id3 = TabId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(id2)),
+                second: Box::new(LayoutNode::Leaf(id3)),
+            }),
+        };
+        let area = Rect::new(0, 0, 200, 50);
+        // Fold only id3 — id2 stays visible
+        let mut folded = HashSet::new();
+        folded.insert(id3);
+        let resolved = node.resolve_with_folds(area, &folded);
+        assert_eq!(resolved.len(), 3);
+        assert!(matches!(resolved[0], ResolvedPane::Visible { id, .. } if id == id1));
+        assert!(resolved.iter().any(|rp| matches!(rp, ResolvedPane::Visible { id, .. } if *id == id2)));
+        assert!(resolved.iter().any(|rp| matches!(rp, ResolvedPane::Folded { id, .. } if *id == id3)));
     }
 
     #[test]
-    fn test_subtree_min_size_split() {
+    fn test_manual_fold_vertical() {
+        let id1 = TabId::new_v4();
+        let id2 = TabId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Vertical,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(id1)),
+            second: Box::new(LayoutNode::Leaf(id2)),
+        };
+        let area = Rect::new(0, 0, 100, 50);
+        let mut folded = HashSet::new();
+        folded.insert(id2);
+        let resolved = node.resolve_with_folds(area, &folded);
+        assert_eq!(resolved.len(), 2);
+        assert!(matches!(resolved[0], ResolvedPane::Visible { id, .. } if id == id1));
+        assert!(matches!(resolved[1], ResolvedPane::Folded { id, direction: SplitDirection::Vertical, .. } if id == id2));
+    }
+
+    #[test]
+    fn test_all_leaves_folded() {
         let id1 = TabId::new_v4();
         let id2 = TabId::new_v4();
         let node = LayoutNode::Split {
@@ -1720,12 +1239,15 @@ mod tests {
             first: Box::new(LayoutNode::Leaf(id1)),
             second: Box::new(LayoutNode::Leaf(id2)),
         };
-        let params = LayoutParams::default();
-        let (w, h) = node.subtree_min_size(params, &HashMap::new());
-        // Horizontal split: min(80+1, 80+1) = 81, height = max(50, 50) = 50
-        // (each folded leaf takes 1 cell)
-        assert_eq!(w, 81);
-        assert_eq!(h, 20);
+        let empty = HashSet::new();
+        assert!(!node.all_leaves_folded(&empty));
+        let mut one = HashSet::new();
+        one.insert(id1);
+        assert!(!node.all_leaves_folded(&one));
+        let mut both = HashSet::new();
+        both.insert(id1);
+        both.insert(id2);
+        assert!(node.all_leaves_folded(&both));
     }
 
     // --- Ratio edge case tests ---
@@ -1841,183 +1363,6 @@ mod tests {
         assert_eq!(resolved[0].1.height + resolved[1].1.height, 3);
     }
 
-    #[test]
-    fn test_resolve_with_fold_tiny_1x1() {
-        let id = TabId::new_v4();
-        let node = LayoutNode::Leaf(id);
-        let area = Rect::new(0, 0, 1, 1);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-        assert_eq!(resolved.len(), 1);
-        assert!(
-            matches!(resolved[0], ResolvedPane::Visible { id: rid, rect } if rid == id && rect.width == 1 && rect.height == 1)
-        );
-    }
-
-    #[test]
-    fn test_resolve_with_fold_split_in_tiny_area() {
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        let node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.5,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        // 3 wide: both panes < min width. One must fold.
-        let area = Rect::new(0, 0, 3, 3);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-        assert_eq!(resolved.len(), 2);
-        let visible_count = resolved
-            .iter()
-            .filter(|rp| matches!(rp, ResolvedPane::Visible { .. }))
-            .count();
-        let folded_count = resolved
-            .iter()
-            .filter(|rp| matches!(rp, ResolvedPane::Folded { .. }))
-            .count();
-        assert_eq!(visible_count, 1);
-        assert_eq!(folded_count, 1);
-    }
-
-    // --- Fold case 2 asymmetry tests ---
-
-    #[test]
-    fn test_fold_case2_asymmetric_leaf_mins_first_undersized() {
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        // 100 wide, ratio 0.3 → first=30, second=70
-        // leaf_mins: id1=(50,4), id2=(40,4) → total needed=90 <= 100 → case 2 (clamp)
-        // first_size(30) < first_min(50) → clamp first to 50, second gets 50
-        let node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.3,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        let area = Rect::new(0, 0, 100, 10);
-        let mut leaf_mins = HashMap::new();
-        leaf_mins.insert(id1, (50u16, 4u16));
-        leaf_mins.insert(id2, (40u16, 4u16));
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &leaf_mins);
-        assert_eq!(resolved.len(), 2);
-        // Both should be visible (case 2 clamping)
-        assert!(
-            matches!(resolved[0], ResolvedPane::Visible { id, rect, .. } if id == id1 && rect.width >= 50)
-        );
-        assert!(
-            matches!(resolved[1], ResolvedPane::Visible { id, rect, .. } if id == id2 && rect.width >= 40)
-        );
-    }
-
-    #[test]
-    fn test_fold_case2_asymmetric_leaf_mins_second_undersized() {
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        // 100 wide, ratio 0.8 → first=80, second=20
-        // leaf_mins: id1=(40,4), id2=(50,4) → total needed=90 <= 100 → case 2
-        // second_size(20) < second_min(50) → clamp second to 50, first gets 50
-        let node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.8,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        let area = Rect::new(0, 0, 100, 10);
-        let mut leaf_mins = HashMap::new();
-        leaf_mins.insert(id1, (40u16, 4u16));
-        leaf_mins.insert(id2, (50u16, 4u16));
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &leaf_mins);
-        assert_eq!(resolved.len(), 2);
-        assert!(
-            matches!(resolved[0], ResolvedPane::Visible { id, rect, .. } if id == id1 && rect.width >= 40)
-        );
-        assert!(
-            matches!(resolved[1], ResolvedPane::Visible { id, rect, .. } if id == id2 && rect.width >= 50)
-        );
-    }
-
-    // --- Large fold_cell_count tests ---
-
-    #[test]
-    fn test_large_fold_cell_count_nested() {
-        // Build a deeply nested same-direction split tree (4 leaves in horizontal chain)
-        // fold_cell_count = 4 for this subtree
-        let ids: Vec<TabId> = (0..4).map(|_| TabId::new_v4()).collect();
-        let right_subtree = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.5,
-            first: Box::new(LayoutNode::Split {
-                direction: SplitDirection::Horizontal,
-                ratio: 0.5,
-                first: Box::new(LayoutNode::Leaf(ids[1])),
-                second: Box::new(LayoutNode::Leaf(ids[2])),
-            }),
-            second: Box::new(LayoutNode::Leaf(ids[3])),
-        };
-        let node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.9,
-            first: Box::new(LayoutNode::Leaf(ids[0])),
-            second: Box::new(right_subtree),
-        };
-        // fold_cell_count of right subtree = 3 (two leaves in H-split + one leaf)
-        // With 90 wide area: first gets ~81, second gets ~9
-        // second subtree min = min(81+3, 81+1) = min(84, 82) = 82 (with default params)
-        // So with small enough area, the right subtree folds
-        let area = Rect::new(0, 0, 90, 10);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-        // First should be visible, all 3 right leaves should be folded
-        let visible: Vec<_> = resolved
-            .iter()
-            .filter(|rp| matches!(rp, ResolvedPane::Visible { .. }))
-            .collect();
-        let folded: Vec<_> = resolved
-            .iter()
-            .filter(|rp| matches!(rp, ResolvedPane::Folded { .. }))
-            .collect();
-        assert_eq!(visible.len(), 1);
-        assert_eq!(folded.len(), 3);
-    }
-
-    #[test]
-    fn test_fold_cell_count_exceeds_available_space() {
-        // 8 leaves in same-direction split chain → fold_cell_count = 8
-        // Available width is only 5 → fold bar capped at available space
-        fn chain(ids: &[TabId]) -> LayoutNode {
-            if ids.len() == 1 {
-                return LayoutNode::Leaf(ids[0]);
-            }
-            LayoutNode::Split {
-                direction: SplitDirection::Horizontal,
-                ratio: 0.5,
-                first: Box::new(LayoutNode::Leaf(ids[0])),
-                second: Box::new(chain(&ids[1..])),
-            }
-        }
-        let ids: Vec<TabId> = (0..8).map(|_| TabId::new_v4()).collect();
-        let subtree = chain(&ids);
-        assert_eq!(subtree.fold_cell_count(SplitDirection::Horizontal), 8);
-
-        // Put it as second child of a split with tiny total area
-        let main_id = TabId::new_v4();
-        let node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.9,
-            first: Box::new(LayoutNode::Leaf(main_id)),
-            second: Box::new(subtree),
-        };
-        let area = Rect::new(0, 0, 12, 5);
-        let resolved = node.resolve_with_fold(area, LayoutParams::default(), &HashMap::new());
-        // Should not panic; all rects should fit within the area
-        for rp in &resolved {
-            let rect = match rp {
-                ResolvedPane::Visible { rect, .. } | ResolvedPane::Folded { rect, .. } => rect,
-            };
-            assert!(rect.x + rect.width <= area.x + area.width);
-            assert!(rect.y + rect.height <= area.y + area.height);
-        }
-    }
-
     // --- Resize deeply nested tests ---
 
     #[test]
@@ -2124,67 +1469,6 @@ mod tests {
             (r - 0.3).abs() < f64::EPSILON,
             "deepest ratio should be 0.3 (0.5 - 0.2)"
         );
-    }
-
-    // --- Unfold edge case tests ---
-
-    #[test]
-    fn test_unfold_towards_nonexistent_pane() {
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        let mut node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.9,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        let nonexistent = TabId::new_v4();
-        assert!(!node.unfold_towards(nonexistent));
-        // Ratio should be unchanged
-        if let LayoutNode::Split { ratio, .. } = &node {
-            assert!((*ratio - 0.9).abs() < f64::EPSILON);
-        }
-    }
-
-    #[test]
-    fn test_unfold_towards_on_leaf() {
-        let id = TabId::new_v4();
-        let mut node = LayoutNode::Leaf(id);
-        assert!(!node.unfold_towards(id));
-    }
-
-    #[test]
-    fn test_unfold_towards_already_unfolded() {
-        // ratio is 0.5, pane is not folded, but unfold_towards still sets ratio
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        let mut node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.5,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        assert!(node.unfold_towards(id2));
-        if let LayoutNode::Split { ratio, .. } = &node {
-            // Skews to 0.1 to give space to second
-            assert!((*ratio - 0.1).abs() < f64::EPSILON);
-        }
-    }
-
-    #[test]
-    fn test_unfold_nonexistent_pane() {
-        let id1 = TabId::new_v4();
-        let id2 = TabId::new_v4();
-        let mut node = LayoutNode::Split {
-            direction: SplitDirection::Horizontal,
-            ratio: 0.9,
-            first: Box::new(LayoutNode::Leaf(id1)),
-            second: Box::new(LayoutNode::Leaf(id2)),
-        };
-        assert!(!node.unfold(TabId::new_v4()));
-        if let LayoutNode::Split { ratio, .. } = &node {
-            assert!((*ratio - 0.9).abs() < f64::EPSILON);
-        }
     }
 
     // --- Neighbor finding in deeply nested same-direction trees ---
@@ -2514,25 +1798,6 @@ mod tests {
         // H-split → max(2,2) = 2
         assert_eq!(node.fold_cell_count(SplitDirection::Vertical), 2);
     }
-
-    #[test]
-    fn test_split_rects_clamped_horizontal() {
-        let area = Rect::new(5, 10, 100, 30);
-        let (first, second) =
-            LayoutNode::split_rects_clamped(&SplitDirection::Horizontal, area, 30, 70);
-        assert_eq!(first, Rect::new(5, 10, 30, 30));
-        assert_eq!(second, Rect::new(35, 10, 70, 30));
-    }
-
-    #[test]
-    fn test_split_rects_clamped_vertical() {
-        let area = Rect::new(5, 10, 100, 40);
-        let (first, second) =
-            LayoutNode::split_rects_clamped(&SplitDirection::Vertical, area, 15, 25);
-        assert_eq!(first, Rect::new(5, 10, 100, 15));
-        assert_eq!(second, Rect::new(5, 25, 100, 25));
-    }
-
     #[test]
     fn test_resolve_with_nonzero_origin() {
         let id1 = TabId::new_v4();

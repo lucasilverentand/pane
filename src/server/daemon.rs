@@ -622,8 +622,7 @@ async fn handle_client(
                     state.active_workspace = cws;
                 }
                 if handle_mouse_down_server(&mut state, x, y) {
-                    let cws = state.active_workspace;
-                    let render_state = RenderState::for_client(&state, cws);
+                    let render_state = RenderState::from_server_state(&state);
                     let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
                 }
             }
@@ -635,8 +634,7 @@ async fn handle_client(
                 let had_drag = state.drag_state.is_some();
                 handle_mouse_drag_server(&mut state, x, y);
                 if had_drag {
-                    let cws = state.active_workspace;
-                    let render_state = RenderState::for_client(&state, cws);
+                    let render_state = RenderState::from_server_state(&state);
                     let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
                 }
             }
@@ -651,11 +649,9 @@ async fn handle_client(
                         state.active_workspace = cws;
                     }
                     state.drag_state = None;
-                    state.update_leaf_mins();
                     let (w, h) = state.last_size;
                     state.resize_all_tabs(w, h);
-                    let cws = state.active_workspace;
-                    let render_state = RenderState::for_client(&state, cws);
+                    let render_state = RenderState::from_server_state(&state);
                     let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
                 }
             }
@@ -736,13 +732,12 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) -> bool {
         }
     }
 
-    let params = crate::layout::LayoutParams::from(&state.config.behavior);
     let ws = state.active_workspace();
     let resolved = ws
         .layout
-        .resolve_with_fold(body, params, &ws.leaf_min_sizes);
+        .resolve_with_folds(body, &ws.folded_windows);
 
-    // Check fold bar clicks
+    // Check fold bar clicks — unfold the clicked window
     for rp in &resolved {
         if let crate::layout::ResolvedPane::Folded {
             id: group_id, rect, ..
@@ -753,7 +748,7 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) -> bool {
             }
             if x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height {
                 let group_id = *group_id;
-                state.focus_group(group_id, bar_h);
+                state.focus_group(group_id);
                 return true;
             }
         }
@@ -783,7 +778,7 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) -> bool {
                 };
 
                 if let Some(click) = tab_click {
-                    state.focus_group(*group_id, bar_h);
+                    state.focus_group(*group_id);
                     match click {
                         crate::ui::window_view::TabBarClick::Tab(i) => {
                             state.active_workspace_mut().active_group_mut().active_tab = i;
@@ -802,7 +797,7 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) -> bool {
                     return true;
                 }
 
-                state.focus_group(*group_id, bar_h);
+                state.focus_group(*group_id);
                 return true;
             }
         }

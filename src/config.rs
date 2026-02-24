@@ -112,7 +112,6 @@ impl Default for Theme {
 pub struct Behavior {
     pub min_pane_width: u16,
     pub min_pane_height: u16,
-    pub fold_bar_size: u16,
     pub vim_navigator: bool,
     pub mouse: bool,
     pub default_shell: Option<String>,
@@ -127,7 +126,6 @@ impl Default for Behavior {
         Self {
             min_pane_width: 80,
             min_pane_height: 20,
-            fold_bar_size: 1,
             vim_navigator: false,
             mouse: true,
             default_shell: None,
@@ -565,9 +563,6 @@ impl Config {
             if let Some(v) = b.min_pane_height {
                 config.behavior.min_pane_height = v;
             }
-            if let Some(v) = b.fold_bar_size {
-                config.behavior.fold_bar_size = v;
-            }
             if let Some(v) = b.vim_navigator {
                 config.behavior.vim_navigator = v;
             }
@@ -732,7 +727,6 @@ struct RawTheme {
 struct RawBehavior {
     min_pane_width: Option<u16>,
     min_pane_height: Option<u16>,
-    fold_bar_size: Option<u16>,
     vim_navigator: Option<bool>,
     mouse: Option<bool>,
     default_shell: Option<String>,
