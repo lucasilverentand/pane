@@ -160,10 +160,9 @@ pub fn default_leader_tree() -> LeaderNode {
     }
 
     // ── Session group (space s) ─────────────────────────────────────────
-    // Switch sessions, open the command palette, or detach.
+    // Open the command palette or detach.
     {
         let mut children = HashMap::new();
-        insert_leaf(&mut children, "s", Action::SessionPicker, "Sessions");
         insert_leaf(&mut children, "p", Action::CommandPalette, "Palette");
         insert_leaf(&mut children, "d", Action::Detach, "Detach");
         let key = parse_key("s").unwrap();

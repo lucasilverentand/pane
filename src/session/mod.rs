@@ -6,22 +6,19 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use uuid::Uuid;
+
+/// Serializable snapshot of all workspace state, saved to disk for persistence.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedState {
+    #[serde(default = "default_version")]
+    pub version: u32,
+    pub updated_at: DateTime<Utc>,
+    pub workspaces: Vec<WorkspaceConfig>,
+    pub active_workspace: usize,
+}
 
 fn default_version() -> u32 {
     1
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Session {
-    pub id: Uuid,
-    pub name: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    #[serde(default = "default_version")]
-    pub version: u32,
-    pub workspaces: Vec<WorkspaceConfig>,
-    pub active_workspace: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -54,8 +51,8 @@ pub struct TabConfig {
     pub scrollback: Vec<String>,
 }
 
-impl Session {
-    pub fn from_state(state: &crate::server::state::ServerState) -> Self {
+impl SavedState {
+    pub fn from_server(state: &crate::server::state::ServerState) -> Self {
         let mut workspaces = Vec::new();
 
         for ws in &state.workspaces {
@@ -110,12 +107,9 @@ impl Session {
             });
         }
 
-        Session {
-            id: state.session_id,
-            name: state.session_name.clone(),
-            created_at: state.session_created_at,
-            updated_at: Utc::now(),
+        SavedState {
             version: 2,
+            updated_at: Utc::now(),
             workspaces,
             active_workspace: state.active_workspace,
         }
@@ -127,19 +121,16 @@ mod tests {
     use super::*;
     use crate::layout::SplitDirection;
 
-    fn make_session() -> Session {
+    fn make_saved_state() -> SavedState {
         let group_id1 = WindowId::new_v4();
         let group_id2 = WindowId::new_v4();
         let pane_id1 = TabId::new_v4();
         let pane_id2 = TabId::new_v4();
         let pane_id3 = TabId::new_v4();
 
-        Session {
-            id: Uuid::new_v4(),
-            name: "test-session".to_string(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+        SavedState {
             version: 2,
+            updated_at: Utc::now(),
             workspaces: vec![WorkspaceConfig {
                 name: "1".to_string(),
                 layout: LayoutNode::Split {
@@ -203,22 +194,20 @@ mod tests {
     }
 
     #[test]
-    fn test_session_serialization_roundtrip() {
-        let session = make_session();
-        let json = serde_json::to_string_pretty(&session).unwrap();
-        let restored: Session = serde_json::from_str(&json).unwrap();
+    fn test_saved_state_serialization_roundtrip() {
+        let state = make_saved_state();
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        let restored: SavedState = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(restored.id, session.id);
-        assert_eq!(restored.name, session.name);
         assert_eq!(restored.workspaces.len(), 1);
         assert_eq!(restored.workspaces[0].groups.len(), 2);
     }
 
     #[test]
     fn test_pane_config_preserves_fields() {
-        let session = make_session();
-        let json = serde_json::to_string(&session).unwrap();
-        let restored: Session = serde_json::from_str(&json).unwrap();
+        let state = make_saved_state();
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: SavedState = serde_json::from_str(&json).unwrap();
 
         let group0 = &restored.workspaces[0].groups[0];
         let shell = &group0.tabs[0];
@@ -235,10 +224,10 @@ mod tests {
     }
 
     #[test]
-    fn test_layout_preserved_in_session() {
-        let session = make_session();
-        let json = serde_json::to_string(&session).unwrap();
-        let restored: Session = serde_json::from_str(&json).unwrap();
+    fn test_layout_preserved() {
+        let state = make_saved_state();
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: SavedState = serde_json::from_str(&json).unwrap();
 
         let layout = &restored.workspaces[0].layout;
         let ids = layout.pane_ids();
@@ -256,26 +245,11 @@ mod tests {
     }
 
     #[test]
-    fn test_session_timestamps() {
-        let session = make_session();
-        let json = serde_json::to_string(&session).unwrap();
-        let restored: Session = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(
-            restored.created_at.timestamp(),
-            session.created_at.timestamp()
-        );
-    }
-
-    #[test]
-    fn test_empty_session() {
+    fn test_empty_state() {
         let group_id = WindowId::new_v4();
-        let session = Session {
-            id: Uuid::new_v4(),
-            name: "empty".to_string(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+        let state = SavedState {
             version: 2,
+            updated_at: Utc::now(),
             workspaces: vec![WorkspaceConfig {
                 name: "1".to_string(),
                 layout: LayoutNode::Leaf(group_id),
@@ -291,10 +265,9 @@ mod tests {
             active_workspace: 0,
         };
 
-        let json = serde_json::to_string(&session).unwrap();
-        let restored: Session = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: SavedState = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.workspaces[0].groups[0].tabs.len(), 0);
-        assert_eq!(restored.name, "empty");
     }
 
     #[test]
@@ -314,9 +287,9 @@ mod tests {
 
     #[test]
     fn test_tab_groups_preserved() {
-        let session = make_session();
-        let json = serde_json::to_string(&session).unwrap();
-        let restored: Session = serde_json::from_str(&json).unwrap();
+        let state = make_saved_state();
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: SavedState = serde_json::from_str(&json).unwrap();
 
         // First group has 2 tabs
         assert_eq!(restored.workspaces[0].groups[0].tabs.len(), 2);

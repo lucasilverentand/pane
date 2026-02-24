@@ -1,105 +1,50 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
 
-use super::Session;
+use super::SavedState;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SessionSummary {
-    pub id: Uuid,
-    pub name: String,
-    pub pane_count: usize,
-    pub updated_at: DateTime<Utc>,
-}
-
-pub fn sessions_dir() -> PathBuf {
-    let dir = dirs::data_dir()
+fn state_dir() -> PathBuf {
+    dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("pane")
-        .join("sessions");
-    let _ = fs::create_dir_all(&dir);
-    dir
 }
 
-pub fn save(session: &Session) -> Result<()> {
-    save_to_dir(session, &sessions_dir())
+pub fn state_file_path() -> PathBuf {
+    state_dir().join("state.json")
 }
 
-pub fn load(id: &Uuid) -> Result<Session> {
-    load_from_dir(id, &sessions_dir())
+pub fn save(state: &SavedState) -> Result<()> {
+    save_to(state, &state_file_path())
 }
 
-pub fn list() -> Result<Vec<SessionSummary>> {
-    list_from_dir(&sessions_dir())
-}
-
-/// Load the most recently updated session with the given name.
-pub fn load_by_name(name: &str) -> Option<Session> {
-    let summaries = list().ok()?;
-    let summary = summaries.iter().find(|s| s.name == name)?;
-    load(&summary.id).ok()
+pub fn load() -> Option<SavedState> {
+    load_from(&state_file_path())
 }
 
 // Path-parameterized variants for testability
 
-pub fn save_to_dir(session: &Session, dir: &Path) -> Result<()> {
-    let _ = fs::create_dir_all(dir);
-    let path = dir.join(format!("{}.json", session.id));
-    let json = serde_json::to_string_pretty(session)?;
+pub fn save_to(state: &SavedState, path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let json = serde_json::to_string_pretty(state)?;
     fs::write(path, json)?;
     Ok(())
 }
 
-pub fn load_from_dir(id: &Uuid, dir: &Path) -> Result<Session> {
-    let path = dir.join(format!("{}.json", id));
-    let json = fs::read_to_string(path)?;
-    let mut session: Session = serde_json::from_str(&json)?;
-    migrate_session(&mut session);
-    Ok(session)
+pub fn load_from(path: &Path) -> Option<SavedState> {
+    let json = fs::read_to_string(path).ok()?;
+    let mut state: SavedState = serde_json::from_str(&json).ok()?;
+    migrate(&mut state);
+    Some(state)
 }
 
-/// Migrate a session to the latest version (currently v2).
-/// v1 (no explicit version field) -> v2: adds version, sync_panes, group name fields.
-/// The `#[serde(default)]` annotations handle missing fields during deserialization,
-/// so migration only needs to bump the version number for re-saving.
-fn migrate_session(session: &mut Session) {
-    if session.version < 2 {
-        session.version = 2;
+/// Migrate saved state to the latest version (currently v2).
+fn migrate(state: &mut SavedState) {
+    if state.version < 2 {
+        state.version = 2;
     }
-}
-
-pub fn list_from_dir(dir: &Path) -> Result<Vec<SessionSummary>> {
-    let mut summaries = Vec::new();
-
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map(|e| e == "json").unwrap_or(false) {
-                if let Ok(json) = fs::read_to_string(&path) {
-                    if let Ok(session) = serde_json::from_str::<Session>(&json) {
-                        let pane_count: usize = session
-                            .workspaces
-                            .iter()
-                            .flat_map(|ws| &ws.groups)
-                            .map(|g| g.tabs.len())
-                            .sum();
-                        summaries.push(SessionSummary {
-                            id: session.id,
-                            name: session.name,
-                            pane_count,
-                            updated_at: session.updated_at,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    Ok(summaries)
 }
 
 #[cfg(test)]
@@ -108,23 +53,15 @@ mod tests {
     use crate::layout::{LayoutNode, TabId};
     use crate::session::{TabConfig, WindowConfig, WorkspaceConfig};
     use crate::window::{TabKind, WindowId};
+    use chrono::Utc;
     use std::collections::HashMap;
 
-    fn test_tempdir() -> tempfile::TempDir {
-        let tmp = std::env::temp_dir();
-        let _ = fs::create_dir_all(&tmp);
-        tempfile::tempdir().unwrap()
-    }
-
-    fn make_test_session(name: &str) -> Session {
+    fn make_test_state() -> SavedState {
         let group_id = WindowId::new_v4();
         let pane_id = TabId::new_v4();
-        Session {
-            id: Uuid::new_v4(),
-            name: name.to_string(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+        SavedState {
             version: 2,
+            updated_at: Utc::now(),
             workspaces: vec![WorkspaceConfig {
                 name: "1".to_string(),
                 layout: LayoutNode::Leaf(group_id),
@@ -151,15 +88,14 @@ mod tests {
 
     #[test]
     fn test_save_and_load() {
-        let dir = test_tempdir();
-        let session = make_test_session("test-session");
-        let id = session.id;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let state = make_test_state();
 
-        save_to_dir(&session, dir.path()).unwrap();
-        let loaded = load_from_dir(&id, dir.path()).unwrap();
+        save_to(&state, &path).unwrap();
+        let loaded = load_from(&path).unwrap();
 
-        assert_eq!(loaded.id, session.id);
-        assert_eq!(loaded.name, "test-session");
+        assert_eq!(loaded.workspaces.len(), 1);
         let tabs = &loaded.workspaces[0].groups[0].tabs;
         assert_eq!(tabs.len(), 1);
         assert_eq!(tabs[0].title, "shell");
@@ -167,160 +103,32 @@ mod tests {
     }
 
     #[test]
-    fn test_list_sessions() {
-        let dir = test_tempdir();
-
-        let s1 = make_test_session("alpha");
-        let s2 = make_test_session("beta");
-        save_to_dir(&s1, dir.path()).unwrap();
-        save_to_dir(&s2, dir.path()).unwrap();
-
-        let summaries = list_from_dir(dir.path()).unwrap();
-        assert_eq!(summaries.len(), 2);
-
-        let names: Vec<&str> = summaries.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&"alpha"));
-        assert!(names.contains(&"beta"));
-    }
-
-    #[test]
     fn test_load_nonexistent() {
-        let dir = test_tempdir();
-        let result = load_from_dir(&Uuid::new_v4(), dir.path());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_list_empty_dir() {
-        let dir = test_tempdir();
-        let summaries = list_from_dir(dir.path()).unwrap();
-        assert!(summaries.is_empty());
-    }
-
-    #[test]
-    fn test_list_ignores_non_json() {
-        let dir = test_tempdir();
-        std::fs::write(dir.path().join("notes.txt"), "not a session").unwrap();
-        let summaries = list_from_dir(dir.path()).unwrap();
-        assert!(summaries.is_empty());
-    }
-
-    #[test]
-    fn test_list_ignores_invalid_json() {
-        let dir = test_tempdir();
-        std::fs::write(dir.path().join("bad.json"), "{ invalid }").unwrap();
-        let summaries = list_from_dir(dir.path()).unwrap();
-        assert!(summaries.is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.json");
+        assert!(load_from(&path).is_none());
     }
 
     #[test]
     fn test_save_overwrites() {
-        let dir = test_tempdir();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
 
-        let mut session = make_test_session("original");
-        let id = session.id;
-        save_to_dir(&session, dir.path()).unwrap();
+        let mut state = make_test_state();
+        save_to(&state, &path).unwrap();
 
-        session.name = "updated".to_string();
-        save_to_dir(&session, dir.path()).unwrap();
+        state.workspaces[0].name = "updated".to_string();
+        save_to(&state, &path).unwrap();
 
-        let loaded = load_from_dir(&id, dir.path()).unwrap();
-        assert_eq!(loaded.name, "updated");
-        assert_eq!(list_from_dir(dir.path()).unwrap().len(), 1);
+        let loaded = load_from(&path).unwrap();
+        assert_eq!(loaded.workspaces[0].name, "updated");
     }
 
     #[test]
-    fn test_summary_pane_count() {
-        let dir = test_tempdir();
-        let group_id = WindowId::new_v4();
-        let pane1 = TabId::new_v4();
-        let pane2 = TabId::new_v4();
-
-        let session = Session {
-            id: Uuid::new_v4(),
-            name: "multi".to_string(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            version: 2,
-            workspaces: vec![WorkspaceConfig {
-                name: "1".to_string(),
-                layout: LayoutNode::Leaf(group_id),
-                groups: vec![WindowConfig {
-                    id: group_id,
-                    tabs: vec![
-                        TabConfig {
-                            id: pane1,
-                            kind: TabKind::Shell,
-                            title: "shell".to_string(),
-                            command: None,
-                            cwd: PathBuf::from("/"),
-                            env: HashMap::new(),
-                            scrollback: vec![],
-                        },
-                        TabConfig {
-                            id: pane2,
-                            kind: TabKind::Nvim,
-                            title: "nvim".to_string(),
-                            command: None,
-                            cwd: PathBuf::from("/"),
-                            env: HashMap::new(),
-                            scrollback: vec![],
-                        },
-                    ],
-                    active_tab: 0,
-                    name: None,
-                }],
-                active_group: group_id,
-                sync_panes: false,
-            }],
-            active_workspace: 0,
-        };
-
-        save_to_dir(&session, dir.path()).unwrap();
-        let summaries = list_from_dir(dir.path()).unwrap();
-        assert_eq!(summaries[0].pane_count, 2);
-    }
-
-    #[test]
-    fn test_v1_session_migration() {
-        let dir = test_tempdir();
-        // Create a v1 session (no "version" field, no "sync_panes", no group "name")
-        let id = Uuid::new_v4();
-        let group_id = WindowId::new_v4();
-        let pane_id = TabId::new_v4();
-        let v1_json = serde_json::json!({
-            "id": id.to_string(),
-            "name": "old-session",
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-01T00:00:00Z",
-            "workspaces": [{
-                "name": "1",
-                "layout": { "Leaf": group_id.to_string() },
-                "groups": [{
-                    "id": group_id.to_string(),
-                    "tabs": [{
-                        "id": pane_id.to_string(),
-                        "kind": "Shell",
-                        "title": "shell",
-                        "command": null,
-                        "cwd": "/tmp",
-                        "env": {},
-                        "scrollback": []
-                    }],
-                    "active_tab": 0
-                }],
-                "active_group": group_id.to_string()
-            }],
-            "active_workspace": 0
-        });
-        let path = dir.path().join(format!("{}.json", id));
-        std::fs::write(&path, serde_json::to_string_pretty(&v1_json).unwrap()).unwrap();
-
-        let loaded = load_from_dir(&id, dir.path()).unwrap();
-        // Migration should bump version to 2
-        assert_eq!(loaded.version, 2);
-        // Default values should be present
-        assert_eq!(loaded.workspaces[0].sync_panes, false);
-        assert_eq!(loaded.workspaces[0].groups[0].name, None);
+    fn test_load_invalid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        std::fs::write(&path, "{ invalid }").unwrap();
+        assert!(load_from(&path).is_none());
     }
 }

@@ -37,10 +37,7 @@ pub async fn run_control_mode(
 
     // Print initial greeting
     writeln!(out, "%begin 0 0 0")?;
-    {
-        let state = state.lock().await;
-        writeln!(out, "session: {}", state.session_name)?;
-    }
+    writeln!(out, "pane")?;
     writeln!(out, "%end 0 0 0")?;
     out.flush()?;
     drop(out);
@@ -75,8 +72,8 @@ pub async fn run_control_mode(
                     let _ = out.flush();
                     break;
                 }
-                ServerResponse::Attached { session_name } => {
-                    let _ = writeln!(out, "%session-changed {}", session_name);
+                ServerResponse::Attached => {
+                    let _ = writeln!(out, "%session-changed pane");
                 }
                 ServerResponse::Error(msg) => {
                     let _ = writeln!(out, "%error {}", msg);

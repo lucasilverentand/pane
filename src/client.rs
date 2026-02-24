@@ -51,13 +51,12 @@ enum UiFocus {
 }
 
 impl Client {
-    pub fn new(config: Config, session_name: &str) -> Self {
+    pub fn new(config: Config) -> Self {
         Self {
             mode: Mode::interact(),
             render_state: RenderState {
                 workspaces: Vec::new(),
                 active_workspace: 0,
-                session_name: session_name.to_string(),
             },
             screens: HashMap::new(),
             system_stats: SystemStats::default(),
@@ -88,36 +87,26 @@ impl Client {
     }
 
     /// Connect to a daemon and run the TUI event loop.
-    pub async fn run(session_name: &str, config: Config) -> Result<()> {
-        let sock = daemon::socket_path(session_name);
+    pub async fn run(config: Config) -> Result<()> {
+        let sock = daemon::socket_path();
         if !sock.exists() {
-            anyhow::bail!(
-                "no running session '{}'. Start one with: pane daemon {}",
-                session_name,
-                session_name
-            );
+            anyhow::bail!("no running pane daemon. Start one with: pane daemon");
         }
 
         let mut stream = UnixStream::connect(&sock).await?;
 
         // Attach
-        framing::send(
-            &mut stream,
-            &ClientRequest::Attach {
-                session_name: session_name.to_string(),
-            },
-        )
-        .await?;
+        framing::send(&mut stream, &ClientRequest::Attach).await?;
 
         // Wait for Attached
         let resp: ServerResponse = framing::recv_required(&mut stream).await?;
-        let _session_name = match resp {
-            ServerResponse::Attached { session_name } => session_name,
+        match resp {
+            ServerResponse::Attached => {}
             ServerResponse::Error(e) => anyhow::bail!("server error: {}", e),
             _ => anyhow::bail!("unexpected response: {:?}", resp),
         };
 
-        let mut client = Client::new(config, session_name);
+        let mut client = Client::new(config);
 
         // Read initial LayoutChanged
         let resp: ServerResponse = framing::recv_required(&mut stream).await?;
@@ -975,14 +964,11 @@ impl Client {
 
     fn update_terminal_title(&self) {
         if let Some(ref fmt) = self.config.behavior.terminal_title_format {
-            let session = &self.render_state.session_name;
             let workspace = self
                 .active_workspace()
                 .map(|ws| ws.name.as_str())
                 .unwrap_or("");
-            let title = fmt
-                .replace("{session}", session)
-                .replace("{workspace}", workspace);
+            let title = fmt.replace("{workspace}", workspace);
             // OSC 0 - set terminal title
             print!("\x1b]0;{}\x07", title);
             let _ = std::io::Write::flush(&mut std::io::stdout());

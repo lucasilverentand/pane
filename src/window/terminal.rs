@@ -3,6 +3,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
+use unicode_width::UnicodeWidthStr;
 
 /// Convert a vt100 screen to ratatui Lines for rendering.
 pub fn render_screen(screen: &vt100::Screen, area: Rect) -> Vec<Line<'static>> {
@@ -32,6 +33,7 @@ fn render_screen_inner(
         let mut spans: Vec<Span<'static>> = Vec::new();
         let mut current_text = String::new();
         let mut current_style = Style::default();
+        let mut rendered_cols = 0usize;
 
         for col in 0..cols {
             let cell = screen.cell(row as u16, col as u16);
@@ -68,19 +70,39 @@ fn render_screen_inner(
             }
             current_style = style;
 
-            match cell {
+            let mut text = match cell {
                 Some(cell) => {
                     let ch = cell.contents();
                     if ch.is_empty() {
-                        current_text.push(' ');
+                        " ".to_string()
                     } else {
-                        current_text.push_str(&ch);
+                        ch.to_string()
                     }
                 }
-                None => {
-                    current_text.push(' ');
-                }
+                None => " ".to_string(),
+            };
+
+            let mut width = UnicodeWidthStr::width(text.as_str());
+            if width == 0 {
+                text = " ".to_string();
+                width = 1;
             }
+
+            let remaining = cols.saturating_sub(rendered_cols);
+            if remaining == 0 {
+                break;
+            }
+            if width > remaining {
+                text = " ".repeat(remaining);
+                width = remaining;
+            }
+
+            current_text.push_str(&text);
+            rendered_cols += width;
+        }
+
+        if rendered_cols < cols {
+            current_text.push_str(&" ".repeat(cols - rendered_cols));
         }
 
         if !current_text.is_empty() {
@@ -126,11 +148,23 @@ fn convert_color(color: vt100::Color) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_width::UnicodeWidthStr;
 
     fn make_screen(rows: u16, cols: u16, input: &[u8]) -> vt100::Parser {
         let mut parser = vt100::Parser::new(rows, cols, 0);
         parser.process(input);
         parser
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn line_display_width(line: &Line<'_>) -> usize {
+        line.spans
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+            .sum()
     }
 
     #[test]
@@ -141,8 +175,8 @@ mod tests {
 
         assert_eq!(lines.len(), 5);
         for line in &lines {
-            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-            assert_eq!(text.len(), 10);
+            let text = line_text(line);
+            assert_eq!(line_display_width(line), 10);
             assert!(text.chars().all(|c| c == ' '));
         }
     }
@@ -153,8 +187,9 @@ mod tests {
         let area = Rect::new(0, 0, 20, 5);
         let lines = render_screen(parser.screen(), area);
 
-        let first_line: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let first_line = line_text(&lines[0]);
         assert!(first_line.starts_with("Hello, world!"));
+        assert_eq!(line_display_width(&lines[0]), 20);
     }
 
     #[test]
@@ -163,12 +198,15 @@ mod tests {
         let area = Rect::new(0, 0, 20, 5);
         let lines = render_screen(parser.screen(), area);
 
-        let line0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        let line1: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
-        let line2: String = lines[2].spans.iter().map(|s| s.content.as_ref()).collect();
+        let line0 = line_text(&lines[0]);
+        let line1 = line_text(&lines[1]);
+        let line2 = line_text(&lines[2]);
         assert!(line0.starts_with("line one"));
         assert!(line1.starts_with("line two"));
         assert!(line2.starts_with("line three"));
+        assert_eq!(line_display_width(&lines[0]), 20);
+        assert_eq!(line_display_width(&lines[1]), 20);
+        assert_eq!(line_display_width(&lines[2]), 20);
     }
 
     #[test]
@@ -216,8 +254,7 @@ mod tests {
         let lines = render_screen(parser.screen(), area);
 
         assert_eq!(lines.len(), 2);
-        let line0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(line0.len(), 10);
+        assert_eq!(line_display_width(&lines[0]), 10);
     }
 
     #[test]
@@ -239,12 +276,21 @@ mod tests {
         let area = Rect::new(0, 0, 20, 3);
         let lines = render_screen(parser.screen(), area);
 
-        let first_line: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let first_line = line_text(&lines[0]);
         // Wide chars should not have extra spaces from continuation cells
         assert!(first_line.starts_with("中文"));
-        // Each wide char = 2 display columns, so total rendered width should be cols
-        // "中文" = 4 display cols + 16 spaces = 20
-        assert_eq!(first_line.chars().count(), 2 + 16); // 2 CJK chars + 16 spaces
+        assert_eq!(line_display_width(&lines[0]), 20);
+    }
+
+    #[test]
+    fn test_render_combining_and_wide_chars_have_exact_display_width() {
+        let parser = make_screen(2, 8, "中e\u{301}".as_bytes());
+        let area = Rect::new(0, 0, 8, 2);
+        let lines = render_screen(parser.screen(), area);
+
+        let first_line = line_text(&lines[0]);
+        assert!(first_line.starts_with("中e\u{301}"));
+        assert_eq!(line_display_width(&lines[0]), 8);
     }
 
     #[test]

@@ -190,9 +190,10 @@ pub fn execute(
         }
 
         Command::ListSessions => {
-            let names = crate::server::daemon::list_sessions();
+            // List workspaces instead of sessions
+            let names: Vec<String> = state.workspaces.iter().map(|ws| ws.name.clone()).collect();
             let output = if names.is_empty() {
-                "no sessions".to_string()
+                "no workspaces".to_string()
             } else {
                 names.join("\n")
             };
@@ -200,16 +201,18 @@ pub fn execute(
         }
 
         Command::RenameSession { new_name } => {
-            state.session_name = new_name.clone();
+            // Rename the active workspace
+            let ws = state.active_workspace_mut();
+            ws.name = new_name.clone();
             Ok(CommandResult::Ok(String::new()))
         }
 
         Command::HasSession { name } => {
-            let sessions = crate::server::daemon::list_sessions();
-            if sessions.contains(name) {
+            // Check if a workspace with this name exists
+            if state.workspaces.iter().any(|ws| ws.name == *name) {
                 Ok(CommandResult::Ok(String::new()))
             } else {
-                bail!("session not found: {}", name);
+                bail!("workspace not found: {}", name);
             }
         }
 
@@ -861,7 +864,14 @@ fn expand_format(
     result = result.replace("#{pane_title}", pane_title);
     result = result.replace("#{pane_index}", &format!("{}", pane_id));
     result = result.replace("#{pane_current_command}", pane_title);
-    result = result.replace("#{session_name}", &state.session_name);
+    result = result.replace(
+        "#{session_name}",
+        state
+            .workspaces
+            .get(state.active_workspace)
+            .map(|ws| ws.name.as_str())
+            .unwrap_or("pane"),
+    );
     result = result.replace("#{session_id}", &format!("${}", 0)); // session id always $0 for now
     result = result.replace("#{window_active}", if is_active { "1" } else { "0" });
     result = result.replace("#{pane_active}", if is_active { "1" } else { "0" });
@@ -938,9 +948,6 @@ mod tests {
         let state = ServerState {
             workspaces: vec![workspace],
             active_workspace: 0,
-            session_name: "test-session".to_string(),
-            session_id: uuid::Uuid::new_v4(),
-            session_created_at: chrono::Utc::now(),
             config: Config::default(),
             system_stats: crate::system_stats::SystemStats::default(),
             event_tx,
@@ -995,9 +1002,6 @@ mod tests {
         let state = ServerState {
             workspaces: vec![workspace],
             active_workspace: 0,
-            session_name: "test-session".to_string(),
-            session_id: uuid::Uuid::new_v4(),
-            session_created_at: chrono::Utc::now(),
             config: Config::default(),
             system_stats: crate::system_stats::SystemStats::default(),
             event_tx,
@@ -1119,7 +1123,7 @@ mod tests {
     fn test_expand_format_session_name() {
         let (state, group) = make_test_state_and_group();
         let result = expand_format("#{session_name}", 0, 0, "bash", &group, true, &state);
-        assert_eq!(result, "test-session");
+        assert_eq!(result, "workspace");
     }
 
     #[test]
@@ -1152,7 +1156,7 @@ mod tests {
             true,
             &state,
         );
-        assert_eq!(result, "test-session:@2.%7");
+        assert_eq!(result, "workspace:@2.%7");
     }
 
     #[test]
@@ -1179,7 +1183,7 @@ mod tests {
         };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(matches!(result, CommandResult::Ok(_)));
-        assert_eq!(state.session_name, "new-name");
+        assert_eq!(state.active_workspace().name, "new-name");
     }
 
     #[test]
@@ -1293,7 +1297,7 @@ mod tests {
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
             CommandResult::Ok(output) => {
-                assert!(output.contains("test-session"));
+                assert!(output.contains("workspace"));
             }
             _ => panic!("expected CommandResult::Ok"),
         }
@@ -1650,7 +1654,7 @@ mod tests {
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
             CommandResult::Ok(output) => {
-                assert_eq!(output, "hello test-session");
+                assert_eq!(output, "hello workspace");
             }
             _ => panic!("expected CommandResult::Ok"),
         }

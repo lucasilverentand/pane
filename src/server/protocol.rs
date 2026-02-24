@@ -115,9 +115,7 @@ impl From<SerializableKeyCode> for KeyCode {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ClientRequest {
-    Attach {
-        session_name: String,
-    },
+    Attach,
     Detach,
     Resize {
         width: u16,
@@ -152,9 +150,7 @@ pub enum ClientRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerResponse {
-    Attached {
-        session_name: String,
-    },
+    Attached,
     PaneOutput {
         pane_id: TabId,
         data: Vec<u8>,
@@ -193,7 +189,6 @@ pub enum ServerResponse {
 pub struct RenderState {
     pub workspaces: Vec<WorkspaceSnapshot>,
     pub active_workspace: usize,
-    pub session_name: String,
 }
 
 /// Serializable floating window info.
@@ -333,7 +328,6 @@ impl RenderState {
         RenderState {
             workspaces,
             active_workspace: state.active_workspace,
-            session_name: state.session_name.clone(),
         }
     }
 }
@@ -388,9 +382,7 @@ mod tests {
     #[test]
     fn test_client_request_serialization() {
         let requests = vec![
-            ClientRequest::Attach {
-                session_name: "test".to_string(),
-            },
+            ClientRequest::Attach,
             ClientRequest::Detach,
             ClientRequest::Resize {
                 width: 120,
@@ -416,9 +408,7 @@ mod tests {
     #[test]
     fn test_server_response_serialization() {
         let responses = vec![
-            ServerResponse::Attached {
-                session_name: "default".to_string(),
-            },
+            ServerResponse::Attached,
             ServerResponse::PaneOutput {
                 pane_id: TabId::new_v4(),
                 data: vec![0x1b, b'[', b'H', b'e', b'l', b'l', b'o'],
@@ -480,11 +470,9 @@ mod tests {
                 floating_windows: vec![],
             }],
             active_workspace: 0,
-            session_name: "default".to_string(),
         };
         let json = serde_json::to_string(&state).unwrap();
         let restored: RenderState = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.session_name, "default");
         assert_eq!(restored.workspaces.len(), 1);
         assert_eq!(restored.workspaces[0].groups[0].tabs[0].title, "shell");
     }

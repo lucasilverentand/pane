@@ -145,10 +145,6 @@ fn build_client_vars(client: &Client) -> HashMap<String, String> {
     vars.insert("pane_title".to_string(), title);
 
     if let Some(ws) = client.active_workspace() {
-        vars.insert(
-            "session_name".to_string(),
-            client.render_state.session_name.clone(),
-        );
         vars.insert("window_name".to_string(), ws.name.clone());
 
         let group_ids = ws.layout.group_ids();

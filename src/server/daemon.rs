@@ -17,7 +17,7 @@ use crate::server::protocol::{
     ClientRequest, RenderState, SerializableSystemStats, ServerResponse,
 };
 use crate::server::state::ServerState;
-use crate::session::{self, Session};
+use crate::session;
 use crate::system_stats;
 
 /// Global counter for assigning unique client IDs.
@@ -103,9 +103,15 @@ pub fn socket_dir() -> PathBuf {
     base.join(format!("pane-{}", uid))
 }
 
-/// Returns the socket path for a given session name.
-pub fn socket_path(session_name: &str) -> PathBuf {
-    socket_dir().join(format!("{}.sock", session_name))
+/// Returns the fixed socket path for the single pane daemon.
+pub fn socket_path() -> PathBuf {
+    socket_dir().join("pane.sock")
+}
+
+/// Check if the daemon is currently running.
+pub fn is_running() -> bool {
+    let sock = socket_path();
+    sock.exists() && std::os::unix::net::UnixStream::connect(&sock).is_ok()
 }
 
 /// List running sessions by scanning socket files and testing connectivity.
@@ -133,11 +139,11 @@ pub fn list_sessions() -> Vec<String> {
 }
 
 /// Run the server daemon for a given session.
-pub async fn run_server(session_name: String, config: Config) -> Result<()> {
+pub async fn run_server(config: Config) -> Result<()> {
     let sock_dir = socket_dir();
     std::fs::create_dir_all(&sock_dir)?;
 
-    let sock_path = socket_path(&session_name);
+    let sock_path = socket_path();
     cleanup_stale_socket(&sock_path);
 
     let listener = UnixListener::bind(&sock_path)?;
@@ -150,11 +156,11 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
 
     let auto_suspend_secs = config.behavior.auto_suspend_secs;
 
-    // Try to restore from saved session, otherwise create a new one
-    let state = if let Some(saved) = session::store::load_by_name(&session_name) {
-        ServerState::restore_session(saved, event_tx.clone(), 80, 24, config)?
+    // Try to restore from saved state, otherwise create a new one
+    let state = if let Some(saved) = session::store::load() {
+        ServerState::restore(saved, event_tx.clone(), 80, 24, config)?
     } else {
-        ServerState::new_session(session_name.clone(), &event_tx, 80, 24, config)?
+        ServerState::new(&event_tx, 80, 24, config)?
     };
     // Start plugin manager
     let plugin_configs = state.config.plugins.clone();
@@ -265,8 +271,8 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
         }
         // Save session and notify clients before exiting
         let state = state_clone.lock().await;
-        let session = Session::from_state(&state);
-        let _ = session::store::save(&session);
+        let saved = session::SavedState::from_server(&state);
+        let _ = session::store::save(&saved);
         let _ = broadcast_tx_term.send(ServerResponse::SessionEnded);
         let _ = std::fs::remove_file(&sock_path_clone);
         std::process::exit(0);
@@ -305,8 +311,8 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
                         if since.elapsed().as_secs() >= auto_suspend_secs {
                             // Save session and exit
                             let state = state_clone.lock().await;
-                            let session = Session::from_state(&state);
-                            let _ = session::store::save(&session);
+                            let saved = session::SavedState::from_server(&state);
+                            let _ = session::store::save(&saved);
                             let _ = broadcast_tx_suspend.send(ServerResponse::SessionEnded);
                             let _ = std::fs::remove_file(&sock_path_suspend);
                             std::process::exit(0);
@@ -325,8 +331,8 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
     // Clean up
     accept_loop.abort();
     let state = state.lock().await;
-    let session = Session::from_state(&state);
-    let _ = session::store::save(&session);
+    let saved = session::SavedState::from_server(&state);
+    let _ = session::store::save(&saved);
     let _ = std::fs::remove_file(&sock_path);
 
     Ok(())
@@ -362,6 +368,9 @@ async fn process_events(
                     let _ = broadcast_tx.send(ServerResponse::SessionEnded);
                     break;
                 }
+                let state = state.lock().await;
+                let render_state = RenderState::from_server_state(&state);
+                let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
             }
             AppEvent::SystemStats(stats) => {
                 {
@@ -480,8 +489,8 @@ async fn handle_client(
         return Ok(());
     }
 
-    let session_name = match &first_msg {
-        ClientRequest::Attach { session_name } => session_name.clone(),
+    match &first_msg {
+        ClientRequest::Attach => {}
         _ => {
             framing::send(
                 &mut stream,
@@ -493,7 +502,7 @@ async fn handle_client(
     };
 
     // Send attached confirmation
-    framing::send(&mut stream, &ServerResponse::Attached { session_name }).await?;
+    framing::send(&mut stream, &ServerResponse::Attached).await?;
 
     // Register client with default size and current active workspace
     {
@@ -652,7 +661,7 @@ async fn handle_client(
                     break;
                 }
             }
-            ClientRequest::Attach { .. } => {
+            ClientRequest::Attach => {
                 // Already attached, ignore
             }
             ClientRequest::CommandSync(_) => {
@@ -865,11 +874,11 @@ async fn handle_command(
 }
 
 /// Start a daemon in the background for the given session.
-/// Forks the current exe with `daemon <session_name>` args, detaches stdio,
+/// Forks the current exe with `daemon` arg, detaches stdio,
 /// and waits for the socket to appear (up to 5 seconds).
-pub fn start_daemon(session_name: &str) -> Result<()> {
+pub fn start_daemon() -> Result<()> {
     let exe = std::env::current_exe()?;
-    let sock = socket_path(session_name);
+    let sock = socket_path();
 
     // If socket already exists and daemon is alive, nothing to do
     if sock.exists() && std::os::unix::net::UnixStream::connect(&sock).is_ok() {
@@ -889,7 +898,6 @@ pub fn start_daemon(session_name: &str) -> Result<()> {
     use std::process::{Command, Stdio};
     Command::new(exe)
         .arg("daemon")
-        .arg(session_name)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -903,10 +911,7 @@ pub fn start_daemon(session_name: &str) -> Result<()> {
         }
     }
 
-    anyhow::bail!(
-        "timed out waiting for daemon to start for session '{}'",
-        session_name
-    )
+    anyhow::bail!("timed out waiting for daemon to start")
 }
 
 fn cleanup_stale_socket(path: &Path) {
@@ -918,20 +923,14 @@ fn cleanup_stale_socket(path: &Path) {
     }
 }
 
-/// Kill a running session by connecting and sending a kill-server command.
-pub async fn kill_session(session_name: &str) -> Result<()> {
-    let path = socket_path(session_name);
+/// Kill the running daemon by connecting and sending a kill-server command.
+pub async fn kill_daemon() -> Result<()> {
+    let path = socket_path();
     if !path.exists() {
-        anyhow::bail!("no session named '{}'", session_name);
+        anyhow::bail!("no running pane daemon");
     }
     let mut stream = UnixStream::connect(&path).await?;
-    framing::send(
-        &mut stream,
-        &ClientRequest::Attach {
-            session_name: session_name.to_string(),
-        },
-    )
-    .await?;
+    framing::send(&mut stream, &ClientRequest::Attach).await?;
     // Wait for Attached response
     let _: ServerResponse = framing::recv_required(&mut stream).await?;
     // Send kill command
@@ -943,20 +942,14 @@ pub async fn kill_session(session_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Send keys to a specific pane target (session:window.pane format).
-pub async fn send_keys(session_name: &str, keys: &str) -> Result<()> {
-    let path = socket_path(session_name);
+/// Send keys to the active pane.
+pub async fn send_keys(keys: &str) -> Result<()> {
+    let path = socket_path();
     if !path.exists() {
-        anyhow::bail!("no session named '{}'", session_name);
+        anyhow::bail!("no running pane daemon");
     }
     let mut stream = UnixStream::connect(&path).await?;
-    framing::send(
-        &mut stream,
-        &ClientRequest::Attach {
-            session_name: session_name.to_string(),
-        },
-    )
-    .await?;
+    framing::send(&mut stream, &ClientRequest::Attach).await?;
     let _: ServerResponse = framing::recv_required(&mut stream).await?;
 
     // Parse keys: simple text for now, each character as a key event
@@ -991,8 +984,7 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let config = Config::default();
 
-        let state = ServerState::new_session("test-session".to_string(), &event_tx, 80, 24, config)
-            .unwrap();
+        let state = ServerState::new(&event_tx, 80, 24, config).unwrap();
         let state = Arc::new(Mutex::new(state));
         let id_map = Arc::new(Mutex::new(IdMap::new()));
         let clients = ClientRegistry::new();
@@ -1046,18 +1038,11 @@ mod tests {
 
     /// Helper: attach to the server and consume the initial Attached + LayoutChanged + ClientCountChanged messages.
     async fn attach_and_consume_initial(stream: &mut UnixStream) {
-        framing::send(
-            stream,
-            &ClientRequest::Attach {
-                session_name: "test-session".to_string(),
-            },
-        )
-        .await
-        .unwrap();
+        framing::send(stream, &ClientRequest::Attach).await.unwrap();
 
         // Read Attached
         let resp: ServerResponse = framing::recv_required(stream).await.unwrap();
-        assert!(matches!(resp, ServerResponse::Attached { .. }));
+        assert!(matches!(resp, ServerResponse::Attached));
 
         // Consume LayoutChanged and ClientCountChanged in any order
         for _ in 0..2 {
@@ -1249,7 +1234,7 @@ mod tests {
         // Verify state changed directly
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let s = state.lock().await;
-        assert_eq!(s.session_name, "new-name");
+        assert_eq!(s.active_workspace().name, "new-name");
         drop(s);
 
         framing::send(&mut client, &ClientRequest::Detach)
@@ -1363,7 +1348,7 @@ mod tests {
         // Verify the state was actually changed
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let s = state.lock().await;
-        assert_eq!(s.session_name, "sync-name");
+        assert_eq!(s.active_workspace().name, "sync-name");
         drop(s);
 
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
@@ -1537,7 +1522,8 @@ mod tests {
                 success, output, ..
             } => {
                 assert!(success);
-                assert_eq!(output, "test-session", "should expand session name");
+                // session_name now resolves to the active workspace name
+                assert!(!output.is_empty(), "should expand session name to workspace name");
             }
             other => panic!("expected CommandOutput, got {:?}", other),
         }

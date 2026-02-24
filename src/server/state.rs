@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
-use uuid::Uuid;
 
 use crate::config::Config;
 use crate::event::AppEvent;
@@ -25,9 +23,6 @@ pub struct DragState {
 pub struct ServerState {
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
-    pub session_name: String,
-    pub session_id: Uuid,
-    pub session_created_at: DateTime<Utc>,
     pub config: Config,
     pub system_stats: SystemStats,
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -85,7 +80,7 @@ impl ServerState {
     pub fn next_tmux_env(&mut self) -> crate::window::pty::TmuxEnv {
         let n = self.next_pane_number;
         self.next_pane_number += 1;
-        let socket_path = crate::server::daemon::socket_path(&self.session_name);
+        let socket_path = crate::server::daemon::socket_path();
         crate::window::pty::TmuxEnv {
             tmux_value: format!("{},{},0", socket_path.display(), std::process::id()),
             tmux_pane: format!("%{}", n),
@@ -134,8 +129,7 @@ impl ServerState {
         None
     }
 
-    pub fn new_session(
-        name: String,
+    pub fn new(
         event_tx: &mpsc::UnboundedSender<AppEvent>,
         cols: u16,
         rows: u16,
@@ -145,7 +139,7 @@ impl ServerState {
         let group_id = WindowId::new_v4();
 
         // Build tmux env for the first pane
-        let socket_path = crate::server::daemon::socket_path(&name);
+        let socket_path = crate::server::daemon::socket_path();
         let tmux_env = crate::window::pty::TmuxEnv {
             tmux_value: format!("{},{},0", socket_path.display(), std::process::id()),
             tmux_pane: "%0".to_string(),
@@ -170,9 +164,6 @@ impl ServerState {
         Ok(Self {
             workspaces: vec![workspace],
             active_workspace: 0,
-            session_name: name,
-            session_id: Uuid::new_v4(),
-            session_created_at: Utc::now(),
             config,
             system_stats: SystemStats::default(),
             event_tx: event_tx.clone(),
@@ -182,8 +173,8 @@ impl ServerState {
         })
     }
 
-    pub fn restore_session(
-        session: crate::session::Session,
+    pub fn restore(
+        saved: crate::session::SavedState,
         event_tx: mpsc::UnboundedSender<AppEvent>,
         width: u16,
         height: u16,
@@ -193,10 +184,10 @@ impl ServerState {
         let mut workspaces = Vec::new();
         let mut pane_counter: u32 = 0;
 
-        let socket_path = crate::server::daemon::socket_path(&session.name);
+        let socket_path = crate::server::daemon::socket_path();
         let pid = std::process::id();
 
-        for ws_config in &session.workspaces {
+        for ws_config in &saved.workspaces {
             let layout = ws_config.layout.clone();
             let resolved = layout.resolve(size);
             let mut groups = HashMap::new();
@@ -293,10 +284,7 @@ impl ServerState {
 
         Ok(Self {
             workspaces,
-            active_workspace: session.active_workspace,
-            session_name: session.name,
-            session_id: session.id,
-            session_created_at: session.created_at,
+            active_workspace: saved.active_workspace,
             config,
             system_stats: SystemStats::default(),
             event_tx,
@@ -725,9 +713,6 @@ mod tests {
         let state = ServerState {
             workspaces: vec![workspace],
             active_workspace: 0,
-            session_name: "test-session".to_string(),
-            session_id: Uuid::new_v4(),
-            session_created_at: Utc::now(),
             config: Config::default(),
             system_stats: SystemStats::default(),
             event_tx,
@@ -775,9 +760,6 @@ mod tests {
         let state = ServerState {
             workspaces: vec![workspace],
             active_workspace: 0,
-            session_name: "test-session".to_string(),
-            session_id: Uuid::new_v4(),
-            session_created_at: Utc::now(),
             config: Config::default(),
             system_stats: SystemStats::default(),
             event_tx,
@@ -1134,7 +1116,7 @@ mod tests {
     async fn test_add_tab_to_active_group() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+            ServerState::new(&event_tx, 80, 24, Config::default())
                 .unwrap();
         let gid = state.active_workspace().active_group;
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 1);
@@ -1149,7 +1131,7 @@ mod tests {
     async fn test_split_active_group() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+            ServerState::new(&event_tx, 80, 24, Config::default())
                 .unwrap();
         assert_eq!(state.active_workspace().groups.len(), 1);
 
@@ -1166,7 +1148,7 @@ mod tests {
     async fn test_split_active_group_keeps_new_split_visible() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+            ServerState::new(&event_tx, 80, 24, Config::default())
                 .unwrap();
         state.last_size = (120, 40);
 
@@ -1201,7 +1183,7 @@ mod tests {
     async fn test_new_workspace_names_increment() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+            ServerState::new(&event_tx, 80, 24, Config::default())
                 .unwrap();
         // First workspace gets an auto-generated name
         let first_name = state.workspaces[0].name.clone();
@@ -1221,7 +1203,7 @@ mod tests {
     async fn test_close_workspace_adjusts_active_index() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+            ServerState::new(&event_tx, 80, 24, Config::default())
                 .unwrap();
         state.new_workspace(80, 24).unwrap();
         state.new_workspace(80, 24).unwrap();
@@ -1282,12 +1264,11 @@ mod tests {
     // ---- existing tests ----
 
     #[tokio::test]
-    async fn test_server_state_new_session() {
+    async fn test_server_state_new() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let state =
-            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+            ServerState::new(&event_tx, 80, 24, Config::default())
                 .unwrap();
-        assert_eq!(state.session_name, "test");
         assert_eq!(state.workspaces.len(), 1);
         assert_eq!(state.active_workspace, 0);
     }
@@ -1296,7 +1277,7 @@ mod tests {
     async fn test_server_state_workspace_accessors() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let state =
-            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+            ServerState::new(&event_tx, 80, 24, Config::default())
                 .unwrap();
         let ws = state.active_workspace();
         assert_eq!(ws.groups.len(), 1);
@@ -1306,7 +1287,7 @@ mod tests {
     async fn test_server_state_close_workspace_single() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+            ServerState::new(&event_tx, 80, 24, Config::default())
                 .unwrap();
         // Closing last workspace signals shutdown
         assert!(state.close_workspace());
@@ -1317,7 +1298,7 @@ mod tests {
     async fn test_server_state_new_workspace() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+            ServerState::new(&event_tx, 80, 24, Config::default())
                 .unwrap();
         state.new_workspace(80, 24).unwrap();
         assert_eq!(state.workspaces.len(), 2);
@@ -1327,8 +1308,7 @@ mod tests {
     #[tokio::test]
     async fn test_next_tmux_env_increments() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
-        let mut state = ServerState::new_session(
-            "tmux-test".to_string(),
+        let mut state = ServerState::new(
             &event_tx,
             80,
             24,
@@ -1336,13 +1316,12 @@ mod tests {
         )
         .unwrap();
 
-        // new_session already uses pane 0, so next_pane_number starts at 1
+        // new already uses pane 0, so next_pane_number starts at 1
         assert_eq!(state.next_pane_number, 1);
 
         let env1 = state.next_tmux_env();
         assert_eq!(env1.tmux_pane, "%1");
         assert!(env1.tmux_value.contains(",0")); // ends with ",<pid>,0"
-        assert!(env1.tmux_value.contains("tmux-test.sock"));
 
         let env2 = state.next_tmux_env();
         assert_eq!(env2.tmux_pane, "%2");
@@ -1357,9 +1336,9 @@ mod tests {
     async fn test_last_pane_number() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new_session("test".to_string(), &event_tx, 80, 24, Config::default())
+            ServerState::new(&event_tx, 80, 24, Config::default())
                 .unwrap();
-        // new_session uses pane 0, so last_pane_number = 0 initially
+        // new uses pane 0, so last_pane_number = 0 initially
         assert_eq!(state.last_pane_number(), 0);
 
         state.next_tmux_env(); // assigns %1

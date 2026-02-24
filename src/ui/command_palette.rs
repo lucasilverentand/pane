@@ -448,21 +448,15 @@ fn all_actions() -> Vec<(Action, String, String, &'static str)> {
         ),
         // Session
         (
-            Action::SessionPicker,
-            "Session Picker".into(),
-            "Open the session picker".into(),
-            "Session",
-        ),
-        (
             Action::Detach,
             "Detach".into(),
-            "Detach from the session".into(),
+            "Detach from the daemon".into(),
             "Session",
         ),
         (
             Action::Quit,
             "Quit".into(),
-            "Exit pane and close the session".into(),
+            "Exit pane".into(),
             "Session",
         ),
     ]

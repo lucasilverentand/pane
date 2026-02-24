@@ -37,6 +37,7 @@ pub enum Action {
     ResizeGrowV,
     ResizeShrinkV,
     Equalize,
+    #[allow(dead_code)]
     SessionPicker,
     Help,
     ScrollMode,
@@ -129,7 +130,7 @@ impl Default for Behavior {
             mouse: true,
             default_shell: None,
             auto_suspend_secs: 86400,
-            terminal_title_format: Some("{session} - {workspace}".to_string()),
+            terminal_title_format: Some("pane - {workspace}".to_string()),
         }
     }
 }
