@@ -122,6 +122,16 @@ pub fn socket_path() -> PathBuf {
     socket_dir().join("pane.sock")
 }
 
+/// Path to the file storing the running daemon's version string.
+fn version_path() -> PathBuf {
+    socket_dir().join("pane.version")
+}
+
+/// Path to the file storing the running daemon's PID.
+fn pid_path() -> PathBuf {
+    socket_dir().join("pane.pid")
+}
+
 /// Check if the daemon is currently running.
 pub fn is_running() -> bool {
     let sock = socket_path();
@@ -161,6 +171,10 @@ pub async fn run_server(config: Config) -> Result<()> {
     cleanup_stale_socket(&sock_path);
 
     let listener = UnixListener::bind(&sock_path)?;
+
+    // Write version + PID files so clients can detect version mismatches
+    let _ = std::fs::write(version_path(), env!("CARGO_PKG_VERSION"));
+    let _ = std::fs::write(pid_path(), std::process::id().to_string());
 
     // Channel for internal events (PTY output, stats, etc.)
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -289,6 +303,8 @@ pub async fn run_server(config: Config) -> Result<()> {
         let _ = session::store::save(&saved);
         let _ = broadcast_tx_term.send(ServerResponse::SessionEnded);
         let _ = std::fs::remove_file(&sock_path_clone);
+        let _ = std::fs::remove_file(version_path());
+        let _ = std::fs::remove_file(pid_path());
         std::process::exit(0);
     });
 
@@ -329,6 +345,8 @@ pub async fn run_server(config: Config) -> Result<()> {
                             let _ = session::store::save(&saved);
                             let _ = broadcast_tx_suspend.send(ServerResponse::SessionEnded);
                             let _ = std::fs::remove_file(&sock_path_suspend);
+                            let _ = std::fs::remove_file(version_path());
+                            let _ = std::fs::remove_file(pid_path());
                             std::process::exit(0);
                         }
                     }
@@ -348,6 +366,8 @@ pub async fn run_server(config: Config) -> Result<()> {
     let saved = session::SavedState::from_server(&state);
     let _ = session::store::save(&saved);
     let _ = std::fs::remove_file(&sock_path);
+    let _ = std::fs::remove_file(version_path());
+    let _ = std::fs::remove_file(pid_path());
 
     Ok(())
 }
@@ -545,22 +565,32 @@ async fn handle_client(
     // Spawn a task to forward broadcasts to this client
     let write_clone = Arc::clone(&write_stream);
     let forward_task = tokio::spawn(async move {
-        while let Ok(response) = broadcast_rx.recv().await {
-            let mut writer = write_clone.lock().await;
-            // Reassemble a UnixStream-like writer for framing
-            let json = match serde_json::to_vec(&response) {
-                Ok(j) => j,
-                Err(_) => continue,
-            };
-            let len = json.len() as u32;
-            use tokio::io::AsyncWriteExt;
-            if writer.write_all(&len.to_be_bytes()).await.is_err() {
-                break;
+        loop {
+            match broadcast_rx.recv().await {
+                Ok(response) => {
+                    let mut writer = write_clone.lock().await;
+                    let json = match serde_json::to_vec(&response) {
+                        Ok(j) => j,
+                        Err(_) => continue,
+                    };
+                    let len = json.len() as u32;
+                    use tokio::io::AsyncWriteExt;
+                    if writer.write_all(&len.to_be_bytes()).await.is_err() {
+                        break;
+                    }
+                    if writer.write_all(&json).await.is_err() {
+                        break;
+                    }
+                    let _ = writer.flush().await;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Channel overflowed — skip lost messages and keep going
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    break;
+                }
             }
-            if writer.write_all(&json).await.is_err() {
-                break;
-            }
-            let _ = writer.flush().await;
         }
     });
 
@@ -601,6 +631,9 @@ async fn handle_client(
             ClientRequest::Key(sk) => {
                 let key_event = sk.into();
                 let mut state = state.lock().await;
+                if state.workspaces.is_empty() {
+                    continue;
+                }
                 // Set state to this client's active workspace
                 if let Some(cws) = clients.get_active_workspace(client_id).await {
                     state.active_workspace = cws;
@@ -657,6 +690,9 @@ async fn handle_client(
             }
             ClientRequest::MouseScroll { up } => {
                 let mut state = state.lock().await;
+                if state.workspaces.is_empty() {
+                    continue;
+                }
                 if let Some(cws) = clients.get_active_workspace(client_id).await {
                     state.active_workspace = cws;
                 }
@@ -712,12 +748,41 @@ async fn handle_client(
 
 /// Handle mouse down events server-side (pane focus changes).
 fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) -> bool {
+    if state.workspaces.is_empty() {
+        return false;
+    }
     state.drag_state = None;
 
     let bar_h = state.workspace_bar_height();
     let (w, h) = state.last_size;
     let body_height = h.saturating_sub(1 + bar_h);
     let body = ratatui::layout::Rect::new(0, bar_h, w, body_height);
+
+    // Floating windows are rendered on top — check them first (in reverse z-order)
+    {
+        let ws = state.active_workspace();
+        for fw in ws.floating_windows.iter().rev() {
+            let fx = fw.x;
+            let fy = fw.y + bar_h;
+            if x >= fx && x < fx + fw.width && y >= fy && y < fy + fw.height {
+                let fid = fw.id;
+                state.focus_group(fid);
+                return true;
+            }
+        }
+    }
+
+    // Zoomed mode: the zoomed window fills the entire body, just focus it
+    {
+        let ws = state.active_workspace();
+        if let Some(zoomed_id) = ws.zoomed_window {
+            if x >= body.x && x < body.x + body.width && y >= body.y && y < body.y + body.height {
+                state.focus_group(zoomed_id);
+                return true;
+            }
+            return false;
+        }
+    }
 
     // Check for split border hit (drag initiation)
     {
@@ -900,9 +965,22 @@ pub fn start_daemon() -> Result<()> {
     let exe = std::env::current_exe()?;
     let sock = socket_path();
 
-    // If socket already exists and daemon is alive, nothing to do
+    // If socket already exists and daemon is alive, check if we need to restart
     if sock.exists() && std::os::unix::net::UnixStream::connect(&sock).is_ok() {
-        return Ok(());
+        let needs_restart = if cfg!(debug_assertions) {
+            // Dev builds: always restart so the daemon matches the latest cargo build
+            true
+        } else {
+            // Release builds: restart only when the version has changed
+            let daemon_version = std::fs::read_to_string(version_path()).unwrap_or_default();
+            daemon_version.trim() != env!("CARGO_PKG_VERSION")
+        };
+
+        if needs_restart {
+            stop_daemon(&sock);
+        } else {
+            return Ok(());
+        }
     }
 
     // Clean up stale socket
@@ -932,6 +1010,35 @@ pub fn start_daemon() -> Result<()> {
     }
 
     anyhow::bail!("timed out waiting for daemon to start")
+}
+
+/// Stop a running daemon gracefully (SIGTERM), waiting for it to exit.
+fn stop_daemon(sock: &Path) {
+    use nix::sys::signal::{kill, Signal};
+    use nix::unistd::Pid;
+
+    // Try reading the PID file first
+    let pid = std::fs::read_to_string(pid_path())
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok());
+
+    if let Some(pid) = pid {
+        let pid = Pid::from_raw(pid);
+        // SIGTERM for graceful shutdown (saves session state)
+        let _ = kill(pid, Signal::SIGTERM);
+        // Wait for the process to exit (up to 3 seconds)
+        for _ in 0..60 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if kill(pid, None).is_err() {
+                break; // Process is gone
+            }
+        }
+    }
+
+    // Clean up leftover files
+    let _ = std::fs::remove_file(sock);
+    let _ = std::fs::remove_file(version_path());
+    let _ = std::fs::remove_file(pid_path());
 }
 
 fn cleanup_stale_socket(path: &Path) {
@@ -1605,5 +1712,74 @@ mod tests {
             .await
             .unwrap();
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    }
+
+    #[test]
+    fn test_mouse_click_focuses_correct_pane() {
+        use crate::layout::{LayoutNode, SplitDirection, TabId};
+        use crate::server::state::ServerState;
+        use crate::system_stats::SystemStats;
+        use crate::window::{Tab, TabKind, Window, WindowId};
+        use crate::workspace::Workspace;
+        use std::collections::{HashMap, HashSet};
+
+        let (event_tx, _rx) = mpsc::unbounded_channel();
+        let gid1 = WindowId::new_v4();
+        let gid2 = WindowId::new_v4();
+        let p1 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "left");
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "right");
+        let g1 = Window::new(gid1, p1);
+        let g2 = Window::new(gid2, p2);
+        let mut groups = HashMap::new();
+        groups.insert(gid1, g1);
+        groups.insert(gid2, g2);
+        let layout = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(gid1)),
+            second: Box::new(LayoutNode::Leaf(gid2)),
+        };
+        let workspace = Workspace {
+            name: "test".to_string(),
+            layout,
+            groups,
+            active_group: gid1,
+            folded_windows: HashSet::new(),
+            sync_panes: false,
+            zoomed_window: None,
+            saved_ratios: None,
+            floating_windows: Vec::new(),
+        };
+        let mut state = ServerState {
+            workspaces: vec![workspace],
+            active_workspace: 0,
+            config: Config::default(),
+            system_stats: SystemStats::default(),
+            event_tx,
+            last_size: (120, 40),
+            next_pane_number: 2,
+            drag_state: None,
+        };
+
+        // Verify initial state: gid1 is active
+        assert_eq!(state.active_workspace().active_group, gid1);
+
+        // Click on the RIGHT pane (x=90, y=20, well inside the second pane area)
+        // Body: (0, 3, 120, 36), split at x=60
+        // Right pane: (60, 3, 60, 36)
+        let changed = handle_mouse_down_server(&mut state, 90, 20);
+        assert!(changed, "mouse click on right pane should trigger layout change");
+        assert_eq!(
+            state.active_workspace().active_group, gid2,
+            "clicking right pane should focus gid2"
+        );
+
+        // Click on the LEFT pane to focus it back
+        let changed = handle_mouse_down_server(&mut state, 30, 20);
+        assert!(changed, "mouse click on left pane should trigger layout change");
+        assert_eq!(
+            state.active_workspace().active_group, gid1,
+            "clicking left pane should focus gid1"
+        );
     }
 }

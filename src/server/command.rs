@@ -511,8 +511,8 @@ pub fn execute(
 
         Command::CloseWorkspace => {
             if state.close_workspace() {
-                let _ = broadcast_tx.send(ServerResponse::SessionEnded);
-                return Ok(CommandResult::SessionEnded);
+                let _ = broadcast_tx.send(ServerResponse::AllWorkspacesClosed);
+                return Ok(CommandResult::LayoutChanged);
             }
             let (w, h) = state.last_size;
             state.resize_all_tabs(w, h);
@@ -1216,11 +1216,16 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_close_workspace_single_ends_session() {
+    fn test_execute_close_workspace_single_sends_all_closed() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let mut broadcast_rx = broadcast_tx.subscribe();
         let cmd = Command::CloseWorkspace;
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
-        assert!(matches!(result, CommandResult::SessionEnded));
+        assert!(matches!(result, CommandResult::LayoutChanged));
+        assert_eq!(state.workspaces.len(), 0);
+        // Should have broadcast AllWorkspacesClosed
+        let msg = broadcast_rx.try_recv().unwrap();
+        assert!(matches!(msg, ServerResponse::AllWorkspacesClosed));
     }
 
     #[test]

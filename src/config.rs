@@ -61,6 +61,7 @@ pub enum Action {
     NewFloat,
     PrevWorkspace,
     NextWorkspace,
+    NewPane,
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +301,7 @@ fn action_name_map() -> HashMap<&'static str, Action> {
     m.insert("new_float", Action::NewFloat);
     m.insert("prev_workspace", Action::PrevWorkspace);
     m.insert("next_workspace", Action::NextWorkspace);
+    m.insert("new_pane", Action::NewPane);
     for n in 1..=9u8 {
         // Leak is fine — these are static strings created once at startup
         let name: &'static str = Box::leak(format!("focus_group_{}", n).into_boxed_str());

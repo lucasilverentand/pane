@@ -48,6 +48,8 @@ pub struct Client {
     pub should_quit: bool,
     /// When true, auto-switch to the newest workspace on next layout update.
     pending_new_workspace: bool,
+    /// Selected option in the NoWorkspaces menu (0 = New Workspace, 1 = Quit).
+    pub no_workspaces_selected: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,6 +82,7 @@ impl Client {
             ui_focus: UiFocus::Panes,
             should_quit: false,
             pending_new_workspace: false,
+            no_workspaces_selected: 0,
         }
     }
 
@@ -311,6 +314,10 @@ impl Client {
             ServerResponse::SessionEnded => {
                 self.should_quit = true;
             }
+            ServerResponse::AllWorkspacesClosed => {
+                self.no_workspaces_selected = 0;
+                self.mode.push_overlay(Overlay::NoWorkspaces);
+            }
             ServerResponse::ClientListChanged(list) => {
                 self.client_count = list.len() as u32;
                 self.client_list = list;
@@ -487,6 +494,10 @@ impl Client {
                 Overlay::TabPicker => self.handle_tab_picker_key(key, writer).await,
                 Overlay::Confirm => self.handle_confirm_key(key),
                 Overlay::Leader => self.handle_leader_key(key, tui, writer).await,
+                Overlay::NoWorkspaces => {
+                    self.handle_no_workspaces_key(key, writer).await
+                }
+                Overlay::NewPane => self.handle_new_pane_key(key, writer).await,
             };
         }
 
@@ -651,8 +662,18 @@ impl Client {
                 return Ok(());
             }
             Action::NewTab => {
-                self.tab_picker_state = Some(TabPickerState::new());
-                self.mode.push_overlay(Overlay::TabPicker);
+                if self.ui_focus == UiFocus::WorkspaceBar {
+                    self.pending_new_workspace = true;
+                    let mut w = writer.lock().await;
+                    let _ = send_request(
+                        &mut *w,
+                        &ClientRequest::Command("new-session -d -s workspace".to_string()),
+                    )
+                    .await;
+                } else {
+                    self.tab_picker_state = Some(TabPickerState::new());
+                    self.mode.push_overlay(Overlay::TabPicker);
+                }
                 return Ok(());
             }
             Action::PasteClipboard => {
@@ -666,6 +687,20 @@ impl Client {
                         .await;
                     }
                 }
+                return Ok(());
+            }
+            Action::NewPane => {
+                self.mode.push_overlay(Overlay::NewPane);
+                return Ok(());
+            }
+            Action::CloseTab => {
+                let cmd = if self.ui_focus == UiFocus::WorkspaceBar {
+                    "close-workspace"
+                } else {
+                    "kill-pane"
+                };
+                let mut w = writer.lock().await;
+                let _ = send_request(&mut *w, &ClientRequest::Command(cmd.to_string())).await;
                 return Ok(());
             }
 
@@ -921,6 +956,78 @@ impl Client {
             }
             KeyCode::Esc | KeyCode::Char('n') => {
                 self.mode.dismiss_overlay();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn handle_new_pane_key(
+        &mut self,
+        key: KeyEvent,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        match key.code {
+            KeyCode::Char('h') | KeyCode::Char('l') => {
+                self.mode.dismiss_overlay();
+                let mut w = writer.lock().await;
+                let _ = send_request(
+                    &mut *w,
+                    &ClientRequest::Command("split-window -h".to_string()),
+                )
+                .await;
+            }
+            KeyCode::Char('j') | KeyCode::Char('k') => {
+                self.mode.dismiss_overlay();
+                let mut w = writer.lock().await;
+                let _ = send_request(
+                    &mut *w,
+                    &ClientRequest::Command("split-window -v".to_string()),
+                )
+                .await;
+            }
+            KeyCode::Esc => {
+                self.mode.dismiss_overlay();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn handle_no_workspaces_key(
+        &mut self,
+        key: KeyEvent,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.no_workspaces_selected > 0 {
+                    self.no_workspaces_selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.no_workspaces_selected < 1 {
+                    self.no_workspaces_selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                if self.no_workspaces_selected == 0 {
+                    // New Workspace
+                    self.mode.dismiss_overlay();
+                    self.pending_new_workspace = true;
+                    let mut w = writer.lock().await;
+                    let _ = send_request(
+                        &mut *w,
+                        &ClientRequest::Command("new-session -d -s workspace".to_string()),
+                    )
+                    .await;
+                } else {
+                    // Quit
+                    self.should_quit = true;
+                }
+            }
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.should_quit = true;
             }
             _ => {}
         }
@@ -1229,7 +1336,8 @@ fn action_to_command(action: &Action) -> Option<String> {
         // Action::NewTab is handled client-side (opens picker)
         // NextTab/PrevTab handled client-side in execute_action (context-dependent)
         Action::NextTab | Action::PrevTab => None,
-        Action::CloseTab => Some("kill-pane".to_string()),
+        // CloseTab is now context-dependent (handled in execute_action)
+        Action::CloseTab => None,
         Action::SplitHorizontal => Some("split-window -h".to_string()),
         Action::SplitVertical => Some("split-window -v".to_string()),
         Action::RestartPane => Some("restart-pane".to_string()),
@@ -1271,6 +1379,7 @@ fn action_to_command(action: &Action) -> Option<String> {
         | Action::FocusGroupN(_)
         | Action::PrevWorkspace
         | Action::NextWorkspace
-        | Action::NewTab => None,
+        | Action::NewTab
+        | Action::NewPane => None,
     }
 }

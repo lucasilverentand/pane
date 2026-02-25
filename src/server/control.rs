@@ -92,6 +92,9 @@ pub async fn run_control_mode(
                 ServerResponse::PluginSegments(_) => {
                     // Skip plugin segments in control mode
                 }
+                ServerResponse::AllWorkspacesClosed => {
+                    let _ = writeln!(out, "%all-workspaces-closed");
+                }
             }
             let _ = out.flush();
         }

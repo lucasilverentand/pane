@@ -519,17 +519,14 @@ impl ServerState {
         Ok(())
     }
 
-    /// Close the active workspace. Returns true if this was the last workspace
-    /// (caller should shut down the server).
+    /// Close the active workspace. Returns true if this was the last workspace.
     pub fn close_workspace(&mut self) -> bool {
-        if self.workspaces.len() <= 1 {
-            return true;
-        }
+        let was_last = self.workspaces.len() <= 1;
         self.workspaces.remove(self.active_workspace);
-        if self.active_workspace >= self.workspaces.len() {
+        if self.active_workspace >= self.workspaces.len() && !self.workspaces.is_empty() {
             self.active_workspace = self.workspaces.len() - 1;
         }
-        false
+        was_last
     }
 
     pub fn restart_active_tab(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
@@ -1081,7 +1078,7 @@ mod tests {
     fn test_close_workspace_single_returns_true() {
         let (mut state, _rx) = make_test_state();
         assert!(state.close_workspace());
-        assert_eq!(state.workspaces.len(), 1); // workspace still there, caller handles shutdown
+        assert_eq!(state.workspaces.len(), 0); // workspace removed, caller shows menu
     }
 
     #[test]
@@ -1150,9 +1147,9 @@ mod tests {
         let mut state =
             ServerState::new(&event_tx, 80, 24, Config::default())
                 .unwrap();
-        // Closing last workspace signals shutdown
+        // Closing last workspace removes it, caller shows menu
         assert!(state.close_workspace());
-        assert_eq!(state.workspaces.len(), 1);
+        assert_eq!(state.workspaces.len(), 0);
     }
 
     #[tokio::test]

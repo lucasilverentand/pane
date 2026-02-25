@@ -236,6 +236,10 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                     client_picker::render(cp_state, theme, frame, frame.area());
                 }
             }
+            Overlay::NoWorkspaces => {
+                render_no_workspaces(client, theme, frame, frame.area());
+            }
+            Overlay::NewPane => {} // No popup, status bar only
             _ => {}
         }
     }
@@ -333,6 +337,62 @@ pub fn confirm_dialog_hit_test(
     } else {
         None
     }
+}
+
+fn render_no_workspaces(
+    client: &Client,
+    theme: &crate::config::Theme,
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+) {
+    use ratatui::{
+        style::{Color, Modifier, Style},
+        text::{Line, Span},
+        widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    };
+
+    let popup_area = centered_rect(40, 20, area);
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(" no workspaces ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.accent));
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let selected = client.no_workspaces_selected;
+
+    let option = |idx: usize, label: &str| -> Line<'_> {
+        let marker = if selected == idx { " > " } else { "   " };
+        let style = if selected == idx {
+            Style::default()
+                .fg(Color::Black)
+                .bg(theme.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        Line::from(vec![
+            Span::styled(marker, style),
+            Span::styled(format!(" {} ", label), style),
+        ])
+    };
+
+    let lines = vec![
+        Line::raw(""),
+        Line::styled(
+            "  All workspaces closed.",
+            Style::default().fg(Color::White),
+        ),
+        Line::raw(""),
+        option(0, "New workspace"),
+        option(1, "Quit"),
+    ];
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
 }
 
 fn centered_rect(

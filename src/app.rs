@@ -18,6 +18,8 @@ pub enum Overlay {
     Confirm,
     Leader,
     TabPicker,
+    NoWorkspaces,
+    NewPane,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

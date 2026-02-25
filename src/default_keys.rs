@@ -39,7 +39,6 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         // ── Mode ────────────────────────────────────────────────────────
         ("i", Action::EnterInteract), // Switch to Interact mode (keys go to PTY)
         // ── Navigation ─────────────────────────────────────────────────
-        ("h", Action::FocusLeft),      // Focus left (context-dependent)
         ("j", Action::FocusDown),      // Focus down (context-dependent)
         ("k", Action::FocusUp),        // Focus up (context-dependent)
         ("l", Action::FocusRight),     // Focus right (context-dependent)
@@ -55,10 +54,11 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         ("shift+l", Action::NextTab),   // Next tab (shift+l)
         ("shift+h", Action::PrevTab),   // Previous tab (shift+h)
         ("n", Action::NewTab),          // Open the tab picker to create a new tab
+        ("d", Action::CloseTab),        // Close the active tab (context-dependent)
         ("x", Action::CloseTab),        // Close the active tab (and its pane)
         // ── Splits ──────────────────────────────────────────────────────
-        ("d", Action::SplitHorizontal),     // Split the focused pane side-by-side
-        ("shift+d", Action::SplitVertical), // Split the focused pane top-and-bottom
+        ("h", Action::SplitHorizontal), // Split the focused pane side-by-side
+        ("v", Action::SplitVertical),   // Split the focused pane top-and-bottom
         // ── Layout ──────────────────────────────────────────────────────
         ("m", Action::MaximizeFocused), // Maximize the focused pane (hide others)
         ("z", Action::ToggleZoom),      // Toggle zoom on the focused pane
@@ -66,6 +66,7 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         ("shift+f", Action::NewFloat),  // Create a new floating pane
         ("=", Action::Equalize),        // Reset all panes to equal sizes
         // ── Resize ──────────────────────────────────────────────────────
+        ("r", Action::ResizeMode),          // Enter resize mode (hjkl to resize)
         ("shift+j", Action::ResizeGrowV),   // Grow focused pane vertically
         ("shift+k", Action::ResizeShrinkV), // Shrink focused pane vertically
         // ── Move tabs ───────────────────────────────────────────────────
@@ -76,10 +77,9 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         // ── Tools ───────────────────────────────────────────────────────
         ("s", Action::ScrollMode),     // Enter scroll mode to browse output history
         ("c", Action::CopyMode),       // Enter copy mode to select and copy text
-        ("p", Action::PasteClipboard), // Paste system clipboard into the active pane
+        ("p", Action::NewPane),        // Open directional pane split picker
         ("/", Action::CommandPalette), // Open the command palette
         ("?", Action::CommandPalette), // Open the command palette (alias)
-        ("r", Action::RestartPane),    // Kill and restart the active pane's process
         ("q", Action::CloseTab),       // Close the active tab (quit pane, server keeps running)
     ]
 }

@@ -75,6 +75,14 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
                 "NEW TAB ".to_string(),
                 "type to filter  enter spawn  esc cancel ".to_string(),
             ),
+            Overlay::NoWorkspaces => (
+                String::new(),
+                "j/k select  enter confirm  q quit ".to_string(),
+            ),
+            Overlay::NewPane => (
+                "PANE ".to_string(),
+                "h/l horizontal  j/k vertical  esc cancel ".to_string(),
+            ),
         }
     } else {
         match client.mode.base {

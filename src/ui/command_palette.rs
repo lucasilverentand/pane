@@ -216,6 +216,7 @@ pub fn action_display_name(action: &Action) -> &str {
         Action::NewFloat => "New Float",
         Action::PrevWorkspace => "Previous Workspace",
         Action::NextWorkspace => "Next Workspace",
+        Action::NewPane => "New Pane",
     }
 }
 
@@ -418,6 +419,13 @@ fn all_actions() -> Vec<(Action, String, String, &'static str)> {
             "Next Workspace".into(),
             "Switch to the next workspace".into(),
             "Workspaces",
+        ),
+        // Panes
+        (
+            Action::NewPane,
+            "New Pane".into(),
+            "Open directional pane split picker".into(),
+            "Layout",
         ),
         // Tools
         (
