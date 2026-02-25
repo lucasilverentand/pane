@@ -39,6 +39,7 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         // ── Mode ────────────────────────────────────────────────────────
         ("i", Action::EnterInteract), // Switch to Interact mode (keys go to PTY)
         // ── Navigation ─────────────────────────────────────────────────
+        ("h", Action::FocusLeft),      // Focus left (context-dependent)
         ("j", Action::FocusDown),      // Focus down (context-dependent)
         ("k", Action::FocusUp),        // Focus up (context-dependent)
         ("l", Action::FocusRight),     // Focus right (context-dependent)
@@ -57,8 +58,8 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         ("d", Action::CloseTab),        // Close the active tab (context-dependent)
         ("x", Action::CloseTab),        // Close the active tab (and its pane)
         // ── Splits ──────────────────────────────────────────────────────
-        ("h", Action::SplitHorizontal), // Split the focused pane side-by-side
-        ("v", Action::SplitVertical),   // Split the focused pane top-and-bottom
+        ("s", Action::SplitHorizontal),     // Split the focused pane to the right
+        ("shift+s", Action::SplitVertical), // Split the focused pane to the bottom
         // ── Layout ──────────────────────────────────────────────────────
         ("m", Action::MaximizeFocused), // Maximize the focused pane (hide others)
         ("z", Action::ToggleZoom),      // Toggle zoom on the focused pane
@@ -75,7 +76,6 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         ("alt+k", Action::MoveTabUp),    // Move active tab to the window above
         ("alt+l", Action::MoveTabRight), // Move active tab to the window on the right
         // ── Tools ───────────────────────────────────────────────────────
-        ("s", Action::ScrollMode),     // Enter scroll mode to browse output history
         ("c", Action::CopyMode),       // Enter copy mode to select and copy text
         ("p", Action::NewPane),        // Open directional pane split picker
         ("/", Action::CommandPalette), // Open the command palette
