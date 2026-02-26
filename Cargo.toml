@@ -1,27 +1,7 @@
-[package]
-name = "pane"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-ratatui = "0.29"
-crossterm = { version = "0.28", features = ["event-stream"] }
-tokio = { version = "1", features = ["full"] }
-portable-pty = "0.8"
-vt100 = "0.15"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-uuid = { version = "1", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
-dirs = "5"
-futures = "0.3"
-anyhow = "1"
-toml = "0.8"
-sysinfo = "0.31"
-clap = { version = "4", features = ["derive"] }
-nix = { version = "0.29", features = ["user", "signal"] }
-arboard = "3"
-unicode-width = "0.2"
-
-[dev-dependencies]
-tempfile = "3"
+[workspace]
+members = [
+    "crates/pane-protocol",
+    "crates/pane-daemon",
+    "crates/pane-tui",
+]
+resolver = "2"

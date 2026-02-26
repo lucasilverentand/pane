@@ -1,0 +1,253 @@
+use ratatui::{
+    layout::{Constraint, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Borders, Paragraph},
+    Frame,
+};
+
+use pane_protocol::app::Mode;
+use pane_protocol::config::{Config, Theme};
+use crate::copy_mode::CopyModeState;
+use pane_protocol::layout::SplitDirection;
+use crate::window::terminal::{render_screen, render_screen_copy_mode};
+
+fn render_content(
+    screen: &vt100::Screen,
+    cms: Option<&CopyModeState>,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let lines: Vec<Line<'static>> = match cms {
+        Some(cms) => render_screen_copy_mode(screen, area, cms),
+        None => render_screen(screen, area),
+    };
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_search_bar(cms: &CopyModeState, theme: &Theme, frame: &mut Frame, area: Rect) {
+    let line = Line::from(vec![
+        Span::styled(
+            "/",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{}_", cms.search_query),
+            Style::default().fg(Color::White),
+        ),
+    ]);
+    let paragraph = Paragraph::new(line);
+    frame.render_widget(paragraph, area);
+}
+
+/// Render a pane group from a snapshot (used by the client).
+/// Receives the active tab's vt100 screen directly instead of accessing the Pane struct.
+pub fn render_group_from_snapshot(
+    group: &pane_protocol::protocol::WindowSnapshot,
+    screen: Option<&vt100::Screen>,
+    is_active: bool,
+    mode: &Mode,
+    copy_mode_state: Option<&CopyModeState>,
+    config: &Config,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let theme = &config.theme;
+
+    // Check if the active pane's foreground process has a decoration
+    let decoration_color = group
+        .tabs
+        .get(group.active_tab)
+        .and_then(|snap| snap.foreground_process.as_deref())
+        .and_then(|proc| config.decoration_for(proc))
+        .map(|d| d.border_color);
+
+    let border_style = if is_active {
+        let mode_color = match mode {
+            Mode::Normal => theme.border_normal,
+            Mode::Interact => theme.border_interact,
+            Mode::Scroll => theme.border_scroll,
+            Mode::Copy => theme.border_scroll,
+            _ => theme.border_active,
+        };
+        let color = decoration_color.unwrap_or(mode_color);
+        Style::default().fg(color)
+    } else {
+        Style::default().fg(theme.border_inactive)
+    };
+
+    // Build top title with tab info
+    let tab_info = if group.tabs.len() > 1 {
+        format!(" [{}/{}] ", group.active_tab + 1, group.tabs.len())
+    } else {
+        String::new()
+    };
+
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(border_style);
+
+    if !tab_info.is_empty() {
+        block = block.title_top(Line::styled(tab_info, Style::default().fg(theme.dim)));
+    }
+
+    if is_active {
+        let indicator = match mode {
+            Mode::Copy => " COPY ",
+            Mode::Scroll => " SCROLL ",
+            Mode::Select => " SELECT ",
+            Mode::Normal => " NORMAL ",
+            Mode::Interact => " INTERACT ",
+            _ => " ACTIVE ",
+        };
+        block = block.title_bottom(Line::styled(
+            indicator,
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.width <= 2 || inner.height == 0 {
+        return;
+    }
+
+    let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, inner.height);
+
+    let cms = if is_active { copy_mode_state } else { None };
+    let show_search = cms.map_or(false, |c| c.search_active);
+    let show_tab_bar = group.tabs.len() > 1;
+
+    let mut constraints = Vec::new();
+    if show_tab_bar {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Fill(1));
+    if show_search {
+        constraints.push(Constraint::Length(1));
+    }
+    let areas = Layout::vertical(constraints).split(padded);
+
+    let (content_area, search_area) = if show_tab_bar {
+        // Tab bar from snapshot
+        render_tab_bar_from_snapshot(group, theme, frame, areas[0]);
+        (areas[1], areas.get(2).copied())
+    } else {
+        (areas[0], areas.get(1).copied())
+    };
+
+    // Content
+    if let Some(screen) = screen {
+        render_content(screen, cms, frame, content_area);
+    }
+
+    if show_search {
+        if let Some(search_area) = search_area {
+            render_search_bar(cms.unwrap(), theme, frame, search_area);
+        }
+    }
+}
+
+fn render_tab_bar_from_snapshot(
+    group: &pane_protocol::protocol::WindowSnapshot,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    const SEP: &str = " \u{B7} ";
+    const SEP_WIDTH: u16 = 3;
+    const PLUS_TEXT: &str = " + ";
+    const PLUS_RESERVE: u16 = 3;
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut cursor_x = area.x;
+    let max_x = area.x + area.width;
+
+    for (i, tab) in group.tabs.iter().enumerate() {
+        let is_active_tab = i == group.active_tab;
+        let label = format!(" {} ", tab.title);
+        let label_width = label.len() as u16;
+
+        if cursor_x + label_width + PLUS_RESERVE > max_x && !is_active_tab {
+            continue;
+        }
+
+        if i > 0 {
+            spans.push(Span::styled(SEP, Style::default().fg(theme.dim)));
+            cursor_x += SEP_WIDTH;
+        }
+
+        let style = if is_active_tab {
+            Style::default()
+                .fg(theme.tab_active)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.tab_inactive)
+        };
+
+        spans.push(Span::styled(label, style));
+        cursor_x += label_width;
+    }
+
+    if cursor_x + SEP_WIDTH + PLUS_RESERVE <= max_x {
+        spans.push(Span::styled(SEP, Style::default().fg(theme.dim)));
+        spans.push(Span::styled(PLUS_TEXT, Style::default().fg(theme.accent)));
+    }
+
+    let line = Line::from(spans);
+    let paragraph = Paragraph::new(line);
+    frame.render_widget(paragraph, area);
+}
+
+/// Render a fold indicator line with 1-cell padding on each side.
+pub fn render_folded(
+    is_active: bool,
+    direction: SplitDirection,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let fg = if is_active { theme.accent } else { theme.dim };
+    let style = Style::default().fg(fg);
+    let buf = frame.buffer_mut();
+
+    match direction {
+        SplitDirection::Horizontal => {
+            // Vertical line, 1 cell wide. Pad top and bottom by 1.
+            if area.height <= 2 {
+                return;
+            }
+            let x = area.x;
+            let y_start = area.y + 1;
+            let y_end = area.y + area.height - 1;
+            for y in y_start..y_end {
+                if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
+                    cell.set_symbol("│");
+                    cell.set_style(style);
+                }
+            }
+        }
+        SplitDirection::Vertical => {
+            // Horizontal line, 1 cell tall. Pad left and right by 1.
+            if area.width <= 2 {
+                return;
+            }
+            let y = area.y;
+            let x_start = area.x + 1;
+            let x_end = area.x + area.width - 1;
+            for x in x_start..x_end {
+                if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
+                    cell.set_symbol("─");
+                    cell.set_style(style);
+                }
+            }
+        }
+    }
+}
