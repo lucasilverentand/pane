@@ -848,6 +848,55 @@ impl LayoutNode {
             LayoutNode::Split { first, .. } => first.first_leaf(),
         }
     }
+
+    /// Sanitize a restored layout: clamp ratios to [0.15, 0.85] and collapse
+    /// splits where one side would be too small to be usable. Returns the
+    /// set of leaf IDs that were removed (so the caller can skip spawning
+    /// their PTYs).
+    pub fn sanitize(&mut self) -> Vec<TabId> {
+        let mut removed = Vec::new();
+        self.sanitize_inner(&mut removed);
+        removed
+    }
+
+    fn sanitize_inner(&mut self, removed: &mut Vec<TabId>) {
+        // Depth-first: sanitize children first, then check this node.
+        if let LayoutNode::Split { first, second, .. } = self {
+            first.sanitize_inner(removed);
+            second.sanitize_inner(removed);
+        }
+
+        // Now fix up this node
+        if let LayoutNode::Split { ratio, .. } = self {
+            // Clamp ratio so neither side is too extreme
+            *ratio = ratio.clamp(0.15, 0.85);
+        }
+
+        // Collapse overly deep trees
+        let depth = self.depth();
+        if depth > 3 {
+            if let LayoutNode::Split { ratio, first, second, .. } = self {
+                let take_first = *ratio >= 0.5;
+                if take_first {
+                    removed.extend(second.pane_ids());
+                    *self = *first.clone();
+                } else {
+                    removed.extend(first.pane_ids());
+                    *self = *second.clone();
+                }
+            }
+        }
+    }
+
+    /// Returns the maximum depth of the tree.
+    pub fn depth(&self) -> usize {
+        match self {
+            LayoutNode::Leaf(_) => 1,
+            LayoutNode::Split { first, second, .. } => {
+                1 + first.depth().max(second.depth())
+            }
+        }
+    }
 }
 
 enum NeighborResult {

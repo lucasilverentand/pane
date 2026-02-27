@@ -199,11 +199,16 @@ impl ServerState {
         let pid = std::process::id();
 
         for ws_config in &session.workspaces {
-            let layout = ws_config.layout.clone();
+            let mut layout = ws_config.layout.clone();
+            let removed = layout.sanitize();
             let resolved = layout.resolve(size);
             let mut groups = HashMap::new();
 
             for group_config in &ws_config.groups {
+                // Skip groups that were pruned during layout sanitization
+                if removed.contains(&group_config.id) {
+                    continue;
+                }
                 let mut tabs = Vec::new();
                 let (cols, rows) = resolved
                     .iter()
