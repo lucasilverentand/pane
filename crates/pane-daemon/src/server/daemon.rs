@@ -912,23 +912,53 @@ pub fn kill_daemon(session_name: &str) {
     let pid_file = pid_path(session_name);
     if let Ok(contents) = std::fs::read_to_string(&pid_file) {
         if let Ok(pid) = contents.trim().parse::<i32>() {
-            let _ = nix::sys::signal::kill(
-                nix::unistd::Pid::from_raw(pid),
-                nix::sys::signal::Signal::SIGTERM,
-            );
-            // Wait briefly for the daemon to exit
-            for _ in 0..20 {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err() {
-                    break;
-                }
-            }
+            kill_pid(pid);
         }
     }
+    // Also kill any orphan daemons for this session that we don't have a PID
+    // file for (e.g. started before PID tracking was added, or whose PID file
+    // was lost). Uses the process table directly to find them.
+    kill_orphan_daemons(session_name);
     // Clean up all files
     let _ = std::fs::remove_file(socket_path(session_name));
     let _ = std::fs::remove_file(pid_file);
     let _ = std::fs::remove_file(version_path(session_name));
+}
+
+/// Send SIGTERM to a PID and wait up to 1 second for it to exit.
+fn kill_pid(pid: i32) {
+    let _ = nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid),
+        nix::sys::signal::Signal::SIGTERM,
+    );
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err() {
+            return;
+        }
+    }
+}
+
+/// Find and kill any `pane daemon <session>` processes that aren't tracked by
+/// the PID file. This catches orphans from before PID tracking was added.
+fn kill_orphan_daemons(session_name: &str) {
+    let my_pid = std::process::id() as i32;
+    let Ok(output) = std::process::Command::new("pgrep")
+        .args(["-f", &format!("pane daemon {}", session_name)])
+        .output()
+    else {
+        return;
+    };
+    let Ok(stdout) = std::str::from_utf8(&output.stdout) else {
+        return;
+    };
+    for line in stdout.lines() {
+        if let Ok(pid) = line.trim().parse::<i32>() {
+            if pid != my_pid {
+                kill_pid(pid);
+            }
+        }
+    }
 }
 
 /// Start a daemon in the background for the given session.
