@@ -82,27 +82,35 @@ impl Client {
 
         let mut stream = UnixStream::connect(&sock).await?;
 
-        // Attach
-        framing::send(
-            &mut stream,
-            &ClientRequest::Attach {
-                session_name: session_name.to_string(),
-            },
-        )
-        .await?;
+        // Attach with timeout — if the daemon is stuck, don't hang forever
+        let handshake = async {
+            framing::send(
+                &mut stream,
+                &ClientRequest::Attach {
+                    session_name: session_name.to_string(),
+                },
+            )
+            .await?;
 
-        // Wait for Attached
-        let resp: ServerResponse = framing::recv_required(&mut stream).await?;
-        let _session_name = match resp {
-            ServerResponse::Attached { session_name } => session_name,
-            ServerResponse::Error(e) => anyhow::bail!("server error: {}", e),
-            _ => anyhow::bail!("unexpected response: {:?}", resp),
+            let resp: ServerResponse = framing::recv_required(&mut stream).await?;
+            match resp {
+                ServerResponse::Attached { .. } => {}
+                ServerResponse::Error(e) => anyhow::bail!("server error: {}", e),
+                _ => anyhow::bail!("unexpected response: {:?}", resp),
+            };
+
+            let resp: ServerResponse = framing::recv_required(&mut stream).await?;
+            Ok::<_, anyhow::Error>(resp)
         };
+
+        let resp = tokio::time::timeout(std::time::Duration::from_secs(5), handshake)
+            .await
+            .map_err(|_| anyhow::anyhow!("daemon handshake timed out — is the daemon healthy?"))?
+            ?;
 
         let mut client = Client::new(config, session_name);
 
-        // Read initial LayoutChanged
-        let resp: ServerResponse = framing::recv_required(&mut stream).await?;
+        // Apply initial LayoutChanged
         if let ServerResponse::LayoutChanged { render_state } = resp {
             client.apply_layout(render_state);
         }

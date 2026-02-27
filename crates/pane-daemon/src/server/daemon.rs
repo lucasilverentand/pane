@@ -366,7 +366,17 @@ async fn process_events(
                 {
                     let mut state = state.lock().await;
                     if let Some(pane) = state.find_tab_mut(pane_id) {
-                        pane.process_output(&bytes);
+                        // Catch panics in vt100 processing so a single pane
+                        // can't take down the entire daemon.
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            pane.process_output(&bytes);
+                        }));
+                        if result.is_err() {
+                            eprintln!(
+                                "pane: caught panic in process_output for pane {:?}",
+                                pane_id
+                            );
+                        }
                     }
                 }
                 let _ = broadcast_tx.send(ServerResponse::PaneOutput {
@@ -875,7 +885,8 @@ async fn handle_command(
 }
 
 /// Kill a daemon by PID (SIGTERM) and wait for it to exit.
-fn kill_daemon(session_name: &str) {
+/// Also cleans up socket, version, and PID files.
+pub fn kill_daemon(session_name: &str) {
     let pid_file = pid_path(session_name);
     if let Ok(contents) = std::fs::read_to_string(&pid_file) {
         if let Ok(pid) = contents.trim().parse::<i32>() {
@@ -935,12 +946,17 @@ pub fn start_daemon(session_name: &str) -> Result<()> {
 
     // Fork a background daemon process
     use std::process::{Command, Stdio};
+    let log_path = socket_dir().join(format!("{}.log", session_name));
+    let log_file = std::fs::File::create(&log_path).unwrap_or_else(|_| {
+        // Fall back to /dev/null if we can't create the log file
+        std::fs::File::open("/dev/null").unwrap()
+    });
     Command::new(exe)
         .arg("daemon")
         .arg(session_name)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(log_file))
         .spawn()?;
 
     // Wait for socket to appear (100 retries × 50ms = 5s max)

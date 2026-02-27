@@ -57,6 +57,34 @@ enum Commands {
     },
 }
 
+/// Start the daemon, connect the TUI client, and retry once if the daemon
+/// crashes during handshake (e.g. from a corrupt saved session).
+fn start_and_connect(session_name: &str, config: Config) -> anyhow::Result<()> {
+    pane_daemon::server::daemon::start_daemon(session_name)?;
+    tui::install_panic_hook();
+    let rt = tokio::runtime::Runtime::new()?;
+
+    match rt.block_on(client::Client::run(session_name, config.clone())) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("timed out")
+                || msg.contains("connection closed")
+                || msg.contains("Connection refused")
+                || msg.contains("Broken pipe")
+            {
+                // Daemon likely crashed — kill stale process and retry once
+                eprintln!("pane: daemon connection failed ({}), retrying...", msg);
+                pane_daemon::server::daemon::kill_daemon(session_name);
+                pane_daemon::server::daemon::start_daemon(session_name)?;
+                rt.block_on(client::Client::run(session_name, config))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config = Config::load();
@@ -64,27 +92,16 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         None => {
             // Default: auto-start daemon for "default" session + connect client
-            let session_name = "default";
-            pane_daemon::server::daemon::start_daemon(session_name)?;
-            tui::install_panic_hook();
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(client::Client::run(session_name, config))
+            start_and_connect("default", config)
         }
         Some(Commands::New { name }) => {
             let name =
                 name.unwrap_or_else(|| format!("session-{}", chrono::Utc::now().timestamp()));
-            pane_daemon::server::daemon::start_daemon(&name)?;
-            tui::install_panic_hook();
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(client::Client::run(&name, config))
+            start_and_connect(&name, config)
         }
         Some(Commands::Attach { name }) => {
             let name = name.unwrap_or_else(|| "default".to_string());
-            // For attach, start daemon if not running (restores from saved session)
-            pane_daemon::server::daemon::start_daemon(&name)?;
-            tui::install_panic_hook();
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(client::Client::run(&name, config))
+            start_and_connect(&name, config)
         }
         Some(Commands::Daemon { name }) => {
             let name = name.unwrap_or_else(|| "default".to_string());
