@@ -1,5 +1,6 @@
 pub mod app;
 pub mod config;
+pub mod default_keys;
 pub mod event;
 pub mod framing;
 pub mod keys;

@@ -446,6 +446,8 @@ impl Client {
     }
 
     /// Interact mode: forward ALL keys to PTY except Escape (-> Normal).
+    /// The leader key (space) is NOT intercepted here — use Escape to enter
+    /// Normal mode first, then press space for the leader popup.
     async fn handle_interact_key(
         &mut self,
         key: KeyEvent,
@@ -457,13 +459,6 @@ impl Client {
         // Escape -> Normal mode
         if normalized.code == KeyCode::Esc {
             self.mode = Mode::Normal;
-            return Ok(());
-        }
-
-        // Check for leader key (allows accessing leader from Interact)
-        let leader_key = config::normalize_key(self.config.leader.key);
-        if normalized == leader_key {
-            self.enter_leader_mode();
             return Ok(());
         }
 
@@ -503,109 +498,25 @@ impl Client {
             return self.execute_action(action, tui, writer).await;
         }
 
-        // Normal mode plain-key bindings
-        match normalized.code {
-            KeyCode::Char('i') if normalized.modifiers == KeyModifiers::NONE => {
-                self.mode = Mode::Interact;
-            }
-            KeyCode::Char('h') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::FocusLeft, tui, writer).await;
-            }
-            KeyCode::Char('j') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::FocusDown, tui, writer).await;
-            }
-            KeyCode::Char('k') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::FocusUp, tui, writer).await;
-            }
-            KeyCode::Char('l') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::FocusRight, tui, writer).await;
-            }
-            KeyCode::Char('d') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::SplitHorizontal, tui, writer)
-                    .await;
-            }
-            KeyCode::Char('D') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::SplitVertical, tui, writer)
-                    .await;
-            }
-            KeyCode::Char('x') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::CloseTab, tui, writer).await;
-            }
-            KeyCode::Char('n') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::NewTab, tui, writer).await;
-            }
-            KeyCode::Char('m') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::MaximizeFocused, tui, writer)
-                    .await;
-            }
-            KeyCode::Char('z') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::ToggleZoom, tui, writer).await;
-            }
-            KeyCode::Char('f') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::ToggleFloat, tui, writer).await;
-            }
-            KeyCode::Char('F') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::NewFloat, tui, writer).await;
-            }
-            KeyCode::Char('s') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::ScrollMode, tui, writer).await;
-            }
-            KeyCode::Char('c') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::CopyMode, tui, writer).await;
-            }
-            KeyCode::Char('p') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::PasteClipboard, tui, writer)
-                    .await;
-            }
-            KeyCode::Char('/') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::CommandPalette, tui, writer)
-                    .await;
-            }
-            KeyCode::Char('?') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::Help, tui, writer).await;
-            }
-            KeyCode::Char('=') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::Equalize, tui, writer).await;
-            }
-            KeyCode::Char('H') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::ResizeShrinkH, tui, writer)
-                    .await;
-            }
-            KeyCode::Char('L') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::ResizeGrowH, tui, writer).await;
-            }
-            KeyCode::Char('J') if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::ResizeGrowV, tui, writer).await;
-            }
-            KeyCode::Char('K') if normalized.modifiers == KeyModifiers::NONE => {
-                return self
-                    .execute_action(Action::ResizeShrinkV, tui, writer)
-                    .await;
-            }
-            KeyCode::Tab if normalized.modifiers == KeyModifiers::NONE => {
-                return self.execute_action(Action::NextTab, tui, writer).await;
-            }
-            KeyCode::BackTab => {
-                return self.execute_action(Action::PrevTab, tui, writer).await;
-            }
-            KeyCode::Char(c)
-                if c.is_ascii_digit() && c != '0' && normalized.modifiers == KeyModifiers::NONE =>
+        // Normal mode data-driven keymap
+        if let Some(action) = self.config.normal_keys.lookup(&normalized).cloned() {
+            return self.execute_action(action, tui, writer).await;
+        }
+
+        // 1-9 → FocusGroupN (number keys are dynamic, keep outside the keymap)
+        if let KeyCode::Char(c) = normalized.code {
+            if c.is_ascii_digit()
+                && c != '0'
+                && normalized.modifiers == KeyModifiers::NONE
             {
                 let n = c as u8 - b'0';
                 return self
                     .execute_action(Action::FocusGroupN(n), tui, writer)
                     .await;
             }
-            _ => {
-                // No PTY fallback in Normal mode — keys are consumed
-            }
         }
+
+        // No PTY fallback in Normal mode — keys are consumed
         Ok(())
     }
 
@@ -1080,6 +991,7 @@ fn action_to_command(action: &Action) -> Option<String> {
         Action::ToggleZoom => Some("toggle-zoom".to_string()),
         Action::ToggleFloat => Some("toggle-float".to_string()),
         Action::NewFloat => Some("new-float".to_string()),
+        Action::ToggleFold => Some("toggle-fold".to_string()),
         Action::RenameWindow | Action::RenamePane => None,
         // Client-only actions handled before this function is called
         Action::Quit
@@ -1093,6 +1005,9 @@ fn action_to_command(action: &Action) -> Option<String> {
         | Action::EnterNormal
         | Action::Detach
         | Action::SessionPicker
-        | Action::NewTab => None, // NewTab opens picker client-side
+        | Action::NewTab // NewTab opens picker client-side
+        | Action::ResizeMode
+        | Action::NewPane
+        | Action::ClientPicker => None,
     }
 }

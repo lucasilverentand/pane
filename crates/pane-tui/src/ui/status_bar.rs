@@ -78,12 +78,12 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
             let path_str = if let Some(ref ls) = client.leader_state {
                 let keys: Vec<String> = ls.path.iter().map(|k| format_leader_key(k)).collect();
                 if keys.is_empty() {
-                    "\\".to_string()
+                    "⎵".to_string()
                 } else {
-                    format!("\\ {}", keys.join(" "))
+                    format!("⎵ {}", keys.join(" "))
                 }
             } else {
-                "\\".to_string()
+                "⎵".to_string()
             };
             (format!("[LEADER] {}", path_str), "esc cancel ".to_string())
         }

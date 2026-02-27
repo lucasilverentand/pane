@@ -55,6 +55,10 @@ pub enum Action {
     ToggleZoom,
     ToggleFloat,
     NewFloat,
+    ToggleFold,
+    ResizeMode,
+    NewPane,
+    ClientPicker,
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +178,7 @@ impl Default for StatusBarConfig {
             show_disk: false,
             update_interval_secs: 3,
             left: "".to_string(),
-            right: "#{cpu} #{mem} #{load}  \\ leader ".to_string(),
+            right: "#{cpu} #{mem} #{load}  ⎵ leader ".to_string(),
         }
     }
 }
@@ -192,12 +196,19 @@ impl KeyMap {
     pub fn from_defaults() -> Self {
         let mut map = HashMap::new();
 
+        // Hardcoded globals
         let defaults: Vec<(&str, Action)> = vec![
             ("ctrl+q", Action::Quit),
-            ("shift+pageup", Action::ScrollMode),
         ];
 
         for (key_str, action) in defaults {
+            if let Some(key) = parse_key(key_str) {
+                map.insert(key, action);
+            }
+        }
+
+        // Merge data-driven global defaults
+        for (key_str, action) in crate::default_keys::global_defaults() {
             if let Some(key) = parse_key(key_str) {
                 map.insert(key, action);
             }
@@ -257,6 +268,16 @@ impl KeyMap {
             map.insert(key, Action::FocusGroupN(n));
         }
 
+        Self { map }
+    }
+
+    pub fn from_pairs(pairs: Vec<(&str, Action)>) -> Self {
+        let mut map = HashMap::new();
+        for (key_str, action) in pairs {
+            if let Some(key) = parse_key(key_str) {
+                map.insert(key, action);
+            }
+        }
         Self { map }
     }
 
@@ -341,6 +362,10 @@ fn action_name_map() -> HashMap<&'static str, Action> {
     m.insert("toggle_zoom", Action::ToggleZoom);
     m.insert("toggle_float", Action::ToggleFloat);
     m.insert("new_float", Action::NewFloat);
+    m.insert("toggle_fold", Action::ToggleFold);
+    m.insert("resize_mode", Action::ResizeMode);
+    m.insert("new_pane", Action::NewPane);
+    m.insert("client_picker", Action::ClientPicker);
     for n in 1..=9u8 {
         // Leak is fine — these are static strings created once at startup
         let name: &'static str = Box::leak(format!("focus_group_{}", n).into_boxed_str());
@@ -378,7 +403,7 @@ pub struct LeaderConfig {
 impl Default for LeaderConfig {
     fn default() -> Self {
         Self {
-            key: KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE),
+            key: KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
             timeout_ms: 300,
             root: default_leader_tree(),
         }
@@ -515,9 +540,9 @@ fn default_leader_tree() -> LeaderNode {
     // \/ → Help
     insert_leaf(&mut root, "/", Action::Help, "Help");
 
-    // \\ → PassThrough (literal backslash)
-    let bs_key = KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE);
-    root.insert(bs_key, LeaderNode::PassThrough);
+    // space space → PassThrough (literal space to PTY)
+    let space_key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+    root.insert(space_key, LeaderNode::PassThrough);
 
     LeaderNode::Group {
         label: "Leader".into(),
@@ -627,6 +652,7 @@ pub struct Config {
     pub theme: Theme,
     pub behavior: Behavior,
     pub keys: KeyMap,
+    pub normal_keys: KeyMap,
     pub select_keys: KeyMap,
     pub status_bar: StatusBarConfig,
     pub decorations: Vec<PaneDecoration>,
@@ -640,6 +666,7 @@ impl Default for Config {
             theme: Theme::default(),
             behavior: Behavior::default(),
             keys: KeyMap::from_defaults(),
+            normal_keys: KeyMap::from_pairs(crate::default_keys::normal_defaults()),
             select_keys: KeyMap::select_defaults(),
             status_bar: StatusBarConfig::default(),
             decorations: PaneDecoration::defaults(),
@@ -780,6 +807,11 @@ impl Config {
             config.keys.merge(&keys);
         }
 
+        // Normal keys
+        if let Some(normal_keys) = raw.normal_keys {
+            config.normal_keys.merge(&normal_keys);
+        }
+
         // Select keys
         if let Some(select_keys) = raw.select_keys {
             config.select_keys.merge(&select_keys);
@@ -871,6 +903,7 @@ struct RawConfig {
     theme: Option<RawTheme>,
     behavior: Option<RawBehavior>,
     keys: Option<HashMap<String, String>>,
+    normal_keys: Option<HashMap<String, String>>,
     select_keys: Option<HashMap<String, String>>,
     status_bar: Option<RawStatusBar>,
     decorations: Option<Vec<RawDecoration>>,
@@ -1303,7 +1336,7 @@ min_pane_width = 80
         let leader = LeaderConfig::default();
         assert_eq!(
             leader.key,
-            make_key(KeyCode::Char('\\'), KeyModifiers::NONE)
+            make_key(KeyCode::Char(' '), KeyModifiers::NONE)
         );
         assert_eq!(leader.timeout_ms, 300);
     }
@@ -1451,10 +1484,10 @@ min_pane_width = 80
             LeaderNode::Group { children, .. } => children,
             _ => panic!("root should be a Group"),
         };
-        let bs_key = KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE);
-        match children.get(&bs_key) {
+        let space_key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        match children.get(&space_key) {
             Some(LeaderNode::PassThrough) => {}
-            _ => panic!("expected PassThrough at '\\\\'"),
+            _ => panic!("expected PassThrough at space"),
         }
     }
 

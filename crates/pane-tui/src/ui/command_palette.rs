@@ -201,6 +201,10 @@ pub fn action_display_name(action: &Action) -> &str {
         Action::ToggleZoom => "Toggle Zoom",
         Action::ToggleFloat => "Toggle Float",
         Action::NewFloat => "New Float",
+        Action::ToggleFold => "Toggle Fold",
+        Action::ResizeMode => "Resize Mode",
+        Action::NewPane => "New Pane",
+        Action::ClientPicker => "Client Picker",
     }
 }
 
