@@ -108,6 +108,16 @@ pub fn socket_path(session_name: &str) -> PathBuf {
     socket_dir().join(format!("{}.sock", session_name))
 }
 
+/// Returns the version file path for a given session name.
+fn version_path(session_name: &str) -> PathBuf {
+    socket_dir().join(format!("{}.version", session_name))
+}
+
+/// Returns the PID file path for a given session name.
+fn pid_path(session_name: &str) -> PathBuf {
+    socket_dir().join(format!("{}.pid", session_name))
+}
+
 /// List running sessions by scanning socket files and testing connectivity.
 pub fn list_sessions() -> Vec<String> {
     let dir = socket_dir();
@@ -141,6 +151,10 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
     cleanup_stale_socket(&sock_path);
 
     let listener = UnixListener::bind(&sock_path)?;
+
+    // Write version and PID files so clients can detect version mismatches
+    std::fs::write(version_path(&session_name), env!("CARGO_PKG_VERSION"))?;
+    std::fs::write(pid_path(&session_name), std::process::id().to_string())?;
 
     // Channel for internal events (PTY output, stats, etc.)
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -256,6 +270,7 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
     let state_clone = Arc::clone(&state);
     let broadcast_tx_term = broadcast_tx.clone();
     let sock_path_clone = sock_path.clone();
+    let session_name_clone = session_name.clone();
     tokio::spawn(async move {
         let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("failed to register SIGTERM handler");
@@ -269,6 +284,8 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
         let _ = session::store::save(&session);
         let _ = broadcast_tx_term.send(ServerResponse::SessionEnded);
         let _ = std::fs::remove_file(&sock_path_clone);
+        let _ = std::fs::remove_file(version_path(&session_name_clone));
+        let _ = std::fs::remove_file(pid_path(&session_name_clone));
         std::process::exit(0);
     });
 
@@ -291,6 +308,7 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
         let clients_clone = clients.clone();
         let broadcast_tx_suspend = broadcast_tx.clone();
         let sock_path_suspend = sock_path.clone();
+        let session_name_suspend = session_name.clone();
         tokio::spawn(async move {
             let mut last_empty: Option<tokio::time::Instant> = None;
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -309,6 +327,8 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
                             let _ = session::store::save(&session);
                             let _ = broadcast_tx_suspend.send(ServerResponse::SessionEnded);
                             let _ = std::fs::remove_file(&sock_path_suspend);
+                            let _ = std::fs::remove_file(version_path(&session_name_suspend));
+                            let _ = std::fs::remove_file(pid_path(&session_name_suspend));
                             std::process::exit(0);
                         }
                     }
@@ -328,6 +348,8 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
     let session = session_from_state(&state);
     let _ = session::store::save(&session);
     let _ = std::fs::remove_file(&sock_path);
+    let _ = std::fs::remove_file(version_path(&session_name));
+    let _ = std::fs::remove_file(pid_path(&session_name));
 
     Ok(())
 }
@@ -852,16 +874,54 @@ async fn handle_command(
     false
 }
 
+/// Kill a daemon by PID (SIGTERM) and wait for it to exit.
+fn kill_daemon(session_name: &str) {
+    let pid_file = pid_path(session_name);
+    if let Ok(contents) = std::fs::read_to_string(&pid_file) {
+        if let Ok(pid) = contents.trim().parse::<i32>() {
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid),
+                nix::sys::signal::Signal::SIGTERM,
+            );
+            // Wait briefly for the daemon to exit
+            for _ in 0..20 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    // Clean up all files
+    let _ = std::fs::remove_file(socket_path(session_name));
+    let _ = std::fs::remove_file(pid_file);
+    let _ = std::fs::remove_file(version_path(session_name));
+}
+
 /// Start a daemon in the background for the given session.
 /// Forks the current exe with `daemon <session_name>` args, detaches stdio,
 /// and waits for the socket to appear (up to 5 seconds).
+/// If a daemon is already running with a different version, it is restarted.
 pub fn start_daemon(session_name: &str) -> Result<()> {
     let exe = std::env::current_exe()?;
     let sock = socket_path(session_name);
 
-    // If socket already exists and daemon is alive, nothing to do
+    // If socket already exists and daemon is alive, check version
     if sock.exists() && std::os::unix::net::UnixStream::connect(&sock).is_ok() {
-        return Ok(());
+        let needs_restart = {
+            let ver = version_path(session_name);
+            match std::fs::read_to_string(&ver) {
+                Ok(v) => v.trim() != env!("CARGO_PKG_VERSION"),
+                Err(_) => true, // No version file = old daemon without version support
+            }
+        };
+
+        if needs_restart {
+            eprintln!("pane: restarting daemon (version mismatch)");
+            kill_daemon(session_name);
+        } else {
+            return Ok(());
+        }
     }
 
     // Clean up stale socket

@@ -139,6 +139,10 @@ impl Tab {
         command: Option<String>,
         tmux_env: Option<pty::TmuxEnv>,
     ) -> anyhow::Result<Self> {
+        // vt100 panics on zero dimensions
+        let cols = cols.max(1);
+        let rows = rows.max(1);
+
         let (cmd, args): (&str, Vec<&str>) = match &kind {
             TabKind::Shell => {
                 let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
@@ -279,6 +283,8 @@ impl Tab {
     }
 
     pub fn resize_pty(&mut self, cols: u16, rows: u16) {
+        let cols = cols.max(1);
+        let rows = rows.max(1);
         if self.scroll_offset > 0 {
             self.scroll_to_bottom();
         }
