@@ -99,11 +99,13 @@ impl ServerState {
     }
 
     pub fn active_workspace(&self) -> &Workspace {
-        &self.workspaces[self.active_workspace]
+        let idx = self.active_workspace.min(self.workspaces.len().saturating_sub(1));
+        &self.workspaces[idx]
     }
 
     pub fn active_workspace_mut(&mut self) -> &mut Workspace {
-        &mut self.workspaces[self.active_workspace]
+        let idx = self.active_workspace.min(self.workspaces.len().saturating_sub(1));
+        &mut self.workspaces[idx]
     }
 
     /// Find a pane mutably across all workspaces/groups/tabs.
@@ -208,6 +210,9 @@ impl ServerState {
                     .find(|(id, _)| *id == group_config.id)
                     .map(|(_, r)| (r.width.saturating_sub(2), r.height.saturating_sub(2)))
                     .unwrap_or((80, 24));
+                // Use reasonable minimum — PTY will be resized when a client connects
+                let cols = cols.max(80);
+                let rows = rows.max(24);
 
                 for pane_config in &group_config.tabs {
                     let tmux_env = crate::window::pty::TmuxEnv {
@@ -291,9 +296,16 @@ impl ServerState {
             workspaces.push(Workspace::new("1".to_string(), group_id, group));
         }
 
+        // Clamp active_workspace to valid range
+        let active_workspace = if workspaces.is_empty() {
+            0
+        } else {
+            session.active_workspace.min(workspaces.len() - 1)
+        };
+
         Ok(Self {
             workspaces,
-            active_workspace: session.active_workspace,
+            active_workspace,
             session_name: session.name,
             session_id: session.id,
             session_created_at: session.created_at,

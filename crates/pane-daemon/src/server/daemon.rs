@@ -544,6 +544,28 @@ async fn handle_client(
         let client_ws = clients.get_active_workspace(client_id).await.unwrap_or(0);
         let render_state = render_state_for_client(&state, client_ws);
         framing::send(&mut stream, &ServerResponse::LayoutChanged { render_state }).await?;
+
+        // Collect current screen content for all panes so the client can render
+        // output that arrived before it connected.
+        let mut screen_dumps: Vec<(pane_protocol::layout::TabId, Vec<u8>)> = Vec::new();
+        for ws in &state.workspaces {
+            for group in ws.groups.values() {
+                for pane in &group.tabs {
+                    let data = pane.screen().state_formatted();
+                    if !data.is_empty() {
+                        screen_dumps.push((pane.id, data));
+                    }
+                }
+            }
+        }
+        drop(state); // release lock before sending
+        for (pane_id, data) in screen_dumps {
+            framing::send(
+                &mut stream,
+                &ServerResponse::FullScreenDump { pane_id, data },
+            )
+            .await?;
+        }
     }
 
     // Split the stream for bidirectional communication
@@ -1123,15 +1145,22 @@ mod tests {
         let resp: ServerResponse = framing::recv_required(stream).await.unwrap();
         assert!(matches!(resp, ServerResponse::Attached { .. }));
 
-        // Consume LayoutChanged and ClientCountChanged in any order
-        for _ in 0..2 {
+        // Consume LayoutChanged, ClientCountChanged, and any FullScreenDump messages
+        let mut seen_layout = false;
+        let mut seen_count = false;
+        loop {
             let resp: ServerResponse = framing::recv_required(stream).await.unwrap();
             match resp {
-                ServerResponse::LayoutChanged { .. } | ServerResponse::ClientCountChanged(_) => {}
+                ServerResponse::LayoutChanged { .. } => seen_layout = true,
+                ServerResponse::ClientCountChanged(_) => seen_count = true,
+                ServerResponse::FullScreenDump { .. } => {}
                 other => panic!(
-                    "expected LayoutChanged or ClientCountChanged, got {:?}",
+                    "expected LayoutChanged, ClientCountChanged, or FullScreenDump, got {:?}",
                     other
                 ),
+            }
+            if seen_layout && seen_count {
+                break;
             }
         }
     }
