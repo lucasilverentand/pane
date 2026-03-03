@@ -7,6 +7,7 @@ pub mod keys;
 pub mod layout;
 pub mod plugin;
 pub mod protocol;
+pub mod registry;
 pub mod session;
 pub mod system_stats;
 pub mod window_types;

@@ -7,7 +7,10 @@ use ratatui::{
     Frame,
 };
 
-use pane_protocol::config::{Action, KeyMap, Theme};
+use std::collections::HashMap;
+
+use pane_protocol::config::{Action, KeyMap, LeaderConfig, LeaderNode, Theme};
+use pane_protocol::registry;
 
 /// A single entry in the command palette.
 #[derive(Clone, Debug)]
@@ -27,8 +30,8 @@ pub struct CommandPaletteState {
 }
 
 impl CommandPaletteState {
-    pub fn new(keymap: &KeyMap) -> Self {
-        let all_commands = build_command_list(keymap);
+    pub fn new(keymap: &KeyMap, leader: &LeaderConfig) -> Self {
+        let all_commands = build_command_list(keymap, leader);
         let filtered = all_commands.clone();
         Self {
             input: String::new(),
@@ -66,27 +69,76 @@ impl CommandPaletteState {
 }
 
 /// Build a list of all available commands with display names, keybinding hints, and descriptions.
-pub fn build_command_list(keymap: &KeyMap) -> Vec<CommandEntry> {
-    let actions = all_actions();
+pub fn build_command_list(keymap: &KeyMap, leader: &LeaderConfig) -> Vec<CommandEntry> {
     let reverse = keymap.reverse_map();
+    let leader_binds = leader_bindings(leader);
 
-    actions
-        .into_iter()
-        .map(|(action, display_name, description)| {
-            let keybind = reverse.get(&action).map(|keys| {
-                keys.iter()
-                    .map(|k| key_event_to_string(k))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            });
+    registry::palette_actions()
+        .map(|meta| {
+            let mut hints = Vec::new();
+
+            // Regular keybinds
+            if let Some(keys) = reverse.get(&meta.action) {
+                for k in keys {
+                    hints.push(key_event_to_string(k));
+                }
+            }
+
+            // Leader keybind (e.g. "Space q")
+            if let Some(leader_hint) = leader_binds.get(&meta.action) {
+                hints.push(leader_hint.clone());
+            }
+
+            let keybind = if hints.is_empty() {
+                None
+            } else {
+                Some(hints.join(", "))
+            };
+
             CommandEntry {
-                action,
-                name: display_name,
+                action: meta.action.clone(),
+                name: meta.display_name.to_string(),
                 keybind,
-                description,
+                description: meta.description.to_string(),
             }
         })
         .collect()
+}
+
+/// Walk the leader tree and return the shortest key sequence for each action.
+fn leader_bindings(leader: &LeaderConfig) -> HashMap<Action, String> {
+    let leader_str = key_event_to_string(&leader.key);
+    let mut all: Vec<(Action, String)> = Vec::new();
+
+    fn walk(node: &LeaderNode, path: &str, all: &mut Vec<(Action, String)>) {
+        match node {
+            LeaderNode::Leaf { action, .. } => {
+                all.push((action.clone(), path.to_string()));
+            }
+            LeaderNode::Group { children, .. } => {
+                for (key, child) in children {
+                    let child_path = format!("{} {}", path, key_event_to_string(key));
+                    walk(child, &child_path, all);
+                }
+            }
+            LeaderNode::PassThrough => {}
+        }
+    }
+
+    if let LeaderNode::Group { children, .. } = &leader.root {
+        for (key, child) in children {
+            let path = format!("{} {}", leader_str, key_event_to_string(key));
+            walk(child, &path, &mut all);
+        }
+    }
+
+    // Keep shortest path per action
+    all.sort_by_key(|(_, path)| path.len());
+    let mut result: HashMap<Action, String> = HashMap::new();
+    for (action, path) in all {
+        result.entry(action).or_insert(path);
+    }
+    result
 }
 
 /// Filter commands by substring match on display name or description (case-insensitive).
@@ -151,264 +203,6 @@ pub fn key_event_to_string(key: &KeyEvent) -> String {
     let result = parts.join("+");
     // Remove duplicate "Shift+" for BackTab
     result.replace("Shift+Shift+", "Shift+")
-}
-
-/// Get a human-readable display name for an action.
-#[allow(dead_code)]
-pub fn action_display_name(action: &Action) -> &str {
-    match action {
-        Action::Quit => "Quit",
-        Action::NewWorkspace => "New Workspace",
-        Action::CloseWorkspace => "Close Workspace",
-        Action::SwitchWorkspace(_) => "Switch Workspace",
-        Action::NewTab => "New Tab",
-        Action::DevServerInput => "New Dev Server Tab",
-        Action::NextTab => "Next Tab",
-        Action::PrevTab => "Previous Tab",
-        Action::CloseTab => "Close Tab",
-        Action::SplitHorizontal => "Split Right",
-        Action::SplitVertical => "Split Down",
-        Action::RestartPane => "Restart Pane",
-        Action::FocusLeft => "Focus Left",
-        Action::FocusDown => "Focus Down",
-        Action::FocusUp => "Focus Up",
-        Action::FocusRight => "Focus Right",
-        Action::FocusGroupN(_) => "Focus Group N",
-        Action::MoveTabLeft => "Move Tab Left",
-        Action::MoveTabDown => "Move Tab Down",
-        Action::MoveTabUp => "Move Tab Up",
-        Action::MoveTabRight => "Move Tab Right",
-        Action::ResizeShrinkH => "Shrink Horizontally",
-        Action::ResizeGrowH => "Grow Horizontally",
-        Action::ResizeGrowV => "Grow Vertically",
-        Action::ResizeShrinkV => "Shrink Vertically",
-        Action::Equalize => "Equalize Panes",
-        Action::SessionPicker => "Session Picker",
-        Action::Help => "Help",
-        Action::ScrollMode => "Scroll Mode",
-        Action::CopyMode => "Copy Mode",
-        Action::PasteClipboard => "Paste from Clipboard",
-        Action::SelectLayout(_) => "Select Layout",
-        Action::ToggleSyncPanes => "Toggle Sync Panes",
-        Action::CommandPalette => "Command Palette",
-        Action::RenameWindow => "Rename Window",
-        Action::RenamePane => "Rename Pane",
-        Action::Detach => "Detach",
-        Action::SelectMode => "Select Mode",
-        Action::EnterInteract => "Enter Interact Mode",
-        Action::EnterNormal => "Enter Normal Mode",
-        Action::MaximizeFocused => "Maximize Focused",
-        Action::ToggleZoom => "Toggle Zoom",
-        Action::ToggleFloat => "Toggle Float",
-        Action::NewFloat => "New Float",
-        Action::ToggleFold => "Toggle Fold",
-        Action::ResizeMode => "Resize Mode",
-        Action::NewPane => "New Pane",
-        Action::ClientPicker => "Client Picker",
-    }
-}
-
-/// All actions available for the command palette (excludes parameterized ones).
-/// Returns (Action, display_name, description).
-fn all_actions() -> Vec<(Action, String, String)> {
-    vec![
-        (
-            Action::Quit,
-            "Quit".into(),
-            "Exit pane and close the session".into(),
-        ),
-        (
-            Action::NewWorkspace,
-            "New Workspace".into(),
-            "Create a new workspace".into(),
-        ),
-        (
-            Action::CloseWorkspace,
-            "Close Workspace".into(),
-            "Close the current workspace".into(),
-        ),
-        (
-            Action::NewTab,
-            "New Tab".into(),
-            "Open a new tab in the current window".into(),
-        ),
-        (
-            Action::DevServerInput,
-            "New Dev Server Tab".into(),
-            "Open a dev server tab".into(),
-        ),
-        (
-            Action::NextTab,
-            "Next Tab".into(),
-            "Switch to the next tab".into(),
-        ),
-        (
-            Action::PrevTab,
-            "Previous Tab".into(),
-            "Switch to the previous tab".into(),
-        ),
-        (
-            Action::CloseTab,
-            "Close Tab".into(),
-            "Close the current tab".into(),
-        ),
-        (
-            Action::SplitHorizontal,
-            "Split Right".into(),
-            "Split the focused window horizontally".into(),
-        ),
-        (
-            Action::SplitVertical,
-            "Split Down".into(),
-            "Split the focused window vertically".into(),
-        ),
-        (
-            Action::RestartPane,
-            "Restart Pane".into(),
-            "Restart the exited pane process".into(),
-        ),
-        (
-            Action::FocusLeft,
-            "Focus Left".into(),
-            "Move focus to the left window".into(),
-        ),
-        (
-            Action::FocusDown,
-            "Focus Down".into(),
-            "Move focus to the window below".into(),
-        ),
-        (
-            Action::FocusUp,
-            "Focus Up".into(),
-            "Move focus to the window above".into(),
-        ),
-        (
-            Action::FocusRight,
-            "Focus Right".into(),
-            "Move focus to the right window".into(),
-        ),
-        (
-            Action::MoveTabLeft,
-            "Move Tab Left".into(),
-            "Move the current tab to the left window".into(),
-        ),
-        (
-            Action::MoveTabDown,
-            "Move Tab Down".into(),
-            "Move the current tab to the window below".into(),
-        ),
-        (
-            Action::MoveTabUp,
-            "Move Tab Up".into(),
-            "Move the current tab to the window above".into(),
-        ),
-        (
-            Action::MoveTabRight,
-            "Move Tab Right".into(),
-            "Move the current tab to the right window".into(),
-        ),
-        (
-            Action::ResizeShrinkH,
-            "Shrink Horizontally".into(),
-            "Decrease the focused window width".into(),
-        ),
-        (
-            Action::ResizeGrowH,
-            "Grow Horizontally".into(),
-            "Increase the focused window width".into(),
-        ),
-        (
-            Action::ResizeGrowV,
-            "Grow Vertically".into(),
-            "Increase the focused window height".into(),
-        ),
-        (
-            Action::ResizeShrinkV,
-            "Shrink Vertically".into(),
-            "Decrease the focused window height".into(),
-        ),
-        (
-            Action::Equalize,
-            "Equalize Panes".into(),
-            "Reset all split ratios to equal".into(),
-        ),
-        (
-            Action::MaximizeFocused,
-            "Maximize Focused".into(),
-            "Toggle maximize the focused window".into(),
-        ),
-        (
-            Action::ToggleZoom,
-            "Toggle Zoom".into(),
-            "Toggle full-screen zoom on the focused window".into(),
-        ),
-        (
-            Action::ToggleFloat,
-            "Toggle Float".into(),
-            "Toggle floating mode for the focused window".into(),
-        ),
-        (
-            Action::NewFloat,
-            "New Float".into(),
-            "Create a new floating window".into(),
-        ),
-        (
-            Action::SessionPicker,
-            "Session Picker".into(),
-            "Open the session picker".into(),
-        ),
-        (Action::Help, "Help".into(), "Show keybinding help".into()),
-        (
-            Action::ScrollMode,
-            "Scroll Mode".into(),
-            "Enter scroll mode for the focused pane".into(),
-        ),
-        (
-            Action::CopyMode,
-            "Copy Mode".into(),
-            "Enter copy mode with vim-style selection".into(),
-        ),
-        (
-            Action::PasteClipboard,
-            "Paste from Clipboard".into(),
-            "Paste system clipboard into the focused pane".into(),
-        ),
-        (
-            Action::ToggleSyncPanes,
-            "Toggle Sync Panes".into(),
-            "Broadcast input to all panes in workspace".into(),
-        ),
-        (
-            Action::RenameWindow,
-            "Rename Window".into(),
-            "Rename the current window".into(),
-        ),
-        (
-            Action::RenamePane,
-            "Rename Pane".into(),
-            "Rename the current pane".into(),
-        ),
-        (
-            Action::Detach,
-            "Detach".into(),
-            "Detach from the session".into(),
-        ),
-        (
-            Action::SelectMode,
-            "Select Mode".into(),
-            "Toggle select mode for window navigation".into(),
-        ),
-        (
-            Action::EnterInteract,
-            "Enter Interact Mode".into(),
-            "Switch to interact mode (forward keys to PTY)".into(),
-        ),
-        (
-            Action::EnterNormal,
-            "Enter Normal Mode".into(),
-            "Switch to normal mode (vim-style navigation)".into(),
-        ),
-    ]
 }
 
 /// Render the command palette overlay.
@@ -512,54 +306,68 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pane_protocol::config::KeyMap;
+    use pane_protocol::config::{KeyMap, LeaderConfig};
+
+    fn defaults() -> (KeyMap, LeaderConfig) {
+        (KeyMap::from_defaults(), LeaderConfig::default())
+    }
 
     #[test]
     fn test_build_command_list_not_empty() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
+        let (km, lc) = defaults();
+        let commands = build_command_list(&km, &lc);
         assert!(!commands.is_empty());
     }
 
     #[test]
-    fn test_build_command_list_has_quit() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
-        let quit = commands.iter().find(|e| e.action == Action::Quit);
-        assert!(quit.is_some());
-        let entry = quit.unwrap();
-        assert_eq!(entry.name, "Quit");
-        assert!(entry.keybind.is_some());
+    fn test_build_command_list_has_quit_with_leader_bind() {
+        let (km, lc) = defaults();
+        let commands = build_command_list(&km, &lc);
+        let quit = commands.iter().find(|e| e.action == Action::Quit).unwrap();
+        assert_eq!(quit.name, "Quit");
+        // Quit is leader-only (space+q)
+        let kb = quit.keybind.as_ref().expect("should have leader keybind");
+        assert!(kb.contains("Space"), "expected leader hint, got: {}", kb);
+    }
+
+    #[test]
+    fn test_leader_bindings_includes_nested() {
+        let (_, lc) = defaults();
+        let binds = leader_bindings(&lc);
+        // SplitHorizontal has a root shortcut (space d) and a nested (space w d)
+        let split = binds.get(&Action::SplitHorizontal).unwrap();
+        // Shortest path should win — "Space d" is shorter than "Space w d"
+        assert_eq!(split, "Space d");
     }
 
     #[test]
     fn test_filter_commands_empty_query() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
+        let (km, lc) = defaults();
+        let commands = build_command_list(&km, &lc);
         let filtered = filter_commands(&commands, "");
         assert_eq!(filtered.len(), commands.len());
     }
 
     #[test]
     fn test_filter_commands_by_name() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
+        let (km, lc) = defaults();
+        let commands = build_command_list(&km, &lc);
         let filtered = filter_commands(&commands, "quit");
         assert!(filtered.iter().any(|e| e.action == Action::Quit));
     }
 
     #[test]
     fn test_filter_commands_case_insensitive() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
+        let (km, lc) = defaults();
+        let commands = build_command_list(&km, &lc);
         let filtered = filter_commands(&commands, "QUIT");
         assert!(filtered.iter().any(|e| e.action == Action::Quit));
     }
 
     #[test]
     fn test_filter_commands_no_match() {
-        let keymap = KeyMap::from_defaults();
-        let commands = build_command_list(&keymap);
+        let (km, lc) = defaults();
+        let commands = build_command_list(&km, &lc);
         let filtered = filter_commands(&commands, "zzzzzzzzz");
         assert!(filtered.is_empty());
     }
@@ -589,16 +397,17 @@ mod tests {
     }
 
     #[test]
-    fn test_action_display_name_coverage() {
-        assert_eq!(action_display_name(&Action::Quit), "Quit");
-        assert_eq!(action_display_name(&Action::NewTab), "New Tab");
-        assert_eq!(action_display_name(&Action::SplitHorizontal), "Split Right");
+    fn test_display_name_for_coverage() {
+        use pane_protocol::registry::display_name_for;
+        assert_eq!(display_name_for(&Action::Quit), "Quit");
+        assert_eq!(display_name_for(&Action::NewTab), "New Tab");
+        assert_eq!(display_name_for(&Action::SplitHorizontal), "Split Right");
     }
 
     #[test]
     fn test_command_palette_state_navigation() {
-        let keymap = KeyMap::from_defaults();
-        let mut state = CommandPaletteState::new(&keymap);
+        let (km, lc) = defaults();
+        let mut state = CommandPaletteState::new(&km, &lc);
         assert_eq!(state.selected, 0);
         state.move_down();
         assert_eq!(state.selected, 1);
@@ -611,8 +420,8 @@ mod tests {
 
     #[test]
     fn test_command_palette_state_filter() {
-        let keymap = KeyMap::from_defaults();
-        let mut state = CommandPaletteState::new(&keymap);
+        let (km, lc) = defaults();
+        let mut state = CommandPaletteState::new(&km, &lc);
         let total = state.filtered.len();
         state.input = "tab".to_string();
         state.update_filter();

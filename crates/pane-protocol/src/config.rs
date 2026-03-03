@@ -196,17 +196,6 @@ impl KeyMap {
     pub fn from_defaults() -> Self {
         let mut map = HashMap::new();
 
-        // Hardcoded globals
-        let defaults: Vec<(&str, Action)> = vec![
-            ("ctrl+q", Action::Quit),
-        ];
-
-        for (key_str, action) in defaults {
-            if let Some(key) = parse_key(key_str) {
-                map.insert(key, action);
-            }
-        }
-
         // Merge data-driven global defaults
         for (key_str, action) in crate::default_keys::global_defaults() {
             if let Some(key) = parse_key(key_str) {
@@ -318,56 +307,15 @@ impl KeyMap {
 }
 
 fn action_name_map() -> HashMap<&'static str, Action> {
-    let mut m = HashMap::new();
-    m.insert("quit", Action::Quit);
-    m.insert("new_workspace", Action::NewWorkspace);
-    m.insert("close_workspace", Action::CloseWorkspace);
-    m.insert("new_tab", Action::NewTab);
-    m.insert("dev_server_input", Action::DevServerInput);
-    m.insert("next_tab", Action::NextTab);
+    let mut m: HashMap<&'static str, Action> = crate::registry::action_registry()
+        .iter()
+        .map(|meta| (meta.name, meta.action.clone()))
+        .collect();
+    // Aliases
     m.insert("next_tab_alt", Action::NextTab);
-    m.insert("prev_tab", Action::PrevTab);
     m.insert("prev_tab_alt", Action::PrevTab);
-    m.insert("close_tab", Action::CloseTab);
-    m.insert("split_horizontal", Action::SplitHorizontal);
-    m.insert("split_vertical", Action::SplitVertical);
-    m.insert("restart_pane", Action::RestartPane);
-    m.insert("focus_left", Action::FocusLeft);
-    m.insert("focus_down", Action::FocusDown);
-    m.insert("focus_up", Action::FocusUp);
-    m.insert("focus_right", Action::FocusRight);
-    m.insert("move_tab_left", Action::MoveTabLeft);
-    m.insert("move_tab_down", Action::MoveTabDown);
-    m.insert("move_tab_up", Action::MoveTabUp);
-    m.insert("move_tab_right", Action::MoveTabRight);
-    m.insert("resize_shrink_h", Action::ResizeShrinkH);
-    m.insert("resize_grow_h", Action::ResizeGrowH);
-    m.insert("resize_grow_v", Action::ResizeGrowV);
-    m.insert("resize_shrink_v", Action::ResizeShrinkV);
-    m.insert("equalize", Action::Equalize);
-    m.insert("session_picker", Action::SessionPicker);
-    m.insert("help", Action::Help);
-    m.insert("scroll_mode", Action::ScrollMode);
-    m.insert("copy_mode", Action::CopyMode);
-    m.insert("paste_clipboard", Action::PasteClipboard);
-    m.insert("toggle_sync_panes", Action::ToggleSyncPanes);
-    m.insert("command_palette", Action::CommandPalette);
-    m.insert("rename_window", Action::RenameWindow);
-    m.insert("rename_pane", Action::RenamePane);
-    m.insert("detach", Action::Detach);
-    m.insert("select_mode", Action::SelectMode);
-    m.insert("enter_interact", Action::EnterInteract);
-    m.insert("enter_normal", Action::EnterNormal);
-    m.insert("maximize_focused", Action::MaximizeFocused);
-    m.insert("toggle_zoom", Action::ToggleZoom);
-    m.insert("toggle_float", Action::ToggleFloat);
-    m.insert("new_float", Action::NewFloat);
-    m.insert("toggle_fold", Action::ToggleFold);
-    m.insert("resize_mode", Action::ResizeMode);
-    m.insert("new_pane", Action::NewPane);
-    m.insert("client_picker", Action::ClientPicker);
+    // Parameterized variants still need Box::leak
     for n in 1..=9u8 {
-        // Leak is fine — these are static strings created once at startup
         let name: &'static str = Box::leak(format!("focus_group_{}", n).into_boxed_str());
         m.insert(name, Action::FocusGroupN(n));
         let ws_name: &'static str = Box::leak(format!("switch_workspace_{}", n).into_boxed_str());
@@ -539,6 +487,8 @@ fn default_leader_tree() -> LeaderNode {
     insert_leaf(&mut root, "y", Action::PasteClipboard, "Paste");
     // \/ → Help
     insert_leaf(&mut root, "/", Action::Help, "Help");
+    // \q → Quit
+    insert_leaf(&mut root, "q", Action::Quit, "Quit");
 
     // space space → PassThrough (literal space to PTY)
     let space_key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
@@ -1267,10 +1217,11 @@ mod tests {
     // --- KeyMap ---
 
     #[test]
-    fn test_keymap_defaults_quit() {
+    fn test_keymap_defaults_quit_not_global() {
         let km = KeyMap::from_defaults();
+        // Quit is leader-only now, not in the global keymap
         let key = make_key(KeyCode::Char('q'), KeyModifiers::CONTROL);
-        assert_eq!(km.lookup(&key), Some(&Action::Quit));
+        assert_eq!(km.lookup(&key), None);
     }
 
     #[test]
@@ -1287,16 +1238,12 @@ mod tests {
     fn test_keymap_merge_override() {
         let mut km = KeyMap::from_defaults();
         let mut overrides = HashMap::new();
-        overrides.insert("quit".to_string(), "ctrl+x".to_string());
+        overrides.insert("scroll_mode".to_string(), "ctrl+x".to_string());
         km.merge(&overrides);
-
-        // Old binding should be gone
-        let old_key = make_key(KeyCode::Char('q'), KeyModifiers::CONTROL);
-        assert_eq!(km.lookup(&old_key), None);
 
         // New binding present
         let new_key = make_key(KeyCode::Char('x'), KeyModifiers::CONTROL);
-        assert_eq!(km.lookup(&new_key), Some(&Action::Quit));
+        assert_eq!(km.lookup(&new_key), Some(&Action::ScrollMode));
     }
 
     // --- Config::from_raw ---

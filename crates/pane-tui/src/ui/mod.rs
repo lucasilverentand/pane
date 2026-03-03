@@ -47,6 +47,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
             &names,
             client.render_state.active_workspace,
             theme,
+            client.workspace_bar_focused,
             frame,
             header,
         );
@@ -236,7 +237,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
 }
 
 fn render_confirm_dialog(
-    _client: &Client,
+    client: &Client,
     theme: &pane_protocol::config::Theme,
     frame: &mut Frame,
     area: ratatui::layout::Rect,
@@ -247,7 +248,10 @@ fn render_confirm_dialog(
         widgets::{Block, BorderType, Borders, Clear, Paragraph},
     };
 
-    let message = "Close tab with running process?";
+    let message = client
+        .confirm_message
+        .as_deref()
+        .unwrap_or("Are you sure?");
 
     let popup_area = centered_rect(40, 15, area);
     frame.render_widget(Clear, popup_area);

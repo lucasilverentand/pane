@@ -12,7 +12,7 @@ use pane_protocol::app::{LeaderState, Mode};
 use crate::clipboard;
 use pane_protocol::config::{self, Action, Config};
 use crate::copy_mode::{CopyModeAction, CopyModeState};
-use pane_protocol::layout::TabId;
+use pane_protocol::layout::{Side, SplitDirection, TabId};
 use pane_daemon::server::daemon;
 use pane_protocol::framing;
 use pane_protocol::protocol::{
@@ -42,6 +42,9 @@ pub struct Client {
     pub command_palette_state: Option<CommandPaletteState>,
     pub copy_mode_state: Option<CopyModeState>,
     pub tab_picker_state: Option<TabPickerState>,
+    pub pending_confirm_action: Option<Action>,
+    pub confirm_message: Option<String>,
+    pub workspace_bar_focused: bool,
     pub should_quit: bool,
 }
 
@@ -65,6 +68,9 @@ impl Client {
             command_palette_state: None,
             copy_mode_state: None,
             tab_picker_state: None,
+            pending_confirm_action: None,
+            confirm_message: None,
+            workspace_bar_focused: false,
             should_quit: false,
         }
     }
@@ -311,9 +317,18 @@ impl Client {
                     if let Some(click) = ui::confirm_dialog_hit_test(area, x, y) {
                         match click {
                             ui::ConfirmDialogClick::Confirm => {
+                                if let Some(action) = self.pending_confirm_action.take() {
+                                    if let Some(cmd) = action_to_command(&action) {
+                                        let mut w = writer.lock().await;
+                                        let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                                    }
+                                }
+                                self.confirm_message = None;
                                 self.mode = Mode::Normal;
                             }
                             ui::ConfirmDialogClick::Cancel => {
+                                self.pending_confirm_action = None;
+                                self.confirm_message = None;
                                 self.mode = Mode::Normal;
                             }
                         }
@@ -396,7 +411,16 @@ impl Client {
                     if !ls.popup_visible {
                         let elapsed = ls.entered_at.elapsed().as_millis() as u64;
                         if elapsed >= self.config.leader.timeout_ms {
-                            ls.popup_visible = true;
+                            if ls.path.is_empty() {
+                                // Root level timeout → open command palette
+                                self.leader_state = None;
+                                self.command_palette_state =
+                                    Some(CommandPaletteState::new(&self.config.keys, &self.config.leader));
+                                self.mode = Mode::CommandPalette;
+                            } else {
+                                // Sub-group timeout → show which-key as before
+                                ls.popup_visible = true;
+                            }
                         }
                     }
                 }
@@ -421,7 +445,7 @@ impl Client {
             Mode::Copy => return self.handle_copy_mode_key(key),
             Mode::CommandPalette => return self.handle_command_palette_key(key, tui, writer).await,
             Mode::TabPicker => return self.handle_tab_picker_key(key, writer).await,
-            Mode::Confirm => return self.handle_confirm_key(key),
+            Mode::Confirm => return self.handle_confirm_key(key, writer).await,
             Mode::Leader => return self.handle_leader_key(key, tui, writer).await,
             Mode::Select => {
                 // Falls through to action handling below
@@ -521,6 +545,7 @@ impl Client {
     }
 
     fn enter_leader_mode(&mut self) {
+        self.workspace_bar_focused = false;
         let root = self.config.leader.root.clone();
         self.leader_state = Some(LeaderState {
             path: Vec::new(),
@@ -537,6 +562,72 @@ impl Client {
         _tui: &Tui,
         writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     ) -> Result<()> {
+        // Workspace bar focus mode
+        if self.workspace_bar_focused {
+            match &action {
+                Action::FocusLeft => {
+                    let idx = self.render_state.active_workspace;
+                    if idx > 0 {
+                        let mut w = writer.lock().await;
+                        let _ = send_request(
+                            &mut *w,
+                            &ClientRequest::Command(format!("select-workspace -t {}", idx - 1)),
+                        )
+                        .await;
+                    }
+                    return Ok(());
+                }
+                Action::FocusRight => {
+                    let idx = self.render_state.active_workspace;
+                    if idx + 1 < self.render_state.workspaces.len() {
+                        let mut w = writer.lock().await;
+                        let _ = send_request(
+                            &mut *w,
+                            &ClientRequest::Command(format!("select-workspace -t {}", idx + 1)),
+                        )
+                        .await;
+                    }
+                    return Ok(());
+                }
+                Action::FocusDown | Action::FocusUp => {
+                    self.workspace_bar_focused = false;
+                    return Ok(());
+                }
+                Action::CloseTab => {
+                    // Remap to close workspace when bar is focused
+                    self.pending_confirm_action = Some(Action::CloseWorkspace);
+                    self.confirm_message = Some("Close this workspace?".into());
+                    self.workspace_bar_focused = false;
+                    self.mode = Mode::Confirm;
+                    return Ok(());
+                }
+                Action::EnterInteract => {
+                    self.workspace_bar_focused = false;
+                    self.mode = Mode::Interact;
+                    return Ok(());
+                }
+                _ => {
+                    self.workspace_bar_focused = false;
+                    // Fall through to normal action handling
+                }
+            }
+        }
+
+        // Entering workspace bar focus: FocusUp at the top of the layout
+        if action == Action::FocusUp && self.render_state.workspaces.len() > 1 {
+            if let Some(ws) = self.active_workspace() {
+                let at_top = ws.layout.find_neighbor(
+                    ws.active_group,
+                    SplitDirection::Vertical,
+                    Side::First,
+                ).is_none();
+                if at_top {
+                    self.workspace_bar_focused = true;
+                    return Ok(());
+                }
+            }
+        }
+
         // Client-only actions
         match &action {
             Action::Quit => {
@@ -575,7 +666,7 @@ impl Client {
                 return Ok(());
             }
             Action::CommandPalette => {
-                self.command_palette_state = Some(CommandPaletteState::new(&self.config.keys));
+                self.command_palette_state = Some(CommandPaletteState::new(&self.config.keys, &self.config.leader));
                 self.mode = Mode::CommandPalette;
                 return Ok(());
             }
@@ -588,10 +679,12 @@ impl Client {
                 return Ok(());
             }
             Action::EnterInteract => {
+                self.workspace_bar_focused = false;
                 self.mode = Mode::Interact;
                 return Ok(());
             }
             Action::EnterNormal => {
+                self.workspace_bar_focused = false;
                 self.mode = Mode::Normal;
                 return Ok(());
             }
@@ -615,6 +708,25 @@ impl Client {
                         .await;
                     }
                 }
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        // Destructive actions — show confirmation dialog
+        match &action {
+            Action::CloseTab => {
+                self.pending_confirm_action = Some(Action::CloseTab);
+                self.confirm_message = Some("Close this tab?".into());
+                self.workspace_bar_focused = false;
+                self.mode = Mode::Confirm;
+                return Ok(());
+            }
+            Action::CloseWorkspace => {
+                self.pending_confirm_action = Some(Action::CloseWorkspace);
+                self.confirm_message = Some("Close this workspace?".into());
+                self.workspace_bar_focused = false;
+                self.mode = Mode::Confirm;
                 return Ok(());
             }
             _ => {}
@@ -669,12 +781,25 @@ impl Client {
         Ok(())
     }
 
-    fn handle_confirm_key(&mut self, key: KeyEvent) -> Result<()> {
+    async fn handle_confirm_key(
+        &mut self,
+        key: KeyEvent,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
         match key.code {
             KeyCode::Enter | KeyCode::Char('y') => {
+                if let Some(action) = self.pending_confirm_action.take() {
+                    if let Some(cmd) = action_to_command(&action) {
+                        let mut w = writer.lock().await;
+                        let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                    }
+                }
+                self.confirm_message = None;
                 self.mode = Mode::Normal;
             }
             KeyCode::Esc | KeyCode::Char('n') => {
+                self.pending_confirm_action = None;
+                self.confirm_message = None;
                 self.mode = Mode::Normal;
             }
             _ => {}

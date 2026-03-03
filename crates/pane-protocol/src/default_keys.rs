@@ -3,11 +3,7 @@
 //! Edit bindings here, or override per-user in `~/.config/pane/config.toml`
 //! under `[keys]`, `[normal_keys]`, or `[leader_keys]`.
 
-use std::collections::HashMap;
-
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-use crate::config::{parse_key, Action, LeaderNode};
+use crate::config::Action;
 
 // ---------------------------------------------------------------------------
 // Global keys — active in ALL modes (Normal, Interact)
@@ -58,7 +54,8 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         ("d", Action::CloseTab),        // Close the active tab (context-dependent)
         // ── Splits ──────────────────────────────────────────────────────
         ("s", Action::SplitHorizontal),     // Split the focused pane to the right
-        ("shift+s", Action::SplitVertical), // Split the focused pane to the bottom
+        ("v", Action::SplitVertical),       // Split the focused pane to the bottom
+        ("shift+s", Action::SplitVertical), // Split the focused pane to the bottom (alias)
         // ── Layout ──────────────────────────────────────────────────────
         ("m", Action::MaximizeFocused), // Maximize the focused pane (hide others)
         ("z", Action::ToggleZoom),      // Toggle zoom on the focused pane
@@ -83,158 +80,3 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
     ]
 }
 
-// ---------------------------------------------------------------------------
-// Leader key tree — activated by pressing the leader key (default: space)
-//
-// After pressing the leader key, a popup shows available sub-keys. Each
-// group is a second keypress that opens a category, and a third keypress
-// executes the action. For example: space → w → d = split horizontal.
-//
-// Root-level shortcuts (space d, space y, etc.) skip the group step for
-// frequently used actions.
-// ---------------------------------------------------------------------------
-
-pub fn default_leader_tree() -> LeaderNode {
-    let mut root = HashMap::new();
-
-    // ── Window group (space w) ──────────────────────────────────────────
-    // Manage pane focus, splits, and window layout.
-    {
-        let mut children = HashMap::new();
-        insert_leaf(&mut children, "h", Action::FocusLeft, "Focus Left");
-        insert_leaf(&mut children, "j", Action::FocusDown, "Focus Down");
-        insert_leaf(&mut children, "k", Action::FocusUp, "Focus Up");
-        insert_leaf(&mut children, "l", Action::FocusRight, "Focus Right");
-        for n in 1..=9u8 {
-            let ch = (b'0' + n) as char;
-            let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
-            children.insert(
-                key,
-                LeaderNode::Leaf {
-                    action: Action::FocusGroupN(n),
-                    label: format!("Focus {}", n),
-                },
-            );
-        }
-        insert_leaf(&mut children, "d", Action::SplitHorizontal, "Split H");
-        insert_leaf(&mut children, "shift+d", Action::SplitVertical, "Split V");
-        insert_leaf(&mut children, "c", Action::CloseTab, "Close");
-        insert_leaf(&mut children, "=", Action::Equalize, "Equalize");
-        insert_leaf(&mut children, "r", Action::RestartPane, "Restart");
-        insert_leaf(&mut children, "m", Action::MaximizeFocused, "Maximize");
-        insert_leaf(&mut children, "z", Action::ToggleZoom, "Zoom");
-        insert_leaf(&mut children, "f", Action::ToggleFloat, "Float");
-        insert_leaf(&mut children, "F", Action::NewFloat, "New Float");
-        let key = parse_key("w").unwrap();
-        root.insert(
-            key,
-            LeaderNode::Group {
-                label: "Window".into(),
-                children,
-            },
-        );
-    }
-
-    // ── Tab group (space t) ─────────────────────────────────────────────
-    // Create, close, cycle, and move tabs between windows.
-    {
-        let mut children = HashMap::new();
-        insert_leaf(&mut children, "n", Action::NewTab, "New Tab");
-        insert_leaf(&mut children, "c", Action::CloseTab, "Close Tab");
-        insert_leaf(&mut children, "]", Action::NextTab, "Next Tab");
-        insert_leaf(&mut children, "[", Action::PrevTab, "Prev Tab");
-        insert_leaf(&mut children, "h", Action::MoveTabLeft, "Move Left");
-        insert_leaf(&mut children, "j", Action::MoveTabDown, "Move Down");
-        insert_leaf(&mut children, "k", Action::MoveTabUp, "Move Up");
-        insert_leaf(&mut children, "l", Action::MoveTabRight, "Move Right");
-        let key = parse_key("t").unwrap();
-        root.insert(
-            key,
-            LeaderNode::Group {
-                label: "Tab".into(),
-                children,
-            },
-        );
-    }
-
-    // ── Session group (space s) ─────────────────────────────────────────
-    // Open the command palette or detach.
-    {
-        let mut children = HashMap::new();
-        insert_leaf(&mut children, "p", Action::CommandPalette, "Palette");
-        insert_leaf(&mut children, "d", Action::Detach, "Detach");
-        insert_leaf(&mut children, "c", Action::ClientPicker, "Clients");
-        let key = parse_key("s").unwrap();
-        root.insert(
-            key,
-            LeaderNode::Group {
-                label: "Session".into(),
-                children,
-            },
-        );
-    }
-
-    // ── Workspace group (space W) ───────────────────────────────────────
-    // Create, close, and switch between workspaces.
-    {
-        let mut children = HashMap::new();
-        insert_leaf(&mut children, "n", Action::NewWorkspace, "New");
-        insert_leaf(&mut children, "c", Action::CloseWorkspace, "Close");
-        for n in 1..=9u8 {
-            let ch = (b'0' + n) as char;
-            let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
-            children.insert(
-                key,
-                LeaderNode::Leaf {
-                    action: Action::SwitchWorkspace(n),
-                    label: format!("Switch {}", n),
-                },
-            );
-        }
-        let key = parse_key("shift+w").unwrap();
-        root.insert(
-            key,
-            LeaderNode::Group {
-                label: "Workspace".into(),
-                children,
-            },
-        );
-    }
-
-    // ── Resize mode (space r) ────────────────────────────────────────────
-    // Enter sticky resize mode (hjkl to resize, esc to exit).
-    insert_leaf(&mut root, "r", Action::ResizeMode, "Resize");
-
-    // ── Root-level shortcuts ────────────────────────────────────────────
-    // Two-key shortcuts that skip the group step for common actions.
-    insert_leaf(&mut root, "d", Action::SplitHorizontal, "Split H"); // Quick horizontal split
-    insert_leaf(&mut root, "shift+d", Action::SplitVertical, "Split V"); // Quick vertical split
-    insert_leaf(&mut root, "y", Action::PasteClipboard, "Paste"); // Paste from clipboard
-    insert_leaf(&mut root, "/", Action::CommandPalette, "Command Palette"); // Open command palette
-
-    // space space → send a literal space to the PTY (passthrough)
-    let space_key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
-    root.insert(space_key, LeaderNode::PassThrough);
-
-    LeaderNode::Group {
-        label: "Leader".into(),
-        children: root,
-    }
-}
-
-fn insert_leaf(
-    map: &mut HashMap<KeyEvent, LeaderNode>,
-    key_str: &str,
-    action: Action,
-    label: &str,
-) {
-    if let Some(key) = parse_key(key_str) {
-        map.insert(
-            key,
-            LeaderNode::Leaf {
-                action,
-                label: label.to_string(),
-            },
-        );
-    }
-}
