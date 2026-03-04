@@ -65,8 +65,8 @@ fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
         let label = format!(" {} ", display_name);
         let label_width = label.len() as u16;
 
-        // Check if this tab fits (reserve space for + button)
-        if cursor_x + label_width + plus_reserve > max_x && i != active_idx {
+        // Check if this tab fits (reserve space for separator + button on the right)
+        if cursor_x + label_width + sep_width + plus_reserve > max_x && i != active_idx {
             tab_ranges.push((0, 0));
             continue;
         }
@@ -81,12 +81,10 @@ fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
         tab_ranges.push((tab_start, cursor_x));
     }
 
-    // + button
-    let plus_range = if cursor_x + sep_width + plus_reserve <= max_x {
-        cursor_x += sep_width;
-        let start = cursor_x;
-        cursor_x += plus_reserve;
-        Some((start, cursor_x))
+    // Right-align the + button
+    let plus_range = if plus_reserve <= max_x.saturating_sub(area.x) {
+        let plus_start = max_x - plus_reserve;
+        Some((plus_start, max_x))
     } else {
         None
     };
@@ -118,8 +116,10 @@ pub fn render(
     let layout = compute_layout(workspace_names, active_idx, tab_area);
     let sep = " \u{B7} "; // " · "
 
+    let sep_width = 3u16;
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut first = true;
+    let mut content_end = tab_area.x;
 
     for (i, name) in workspace_names.iter().enumerate() {
         if i >= layout.tab_ranges.len() {
@@ -140,7 +140,12 @@ pub fn render(
         let display_name = truncate_name(name, 20);
         let label = format!(" {} ", display_name);
 
-        let style = if is_active {
+        let style = if is_active && focused {
+            Style::default()
+                .fg(ratatui::style::Color::White)
+                .bg(theme.accent)
+                .add_modifier(Modifier::BOLD)
+        } else if is_active {
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
@@ -149,10 +154,15 @@ pub fn render(
         };
 
         spans.push(Span::styled(label, style));
+        content_end = end;
     }
 
-    // + button
-    if layout.plus_range.is_some() {
+    // Right-align the + button with padding
+    if let Some((plus_start, _)) = layout.plus_range {
+        let gap = plus_start.saturating_sub(content_end + sep_width);
+        if gap > 0 {
+            spans.push(Span::raw(" ".repeat(gap as usize)));
+        }
         spans.push(Span::styled(sep, Style::default().fg(theme.dim)));
         spans.push(Span::styled(" + ", Style::default().fg(theme.accent)));
     }
@@ -219,8 +229,8 @@ mod tests {
     fn test_hit_test_plus_button() {
         let ws: Vec<&str> = vec!["a"];
         let area = Rect::new(0, 0, 80, 1);
-        // " a " (3 chars) + " · " (3 chars) + " + " starts at x=6
-        let click = hit_test(&ws, 0, area, 6, 0);
+        // " + " is right-aligned, starts at x=77 (80-3)
+        let click = hit_test(&ws, 0, area, 77, 0);
         assert_eq!(click, Some(WorkspaceBarClick::NewWorkspace));
     }
 

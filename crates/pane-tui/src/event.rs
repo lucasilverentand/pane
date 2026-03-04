@@ -20,7 +20,10 @@ pub fn start_event_loop(event_tx: mpsc::UnboundedSender<AppEvent>) {
                                 x: m.column,
                                 y: m.row,
                             },
-                            MouseEventKind::Down(MouseButton::Right) => AppEvent::MouseRightDown,
+                            MouseEventKind::Down(MouseButton::Right) => AppEvent::MouseRightDown {
+                                x: m.column,
+                                y: m.row,
+                            },
                             MouseEventKind::Drag(MouseButton::Left) => AppEvent::MouseDrag {
                                 x: m.column,
                                 y: m.row,

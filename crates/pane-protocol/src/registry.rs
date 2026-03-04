@@ -91,22 +91,6 @@ pub fn action_registry() -> &'static [ActionMeta] {
             palette_visible: true,
             action: EnterNormal,
         },
-        ActionMeta {
-            name: "select_mode",
-            display_name: "Select Mode",
-            description: "Toggle select mode for window navigation",
-            category: Mode,
-            palette_visible: true,
-            action: SelectMode,
-        },
-        ActionMeta {
-            name: "resize_mode",
-            display_name: "Resize Mode",
-            description: "Enter resize mode (hjkl to resize, esc to exit)",
-            category: Mode,
-            palette_visible: true,
-            action: ResizeMode,
-        },
         // ── Navigation ──────────────────────────────────────────────────
         ActionMeta {
             name: "focus_left",
@@ -434,6 +418,14 @@ pub fn action_registry() -> &'static [ActionMeta] {
             category: Tools,
             palette_visible: true,
             action: RenameWindow,
+        },
+        ActionMeta {
+            name: "rename_workspace",
+            display_name: "Rename Workspace",
+            description: "Rename the current workspace",
+            category: Workspaces,
+            palette_visible: true,
+            action: RenameWorkspace,
         },
         ActionMeta {
             name: "rename_pane",

@@ -6,14 +6,14 @@ use crossterm::event::KeyEvent;
 pub enum Mode {
     Normal,
     Interact,
-    Select,
     Scroll,
-    Help,
     Copy,
-    CommandPalette,
+    Palette,
     Confirm,
     Leader,
     TabPicker,
+    Rename,
+    ContextMenu,
 }
 
 pub struct LeaderState {

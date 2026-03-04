@@ -48,8 +48,6 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         ("shift+tab", Action::PrevTab), // Cycle to previous tab in the active window
         ("]", Action::NextTab),         // Next tab (bracket)
         ("[", Action::PrevTab),         // Previous tab (bracket)
-        ("shift+l", Action::NextTab),   // Next tab (shift+l)
-        ("shift+h", Action::PrevTab),   // Previous tab (shift+h)
         ("n", Action::NewTab),          // Open the tab picker to create a new tab
         ("d", Action::CloseTab),        // Close the active tab (context-dependent)
         // ── Splits ──────────────────────────────────────────────────────
@@ -63,20 +61,20 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         ("shift+f", Action::NewFloat),  // Create a new floating pane
         ("=", Action::Equalize),        // Reset all panes to equal sizes
         // ── Resize ──────────────────────────────────────────────────────
-        ("r", Action::ResizeMode),          // Enter resize mode (hjkl to resize)
+        ("shift+h", Action::ResizeShrinkH), // Shrink focused pane horizontally
         ("shift+j", Action::ResizeGrowV),   // Grow focused pane vertically
         ("shift+k", Action::ResizeShrinkV), // Shrink focused pane vertically
+        ("shift+l", Action::ResizeGrowH),   // Grow focused pane horizontally
         // ── Move tabs ───────────────────────────────────────────────────
         ("alt+h", Action::MoveTabLeft),  // Move active tab to the window on the left
         ("alt+j", Action::MoveTabDown),  // Move active tab to the window below
         ("alt+k", Action::MoveTabUp),    // Move active tab to the window above
         ("alt+l", Action::MoveTabRight), // Move active tab to the window on the right
         // ── Tools ───────────────────────────────────────────────────────
-        ("c", Action::CopyMode),       // Enter copy mode to select and copy text
-        ("p", Action::NewPane),        // Open directional pane split picker
-        ("/", Action::CommandPalette), // Open the command palette
-        ("?", Action::CommandPalette), // Open the command palette (alias)
-        ("q", Action::CloseTab),       // Close the active tab (quit pane, server keeps running)
+        ("c", Action::CopyMode),         // Enter copy mode to select and copy text
+        ("p", Action::PasteClipboard),   // Paste from system clipboard
+        ("/", Action::CommandPalette),   // Open the command palette
+        ("?", Action::CommandPalette),   // Open the command palette (alias)
     ]
 }
 

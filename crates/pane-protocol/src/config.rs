@@ -46,9 +46,9 @@ pub enum Action {
     ToggleSyncPanes,
     CommandPalette,
     RenameWindow,
+    RenameWorkspace,
     RenamePane,
     Detach,
-    SelectMode,
     EnterInteract,
     EnterNormal,
     MaximizeFocused,
@@ -56,7 +56,6 @@ pub enum Action {
     ToggleFloat,
     NewFloat,
     ToggleFold,
-    ResizeMode,
     NewPane,
     ClientPicker,
 }
@@ -98,6 +97,61 @@ impl Default for Theme {
             tab_inactive: Color::DarkGray,
             fold_bar_bg: Color::Rgb(40, 40, 40),
             fold_bar_active_bg: Color::DarkGray,
+        }
+    }
+}
+
+impl Theme {
+    /// Load a built-in theme preset by name. Returns `None` for unknown names.
+    pub fn preset(name: &str) -> Option<Self> {
+        match name {
+            "default" => Some(Self::default()),
+            "dracula" => Some(Self {
+                accent: Color::Rgb(189, 147, 249),       // purple
+                border_active: Color::Rgb(189, 147, 249),
+                border_inactive: Color::Rgb(68, 71, 90),
+                border_normal: Color::Rgb(189, 147, 249),
+                border_interact: Color::Rgb(80, 250, 123), // green
+                border_scroll: Color::Rgb(241, 250, 140),  // yellow
+                bg: Color::Rgb(40, 42, 54),
+                fg: Color::Rgb(248, 248, 242),
+                dim: Color::Rgb(98, 114, 164),
+                tab_active: Color::Rgb(189, 147, 249),
+                tab_inactive: Color::Rgb(98, 114, 164),
+                fold_bar_bg: Color::Rgb(40, 42, 54),
+                fold_bar_active_bg: Color::Rgb(68, 71, 90),
+            }),
+            "catppuccin" => Some(Self {
+                accent: Color::Rgb(203, 166, 247),       // mauve
+                border_active: Color::Rgb(203, 166, 247),
+                border_inactive: Color::Rgb(69, 71, 90),
+                border_normal: Color::Rgb(203, 166, 247),
+                border_interact: Color::Rgb(166, 227, 161), // green
+                border_scroll: Color::Rgb(249, 226, 175),   // yellow
+                bg: Color::Rgb(30, 30, 46),
+                fg: Color::Rgb(205, 214, 244),
+                dim: Color::Rgb(108, 112, 134),
+                tab_active: Color::Rgb(203, 166, 247),
+                tab_inactive: Color::Rgb(108, 112, 134),
+                fold_bar_bg: Color::Rgb(49, 50, 68),
+                fold_bar_active_bg: Color::Rgb(69, 71, 90),
+            }),
+            "tokyo-night" => Some(Self {
+                accent: Color::Rgb(122, 162, 247),       // blue
+                border_active: Color::Rgb(122, 162, 247),
+                border_inactive: Color::Rgb(59, 66, 97),
+                border_normal: Color::Rgb(122, 162, 247),
+                border_interact: Color::Rgb(158, 206, 106), // green
+                border_scroll: Color::Rgb(224, 175, 104),   // yellow
+                bg: Color::Rgb(26, 27, 38),
+                fg: Color::Rgb(192, 202, 245),
+                dim: Color::Rgb(86, 95, 137),
+                tab_active: Color::Rgb(122, 162, 247),
+                tab_inactive: Color::Rgb(86, 95, 137),
+                fold_bar_bg: Color::Rgb(26, 27, 38),
+                fold_bar_active_bg: Color::Rgb(59, 66, 97),
+            }),
+            _ => None,
         }
     }
 }
@@ -201,60 +255,6 @@ impl KeyMap {
             if let Some(key) = parse_key(key_str) {
                 map.insert(key, action);
             }
-        }
-
-        Self { map }
-    }
-
-    pub fn select_defaults() -> Self {
-        let mut map = HashMap::new();
-
-        let defaults: Vec<(&str, Action)> = vec![
-            ("h", Action::FocusLeft),
-            ("j", Action::FocusDown),
-            ("k", Action::FocusUp),
-            ("l", Action::FocusRight),
-            ("left", Action::FocusLeft),
-            ("down", Action::FocusDown),
-            ("up", Action::FocusUp),
-            ("right", Action::FocusRight),
-            ("n", Action::NewTab),
-            ("w", Action::CloseTab),
-            ("[", Action::PrevTab),
-            ("]", Action::NextTab),
-            ("d", Action::SplitHorizontal),
-            ("shift+d", Action::SplitVertical),
-            ("t", Action::NewWorkspace),
-            ("shift+w", Action::CloseWorkspace),
-            ("shift+h", Action::ResizeShrinkH),
-            ("shift+l", Action::ResizeGrowH),
-            ("shift+j", Action::ResizeGrowV),
-            ("shift+k", Action::ResizeShrinkV),
-            ("=", Action::Equalize),
-            ("alt+h", Action::MoveTabLeft),
-            ("alt+j", Action::MoveTabDown),
-            ("alt+k", Action::MoveTabUp),
-            ("alt+l", Action::MoveTabRight),
-            ("/", Action::CommandPalette),
-            ("?", Action::Help),
-            ("s", Action::SessionPicker),
-            ("c", Action::CopyMode),
-            ("p", Action::PasteClipboard),
-            ("r", Action::RestartPane),
-            ("esc", Action::SelectMode),
-        ];
-
-        for (key_str, action) in defaults {
-            if let Some(key) = parse_key(key_str) {
-                map.insert(key, action);
-            }
-        }
-
-        // 1..9 → FocusGroupN
-        for n in 1..=9u8 {
-            let ch = (b'0' + n) as char;
-            let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
-            map.insert(key, Action::FocusGroupN(n));
         }
 
         Self { map }
@@ -388,6 +388,7 @@ fn default_leader_tree() -> LeaderNode {
         insert_leaf(&mut children, "z", Action::ToggleZoom, "Zoom");
         insert_leaf(&mut children, "f", Action::ToggleFloat, "Float");
         insert_leaf(&mut children, "F", Action::NewFloat, "New Float");
+        insert_leaf(&mut children, "n", Action::RenameWindow, "Rename");
         let key = parse_key("w").unwrap();
         root.insert(
             key,
@@ -440,6 +441,7 @@ fn default_leader_tree() -> LeaderNode {
         let mut children = HashMap::new();
         insert_leaf(&mut children, "n", Action::NewWorkspace, "New");
         insert_leaf(&mut children, "c", Action::CloseWorkspace, "Close");
+        insert_leaf(&mut children, "r", Action::RenameWorkspace, "Rename");
         for n in 1..=9u8 {
             let ch = (b'0' + n) as char;
             let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
@@ -597,17 +599,25 @@ fn insert_into_tree(tree: &mut LeaderNode, keys: &[KeyEvent], node: LeaderNode) 
 // Config (top-level)
 // ---------------------------------------------------------------------------
 
+/// A custom entry for the tab picker, defined in config.
+#[derive(Clone, Debug)]
+pub struct TabPickerEntryConfig {
+    pub name: String,
+    pub command: String,
+    pub description: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub theme: Theme,
     pub behavior: Behavior,
     pub keys: KeyMap,
     pub normal_keys: KeyMap,
-    pub select_keys: KeyMap,
     pub status_bar: StatusBarConfig,
     pub decorations: Vec<PaneDecoration>,
     pub leader: LeaderConfig,
     pub plugins: Vec<crate::plugin::PluginConfig>,
+    pub tab_picker_entries: Vec<TabPickerEntryConfig>,
 }
 
 impl Default for Config {
@@ -617,11 +627,11 @@ impl Default for Config {
             behavior: Behavior::default(),
             keys: KeyMap::from_defaults(),
             normal_keys: KeyMap::from_pairs(crate::default_keys::normal_defaults()),
-            select_keys: KeyMap::select_defaults(),
             status_bar: StatusBarConfig::default(),
             decorations: PaneDecoration::defaults(),
             leader: LeaderConfig::default(),
             plugins: Vec::new(),
+            tab_picker_entries: Vec::new(),
         }
     }
 }
@@ -657,6 +667,13 @@ impl Config {
 
         // Theme
         if let Some(t) = raw.theme {
+            // Load preset as base if specified
+            if let Some(ref preset_name) = t.preset {
+                if let Some(preset_theme) = Theme::preset(preset_name) {
+                    config.theme = preset_theme;
+                }
+            }
+            // Apply per-field overrides on top of preset (or default)
             if let Some(s) = t.accent {
                 if let Some(c) = parse_color(&s) {
                     config.theme.accent = c;
@@ -762,11 +779,6 @@ impl Config {
             config.normal_keys.merge(&normal_keys);
         }
 
-        // Select keys
-        if let Some(select_keys) = raw.select_keys {
-            config.select_keys.merge(&select_keys);
-        }
-
         // Status bar
         if let Some(sb) = raw.status_bar {
             if let Some(v) = sb.show_cpu {
@@ -824,6 +836,18 @@ impl Config {
             }
         }
 
+        // Tab picker entries
+        if let Some(entries) = raw.tab_picker_entries {
+            config.tab_picker_entries = entries
+                .into_iter()
+                .map(|e| TabPickerEntryConfig {
+                    name: e.name,
+                    command: e.command,
+                    description: e.description,
+                })
+                .collect();
+        }
+
         // Plugins
         if let Some(raw_plugins) = raw.plugins {
             config.plugins = raw_plugins
@@ -854,12 +878,12 @@ struct RawConfig {
     behavior: Option<RawBehavior>,
     keys: Option<HashMap<String, String>>,
     normal_keys: Option<HashMap<String, String>>,
-    select_keys: Option<HashMap<String, String>>,
     status_bar: Option<RawStatusBar>,
     decorations: Option<Vec<RawDecoration>>,
     leader: Option<RawLeader>,
     leader_keys: Option<HashMap<String, String>>,
     plugins: Option<Vec<RawPlugin>>,
+    tab_picker_entries: Option<Vec<RawTabPickerEntry>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -869,6 +893,13 @@ struct RawPlugin {
     events: Vec<String>,
     #[serde(default)]
     refresh_interval_secs: u64,
+}
+
+#[derive(Deserialize, Default)]
+struct RawTabPickerEntry {
+    name: String,
+    command: String,
+    description: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -885,6 +916,7 @@ struct RawDecoration {
 
 #[derive(Deserialize, Default)]
 struct RawTheme {
+    preset: Option<String>,
     accent: Option<String>,
     border_active: Option<String>,
     border_inactive: Option<String>,
@@ -1755,6 +1787,54 @@ min_pane_width = 80
         assert_eq!(map.get("help"), Some(&Action::Help));
         assert_eq!(map.get("scroll_mode"), Some(&Action::ScrollMode));
         assert_eq!(map.get("detach"), Some(&Action::Detach));
-        assert_eq!(map.get("select_mode"), Some(&Action::SelectMode));
+    }
+
+    // --- Theme presets ---
+
+    #[test]
+    fn test_theme_preset_default() {
+        let theme = Theme::preset("default").unwrap();
+        assert_eq!(theme.accent, Color::Cyan);
+    }
+
+    #[test]
+    fn test_theme_preset_dracula() {
+        let theme = Theme::preset("dracula").unwrap();
+        assert_eq!(theme.accent, Color::Rgb(189, 147, 249));
+        assert_eq!(theme.bg, Color::Rgb(40, 42, 54));
+    }
+
+    #[test]
+    fn test_theme_preset_catppuccin() {
+        let theme = Theme::preset("catppuccin").unwrap();
+        assert_eq!(theme.accent, Color::Rgb(203, 166, 247));
+        assert_eq!(theme.bg, Color::Rgb(30, 30, 46));
+    }
+
+    #[test]
+    fn test_theme_preset_tokyo_night() {
+        let theme = Theme::preset("tokyo-night").unwrap();
+        assert_eq!(theme.accent, Color::Rgb(122, 162, 247));
+        assert_eq!(theme.bg, Color::Rgb(26, 27, 38));
+    }
+
+    #[test]
+    fn test_theme_preset_unknown_returns_none() {
+        assert!(Theme::preset("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_theme_preset_with_override() {
+        let toml_str = r##"
+[theme]
+preset = "dracula"
+accent = "#ff0000"
+"##;
+        let raw: RawConfig = toml::from_str(toml_str).unwrap();
+        let config = Config::from_raw(raw);
+        // Accent overridden to red
+        assert_eq!(config.theme.accent, Color::Rgb(255, 0, 0));
+        // Other fields from dracula preset
+        assert_eq!(config.theme.bg, Color::Rgb(40, 42, 54));
     }
 }

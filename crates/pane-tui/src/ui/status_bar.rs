@@ -32,11 +32,12 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
     let (left, right) = match &client.mode {
         Mode::Normal => {
             let vars = build_client_vars(client);
-            let left = format!(
-                "[NORMAL] {}",
-                format_string(&client.config.status_bar.left, &vars)
-            );
-            let right = format_string(&client.config.status_bar.right, &vars);
+            let left = format_string(&client.config.status_bar.left, &vars);
+            let right = if client.workspace_bar_focused {
+                "h/l switch  d close  n new  j exit bar ".to_string()
+            } else {
+                format_string(&client.config.status_bar.right, &vars)
+            };
             (left, right)
         }
         Mode::Interact => {
@@ -47,30 +48,18 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
         }
         Mode::Scroll => {
             let title = client_pane_title(client);
-            let mode_left = format!("[SCROLL] {}", title);
             let right = "j/k up/down  u/d page  g/G top/end  esc quit ".to_string();
-            (mode_left, right)
-        }
-        Mode::Help => (
-            String::new(),
-            "esc close  / search  j/k scroll ".to_string(),
-        ),
-        Mode::Select => {
-            let title = client_pane_title(client);
-            (
-                format!("[SELECT] {}", title),
-                "hjkl nav  n tab  d split  w close  1-9 pane  esc back ".to_string(),
-            )
+            (title, right)
         }
         Mode::Copy => {
             let title = client_pane_title(client);
             (
-                format!("[COPY] {}", title),
+                title,
                 "hjkl move  v select  y yank  / search  esc quit ".to_string(),
             )
         }
-        Mode::CommandPalette => (
-            "[CMD] ".to_string(),
+        Mode::Palette => (
+            String::new(),
             "type to filter  enter run  esc cancel ".to_string(),
         ),
         Mode::Confirm => (String::new(), "enter/y confirm  esc/n cancel ".to_string()),
@@ -85,12 +74,26 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
             } else {
                 "⎵".to_string()
             };
-            (format!("[LEADER] {}", path_str), "esc cancel ".to_string())
+            (path_str, "esc cancel ".to_string())
         }
         Mode::TabPicker => (
-            "[NEW TAB] ".to_string(),
+            String::new(),
             "type to filter  enter spawn  esc cancel ".to_string(),
         ),
+        Mode::Rename => {
+            let target = match client.rename_target {
+                crate::client::RenameTarget::Window => "window",
+                crate::client::RenameTarget::Workspace => "workspace",
+            };
+            (
+                format!("Rename {}: {}_ ", target, client.rename_input),
+                "enter confirm  esc cancel ".to_string(),
+            )
+        }
+        Mode::ContextMenu => (
+            String::new(),
+            "j/k navigate  enter select  esc cancel ".to_string(),
+        )
     };
 
     // Build plugin segment string

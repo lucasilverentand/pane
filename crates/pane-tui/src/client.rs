@@ -21,8 +21,8 @@ use pane_protocol::protocol::{
 use pane_protocol::system_stats::SystemStats;
 use crate::tui::Tui;
 use crate::ui;
-use crate::ui::command_palette::CommandPaletteState;
-use crate::ui::help::HelpState;
+use crate::ui::context_menu::ContextMenuState;
+use crate::ui::palette::UnifiedPaletteState;
 use crate::ui::tab_picker::TabPickerState;
 
 /// TUI client that connects to a pane daemon via Unix socket.
@@ -38,14 +38,22 @@ pub struct Client {
 
     // Client-only UI state
     pub leader_state: Option<LeaderState>,
-    pub help_state: HelpState,
-    pub command_palette_state: Option<CommandPaletteState>,
+    pub palette_state: Option<UnifiedPaletteState>,
     pub copy_mode_state: Option<CopyModeState>,
     pub tab_picker_state: Option<TabPickerState>,
+    pub context_menu_state: Option<ContextMenuState>,
     pub pending_confirm_action: Option<Action>,
     pub confirm_message: Option<String>,
     pub workspace_bar_focused: bool,
     pub should_quit: bool,
+    pub rename_input: String,
+    pub rename_target: RenameTarget,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RenameTarget {
+    Window,
+    Workspace,
 }
 
 impl Client {
@@ -64,14 +72,16 @@ impl Client {
             plugin_segments: Vec::new(),
 
             leader_state: None,
-            help_state: HelpState::default(),
-            command_palette_state: None,
+            palette_state: None,
             copy_mode_state: None,
             tab_picker_state: None,
+            context_menu_state: None,
             pending_confirm_action: None,
             confirm_message: None,
             workspace_bar_focused: false,
             should_quit: false,
+            rename_input: String::new(),
+            rename_target: RenameTarget::Window,
         }
     }
 
@@ -311,7 +321,22 @@ impl Client {
                 .await;
             }
             AppEvent::MouseDown { x, y } => {
-                if self.mode == Mode::Confirm {
+                if self.mode == Mode::ContextMenu {
+                    let size = tui.size()?;
+                    let area = Rect::new(0, 0, size.width, size.height);
+                    if let Some(ref cm) = self.context_menu_state {
+                        if let Some(idx) = crate::ui::context_menu::hit_test(cm, area, x, y) {
+                            let action = cm.items[idx].action.clone();
+                            self.context_menu_state = None;
+                            self.mode = Mode::Normal;
+                            self.execute_action(action, tui, writer).await?;
+                        } else {
+                            // Click outside menu — dismiss
+                            self.context_menu_state = None;
+                            self.mode = Mode::Normal;
+                        }
+                    }
+                } else if self.mode == Mode::Confirm {
                     let size = tui.size()?;
                     let area = Rect::new(0, 0, size.width, size.height);
                     if let Some(click) = ui::confirm_dialog_hit_test(area, x, y) {
@@ -335,7 +360,6 @@ impl Client {
                     }
                 } else if self.mode == Mode::Normal
                     || self.mode == Mode::Interact
-                    || self.mode == Mode::Select
                 {
                     // Check workspace bar clicks (client-side)
                     let show_workspace_bar = !self.render_state.workspaces.is_empty();
@@ -403,8 +427,22 @@ impl Client {
                 let mut w = writer.lock().await;
                 let _ = send_request(&mut *w, &ClientRequest::MouseMove { x, y }).await;
             }
-            AppEvent::MouseRightDown => {
-                // Right-click handled client-side in future
+            AppEvent::MouseRightDown { x, y } => {
+                if self.mode == Mode::Normal || self.mode == Mode::Interact {
+                    let show_workspace_bar = !self.render_state.workspaces.is_empty();
+
+                    if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
+                        // Right-click on workspace bar
+                        self.context_menu_state =
+                            Some(crate::ui::context_menu::workspace_bar_menu(x, y));
+                        self.mode = Mode::ContextMenu;
+                    } else {
+                        // Right-click on pane body (default)
+                        self.context_menu_state =
+                            Some(crate::ui::context_menu::pane_body_menu(x, y));
+                        self.mode = Mode::ContextMenu;
+                    }
+                }
             }
             AppEvent::Tick => {
                 if let Some(ref mut ls) = self.leader_state {
@@ -414,9 +452,9 @@ impl Client {
                             if ls.path.is_empty() {
                                 // Root level timeout → open command palette
                                 self.leader_state = None;
-                                self.command_palette_state =
-                                    Some(CommandPaletteState::new(&self.config.keys, &self.config.leader));
-                                self.mode = Mode::CommandPalette;
+                                self.palette_state =
+                                    Some(UnifiedPaletteState::new_full_search(&self.config.keys, &self.config.leader));
+                                self.mode = Mode::Palette;
                             } else {
                                 // Sub-group timeout → show which-key as before
                                 ls.popup_visible = true;
@@ -440,33 +478,17 @@ impl Client {
     ) -> Result<()> {
         // Modal modes handled client-side
         match &self.mode {
-            Mode::Help => return self.handle_help_key(key),
             Mode::Scroll => return self.handle_scroll_key(key, writer).await,
             Mode::Copy => return self.handle_copy_mode_key(key),
-            Mode::CommandPalette => return self.handle_command_palette_key(key, tui, writer).await,
+            Mode::Palette => return self.handle_palette_key(key, tui, writer).await,
             Mode::TabPicker => return self.handle_tab_picker_key(key, writer).await,
             Mode::Confirm => return self.handle_confirm_key(key, writer).await,
             Mode::Leader => return self.handle_leader_key(key, tui, writer).await,
-            Mode::Select => {
-                // Falls through to action handling below
-            }
+            Mode::Rename => return self.handle_rename_key(key, writer).await,
+            Mode::ContextMenu => return self.handle_context_menu_key(key, tui, writer).await,
             Mode::Normal => return self.handle_normal_key(key, tui, writer).await,
             Mode::Interact => return self.handle_interact_key(key, tui, writer).await,
         }
-
-        // Select mode: check leader key, then select keymap
-        let normalized = config::normalize_key(key);
-        let leader_key = config::normalize_key(self.config.leader.key);
-        if normalized == leader_key {
-            self.enter_leader_mode();
-            return Ok(());
-        }
-
-        if let Some(action) = self.config.select_keys.lookup(&normalized).cloned() {
-            return self.execute_action(action, tui, writer).await;
-        }
-
-        Ok(())
     }
 
     /// Interact mode: forward ALL keys to PTY except Escape (-> Normal).
@@ -509,6 +531,12 @@ impl Client {
         writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     ) -> Result<()> {
         let normalized = config::normalize_key(key);
+
+        // Esc clears transient state but stays in Normal mode
+        if normalized.code == KeyCode::Esc {
+            self.workspace_bar_focused = false;
+            return Ok(());
+        }
 
         // Leader key
         let leader_key = config::normalize_key(self.config.leader.key);
@@ -614,7 +642,7 @@ impl Client {
         }
 
         // Entering workspace bar focus: FocusUp at the top of the layout
-        if action == Action::FocusUp && self.render_state.workspaces.len() > 1 {
+        if action == Action::FocusUp && !self.render_state.workspaces.is_empty() {
             if let Some(ws) = self.active_workspace() {
                 let at_top = ws.layout.find_neighbor(
                     ws.active_group,
@@ -635,8 +663,9 @@ impl Client {
                 return Ok(());
             }
             Action::Help => {
-                self.help_state = HelpState::default();
-                self.mode = Mode::Help;
+                // Help opens the command palette (unified palette)
+                self.palette_state = Some(UnifiedPaletteState::new_full_search(&self.config.keys, &self.config.leader));
+                self.mode = Mode::Palette;
                 return Ok(());
             }
             Action::ScrollMode => {
@@ -666,16 +695,8 @@ impl Client {
                 return Ok(());
             }
             Action::CommandPalette => {
-                self.command_palette_state = Some(CommandPaletteState::new(&self.config.keys, &self.config.leader));
-                self.mode = Mode::CommandPalette;
-                return Ok(());
-            }
-            Action::SelectMode => {
-                self.mode = if self.mode == Mode::Select {
-                    Mode::Normal
-                } else {
-                    Mode::Select
-                };
+                self.palette_state = Some(UnifiedPaletteState::new_full_search(&self.config.keys, &self.config.leader));
+                self.mode = Mode::Palette;
                 return Ok(());
             }
             Action::EnterInteract => {
@@ -693,8 +714,20 @@ impl Client {
                 return Ok(());
             }
             Action::NewTab => {
-                self.tab_picker_state = Some(TabPickerState::new());
+                self.tab_picker_state = Some(TabPickerState::new(&self.config.tab_picker_entries));
                 self.mode = Mode::TabPicker;
+                return Ok(());
+            }
+            Action::RenameWindow => {
+                self.rename_input.clear();
+                self.rename_target = RenameTarget::Window;
+                self.mode = Mode::Rename;
+                return Ok(());
+            }
+            Action::RenameWorkspace => {
+                self.rename_input.clear();
+                self.rename_target = RenameTarget::Workspace;
+                self.mode = Mode::Rename;
                 return Ok(());
             }
             Action::PasteClipboard => {
@@ -713,20 +746,47 @@ impl Client {
             _ => {}
         }
 
-        // Destructive actions — show confirmation dialog
+        // Destructive actions — smart confirm: only prompt if foreground process
         match &action {
             Action::CloseTab => {
-                self.pending_confirm_action = Some(Action::CloseTab);
-                self.confirm_message = Some("Close this tab?".into());
-                self.workspace_bar_focused = false;
-                self.mode = Mode::Confirm;
+                let has_fg = self
+                    .active_workspace()
+                    .and_then(|ws| ws.groups.iter().find(|g| g.id == ws.active_group))
+                    .and_then(|g| g.tabs.get(g.active_tab))
+                    .and_then(|tab| tab.foreground_process.as_ref())
+                    .is_some();
+
+                if has_fg {
+                    self.pending_confirm_action = Some(Action::CloseTab);
+                    self.confirm_message = Some("Close this tab? (process running)".into());
+                    self.workspace_bar_focused = false;
+                    self.mode = Mode::Confirm;
+                } else {
+                    // Idle shell — close immediately
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut *w, &ClientRequest::Command("kill-pane".to_string())).await;
+                }
                 return Ok(());
             }
             Action::CloseWorkspace => {
-                self.pending_confirm_action = Some(Action::CloseWorkspace);
-                self.confirm_message = Some("Close this workspace?".into());
-                self.workspace_bar_focused = false;
-                self.mode = Mode::Confirm;
+                let has_any_fg = self
+                    .active_workspace()
+                    .map(|ws| {
+                        ws.groups.iter().any(|g| {
+                            g.tabs.iter().any(|tab| tab.foreground_process.is_some())
+                        })
+                    })
+                    .unwrap_or(false);
+
+                if has_any_fg {
+                    self.pending_confirm_action = Some(Action::CloseWorkspace);
+                    self.confirm_message = Some("Close workspace? (processes running)".into());
+                    self.workspace_bar_focused = false;
+                    self.mode = Mode::Confirm;
+                } else {
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut *w, &ClientRequest::Command("close-workspace".to_string())).await;
+                }
                 return Ok(());
             }
             _ => {}
@@ -807,39 +867,70 @@ impl Client {
         Ok(())
     }
 
-    fn handle_help_key(&mut self, key: KeyEvent) -> Result<()> {
-        if let Some(ref mut search) = self.help_state.search_input {
-            match key.code {
-                KeyCode::Esc => {
-                    self.help_state.search_input = None;
+    async fn handle_rename_key(
+        &mut self,
+        key: KeyEvent,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                self.rename_input.clear();
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Enter => {
+                let name = self.rename_input.clone();
+                self.rename_input.clear();
+                self.mode = Mode::Normal;
+                if !name.is_empty() {
+                    let cmd = match self.rename_target {
+                        RenameTarget::Window => format!("rename-window {}", name),
+                        RenameTarget::Workspace => format!("rename-session {}", name),
+                    };
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
                 }
-                KeyCode::Backspace => {
-                    search.pop();
-                    if search.is_empty() {
-                        self.help_state.search_input = None;
+            }
+            KeyCode::Backspace => {
+                self.rename_input.pop();
+            }
+            KeyCode::Char(c) => {
+                self.rename_input.push(c);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn handle_context_menu_key(
+        &mut self,
+        key: KeyEvent,
+        tui: &Tui,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.context_menu_state = None;
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(ref mut cm) = self.context_menu_state {
+                    cm.move_up();
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(ref mut cm) = self.context_menu_state {
+                    cm.move_down();
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(cm) = self.context_menu_state.take() {
+                    self.mode = Mode::Normal;
+                    if let Some(action) = cm.selected_action().cloned() {
+                        self.execute_action(action, tui, writer).await?;
                     }
                 }
-                KeyCode::Char(c) => {
-                    search.push(c);
-                }
-                _ => {}
             }
-        } else {
-            match key.code {
-                KeyCode::Esc => {
-                    self.mode = Mode::Normal;
-                }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    self.help_state.scroll_offset += 1;
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    self.help_state.scroll_offset = self.help_state.scroll_offset.saturating_sub(1);
-                }
-                KeyCode::Char('/') => {
-                    self.help_state.search_input = Some(String::new());
-                }
-                _ => {}
-            }
+            _ => {}
         }
         Ok(())
     }
@@ -930,21 +1021,21 @@ impl Client {
         Ok(())
     }
 
-    async fn handle_command_palette_key(
+    async fn handle_palette_key(
         &mut self,
         key: KeyEvent,
         tui: &Tui,
         writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     ) -> Result<()> {
-        if let Some(ref mut cp) = self.command_palette_state {
+        if let Some(ref mut cp) = self.palette_state {
             match key.code {
                 KeyCode::Esc => {
-                    self.command_palette_state = None;
+                    self.palette_state = None;
                     self.mode = Mode::Normal;
                 }
                 KeyCode::Enter => {
                     if let Some(action) = cp.selected_action() {
-                        self.command_palette_state = None;
+                        self.palette_state = None;
                         self.mode = Mode::Normal;
                         return self.execute_action(action, tui, writer).await;
                     }
@@ -1117,7 +1208,7 @@ fn action_to_command(action: &Action) -> Option<String> {
         Action::ToggleFloat => Some("toggle-float".to_string()),
         Action::NewFloat => Some("new-float".to_string()),
         Action::ToggleFold => Some("toggle-fold".to_string()),
-        Action::RenameWindow | Action::RenamePane => None,
+        Action::RenameWindow | Action::RenameWorkspace | Action::RenamePane => None,
         // Client-only actions handled before this function is called
         Action::Quit
         | Action::Help
@@ -1125,13 +1216,11 @@ fn action_to_command(action: &Action) -> Option<String> {
         | Action::CopyMode
         | Action::CommandPalette
         | Action::PasteClipboard
-        | Action::SelectMode
         | Action::EnterInteract
         | Action::EnterNormal
         | Action::Detach
         | Action::SessionPicker
         | Action::NewTab // NewTab opens picker client-side
-        | Action::ResizeMode
         | Action::NewPane
         | Action::ClientPicker => None,
     }

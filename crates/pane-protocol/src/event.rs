@@ -6,7 +6,7 @@ use crossterm::event::KeyEvent;
 pub enum AppEvent {
     Key(KeyEvent),
     MouseDown { x: u16, y: u16 },
-    MouseRightDown,
+    MouseRightDown { x: u16, y: u16 },
     MouseDrag { x: u16, y: u16 },
     MouseMove { x: u16, y: u16 },
     MouseUp,

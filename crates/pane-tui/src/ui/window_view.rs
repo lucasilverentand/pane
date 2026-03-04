@@ -79,33 +79,14 @@ pub fn render_group_from_snapshot(
         Style::default().fg(theme.border_inactive)
     };
 
-    // Build top title with tab info
-    let tab_info = if group.tabs.len() > 1 {
-        format!(" [{}/{}] ", group.active_tab + 1, group.tabs.len())
-    } else {
-        String::new()
-    };
-
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(border_style);
 
-    if !tab_info.is_empty() {
-        block = block.title_top(Line::styled(tab_info, Style::default().fg(theme.dim)));
-    }
-
-    if is_active {
-        let indicator = match mode {
-            Mode::Copy => " COPY ",
-            Mode::Scroll => " SCROLL ",
-            Mode::Select => " SELECT ",
-            Mode::Normal => " NORMAL ",
-            Mode::Interact => " INTERACT ",
-            _ => " ACTIVE ",
-        };
+    if is_active && matches!(mode, Mode::Interact) {
         block = block.title_bottom(Line::styled(
-            indicator,
+            " INTERACT ",
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
@@ -175,7 +156,7 @@ fn render_tab_bar_from_snapshot(
         let label = format!(" {} ", tab.title);
         let label_width = label.len() as u16;
 
-        if cursor_x + label_width + PLUS_RESERVE > max_x && !is_active_tab {
+        if cursor_x + label_width + SEP_WIDTH + PLUS_RESERVE > max_x && !is_active_tab {
             continue;
         }
 
@@ -196,7 +177,13 @@ fn render_tab_bar_from_snapshot(
         cursor_x += label_width;
     }
 
-    if cursor_x + SEP_WIDTH + PLUS_RESERVE <= max_x {
+    // Right-align the + button
+    if PLUS_RESERVE <= max_x.saturating_sub(area.x) {
+        let plus_start = max_x - PLUS_RESERVE;
+        let gap = plus_start.saturating_sub(cursor_x + SEP_WIDTH);
+        if gap > 0 {
+            spans.push(Span::raw(" ".repeat(gap as usize)));
+        }
         spans.push(Span::styled(SEP, Style::default().fg(theme.dim)));
         spans.push(Span::styled(PLUS_TEXT, Style::default().fg(theme.accent)));
     }

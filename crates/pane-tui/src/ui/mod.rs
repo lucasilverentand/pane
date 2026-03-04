@@ -1,10 +1,9 @@
-pub mod command_palette;
+pub mod context_menu;
 pub mod format;
-pub mod help;
 pub mod layout_render;
+pub mod palette;
 pub mod status_bar;
 pub mod tab_picker;
-pub mod which_key;
 pub mod window_view;
 pub mod workspace_bar;
 
@@ -205,31 +204,36 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
 
     // Overlays
     match &client.mode {
-        Mode::Help => {
-            help::render(
-                &client.config.keys,
-                &client.help_state,
-                theme,
-                frame,
-                frame.area(),
-            );
-        }
-        Mode::CommandPalette => {
-            if let Some(ref cp_state) = client.command_palette_state {
-                command_palette::render(cp_state, theme, frame, frame.area());
+        Mode::Palette => {
+            if let Some(ref palette_state) = client.palette_state {
+                palette::render(palette_state, theme, frame, frame.area());
             }
         }
         Mode::Confirm => {
             render_confirm_dialog(client, theme, frame, frame.area());
         }
         Mode::Leader => {
+            // Leader mode uses the palette in compact hints mode when popup is visible
             if let Some(ref ls) = client.leader_state {
-                which_key::render(ls, theme, frame, frame.area());
+                if ls.popup_visible {
+                    if let pane_protocol::config::LeaderNode::Group { ref children, .. } =
+                        ls.current_node
+                    {
+                        let compact =
+                            palette::UnifiedPaletteState::new_compact_hints(children);
+                        palette::render(&compact, theme, frame, frame.area());
+                    }
+                }
             }
         }
         Mode::TabPicker => {
             if let Some(ref tp_state) = client.tab_picker_state {
                 tab_picker::render(tp_state, theme, frame, frame.area());
+            }
+        }
+        Mode::ContextMenu => {
+            if let Some(ref cm_state) = client.context_menu_state {
+                context_menu::render(cm_state, theme, frame, frame.area());
             }
         }
         _ => {}

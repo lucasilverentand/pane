@@ -12,6 +12,10 @@ use pane_protocol::config::Config;
 #[derive(Parser)]
 #[command(name = "pane", about = "A TUI terminal multiplexer")]
 struct Cli {
+    /// Start daemon in background without attaching a client
+    #[arg(short, long)]
+    detach: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -91,13 +95,24 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         None => {
-            // Default: auto-start daemon for "default" session + connect client
-            start_and_connect("default", config)
+            if cli.detach {
+                pane_daemon::server::daemon::start_daemon("default")?;
+                println!("pane: daemon started (session: default)");
+                Ok(())
+            } else {
+                start_and_connect("default", config)
+            }
         }
         Some(Commands::New { name }) => {
             let name =
                 name.unwrap_or_else(|| format!("session-{}", chrono::Utc::now().timestamp()));
-            start_and_connect(&name, config)
+            if cli.detach {
+                pane_daemon::server::daemon::start_daemon(&name)?;
+                println!("pane: daemon started (session: {})", name);
+                Ok(())
+            } else {
+                start_and_connect(&name, config)
+            }
         }
         Some(Commands::Attach { name }) => {
             let name = name.unwrap_or_else(|| "default".to_string());
