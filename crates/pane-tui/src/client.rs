@@ -386,6 +386,7 @@ impl Client {
                             x,
                             y,
                         ) {
+                            self.workspace_bar_focused = true;
                             match click {
                                 crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
                                     let mut w = writer.lock().await;
@@ -413,7 +414,8 @@ impl Client {
                         }
                     }
 
-                    // Forward mouse to server
+                    // Forward mouse to server (click on body clears workspace bar focus)
+                    self.workspace_bar_focused = false;
                     let mut w = writer.lock().await;
                     let _ = send_request(&mut *w, &ClientRequest::MouseDown { x, y }).await;
                 }

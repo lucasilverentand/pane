@@ -104,25 +104,15 @@ pub fn render_group_from_snapshot(
 
     let cms = if is_active { copy_mode_state } else { None };
     let show_search = cms.map_or(false, |c| c.search_active);
-    let show_tab_bar = group.tabs.len() > 1;
-
-    let mut constraints = Vec::new();
-    if show_tab_bar {
-        constraints.push(Constraint::Length(1));
-    }
-    constraints.push(Constraint::Fill(1));
+    let mut constraints = vec![Constraint::Length(1), Constraint::Fill(1)];
     if show_search {
         constraints.push(Constraint::Length(1));
     }
     let areas = Layout::vertical(constraints).split(padded);
 
-    let (content_area, search_area) = if show_tab_bar {
-        // Tab bar from snapshot
-        render_tab_bar_from_snapshot(group, theme, frame, areas[0]);
-        (areas[1], areas.get(2).copied())
-    } else {
-        (areas[0], areas.get(1).copied())
-    };
+    render_tab_bar_from_snapshot(group, theme, frame, areas[0]);
+    let content_area = areas[1];
+    let search_area = areas.get(2).copied();
 
     // Content
     if let Some(screen) = screen {

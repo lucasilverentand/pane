@@ -548,8 +548,7 @@ impl ServerState {
                     } => {
                         if let Some(group) = ws.groups.get_mut(&group_id) {
                             let cols = rect.width.saturating_sub(4);
-                            let tab_bar_overhead: u16 = if group.tabs.len() > 1 { 1 } else { 0 };
-                            let rows = rect.height.saturating_sub(2 + tab_bar_overhead); // 2 borders + optional tab bar
+                            let rows = rect.height.saturating_sub(3); // 2 borders + tab bar
                             if cols > 0 && rows > 0 {
                                 for pane in &mut group.tabs {
                                     pane.resize_pty(cols, rows);

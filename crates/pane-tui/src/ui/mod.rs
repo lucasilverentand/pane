@@ -85,9 +85,8 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                         if let Some(screen) = client.pane_screen(pane.id) {
                             if !screen.hide_cursor() {
                                 let (vt_row, vt_col) = screen.cursor_position();
-                                let tab_bar_offset: u16 = if group.tabs.len() > 1 { 1 } else { 0 };
                                 let cursor_x = body.x + 2 + vt_col;
-                                let cursor_y = body.y + 1 + tab_bar_offset + vt_row;
+                                let cursor_y = body.y + 2 + vt_row;
                                 if cursor_x < body.x + body.width && cursor_y < body.y + body.height
                                 {
                                     frame.set_cursor_position(ratatui::layout::Position {
@@ -152,10 +151,8 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                                     if let pane_protocol::layout::ResolvedPane::Visible { id, rect } = rp {
                                         if *id == ws.active_group {
                                             let (vt_row, vt_col) = screen.cursor_position();
-                                            let tab_bar_offset: u16 =
-                                                if group.tabs.len() > 1 { 1 } else { 0 };
                                             let cursor_x = rect.x + 2 + vt_col;
-                                            let cursor_y = rect.y + 1 + tab_bar_offset + vt_row;
+                                            let cursor_y = rect.y + 2 + vt_row;
                                             if cursor_x < rect.x + rect.width
                                                 && cursor_y < rect.y + rect.height
                                             {
