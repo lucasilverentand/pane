@@ -1097,36 +1097,36 @@ mod tests {
         (state, group_clone)
     }
 
-    #[test]
-    fn test_expand_format_pane_id() {
+    #[tokio::test]
+    async fn test_expand_format_pane_id() {
         let (state, group) = make_test_state_and_group();
         let result = expand_format("#{pane_id}", 0, 5, "bash", &group, true, &state);
         assert_eq!(result, "%5");
     }
 
-    #[test]
-    fn test_expand_format_window_id() {
+    #[tokio::test]
+    async fn test_expand_format_window_id() {
         let (state, group) = make_test_state_and_group();
         let result = expand_format("#{window_id}", 3, 0, "bash", &group, true, &state);
         assert_eq!(result, "@3");
     }
 
-    #[test]
-    fn test_expand_format_session_name() {
+    #[tokio::test]
+    async fn test_expand_format_session_name() {
         let (state, group) = make_test_state_and_group();
         let result = expand_format("#{session_name}", 0, 0, "bash", &group, true, &state);
         assert_eq!(result, "my-session");
     }
 
-    #[test]
-    fn test_expand_format_window_name() {
+    #[tokio::test]
+    async fn test_expand_format_window_name() {
         let (state, group) = make_test_state_and_group();
         let result = expand_format("#{window_name}", 0, 0, "bash", &group, true, &state);
         assert_eq!(result, "my-window");
     }
 
-    #[test]
-    fn test_expand_format_active_flags() {
+    #[tokio::test]
+    async fn test_expand_format_active_flags() {
         let (state, group) = make_test_state_and_group();
         let active = expand_format("#{pane_active}", 0, 0, "bash", &group, true, &state);
         assert_eq!(active, "1");
@@ -1136,8 +1136,8 @@ mod tests {
         assert_eq!(win_active, "1");
     }
 
-    #[test]
-    fn test_expand_format_compound() {
+    #[tokio::test]
+    async fn test_expand_format_compound() {
         let (state, group) = make_test_state_and_group();
         let result = expand_format(
             "#{session_name}:#{window_id}.#{pane_id}",
@@ -1151,15 +1151,15 @@ mod tests {
         assert_eq!(result, "my-session:@2.%7");
     }
 
-    #[test]
-    fn test_expand_format_pane_title() {
+    #[tokio::test]
+    async fn test_expand_format_pane_title() {
         let (state, group) = make_test_state_and_group();
         let result = expand_format("#{pane_title}", 0, 0, "my-title", &group, true, &state);
         assert_eq!(result, "my-title");
     }
 
-    #[test]
-    fn test_expand_format_no_placeholders() {
+    #[tokio::test]
+    async fn test_expand_format_no_placeholders() {
         let (state, group) = make_test_state_and_group();
         let result = expand_format("plain text", 0, 0, "bash", &group, true, &state);
         assert_eq!(result, "plain text");
@@ -1655,8 +1655,8 @@ mod tests {
         assert_eq!(state.active_workspace().groups[&gid2].tab_count(), 2);
     }
 
-    #[test]
-    fn test_execute_split_window_horizontal() {
+    #[tokio::test]
+    async fn test_execute_split_window_horizontal() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         assert_eq!(state.active_workspace().groups.len(), 1);
         let cmd = Command::SplitWindow {
@@ -1677,8 +1677,8 @@ mod tests {
         assert_eq!(state.active_workspace().groups.len(), 2);
     }
 
-    #[test]
-    fn test_execute_split_window_vertical() {
+    #[tokio::test]
+    async fn test_execute_split_window_vertical() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let cmd = Command::SplitWindow {
             horizontal: false,
@@ -1689,8 +1689,8 @@ mod tests {
         assert_eq!(state.active_workspace().groups.len(), 2);
     }
 
-    #[test]
-    fn test_execute_new_window() {
+    #[tokio::test]
+    async fn test_execute_new_window() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let gid = state.active_workspace().active_group;
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 1);
@@ -1712,8 +1712,8 @@ mod tests {
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 2);
     }
 
-    #[test]
-    fn test_execute_new_window_with_name() {
+    #[tokio::test]
+    async fn test_execute_new_window_with_name() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let cmd = Command::NewWindow {
             target_session: None,
@@ -1761,8 +1761,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_execute_new_session_creates_workspace() {
+    #[tokio::test]
+    async fn test_execute_new_session_creates_workspace() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         assert_eq!(state.workspaces.len(), 1);
         let cmd = Command::NewSession {
@@ -1784,8 +1784,8 @@ mod tests {
         assert_eq!(state.active_workspace, 1);
     }
 
-    #[test]
-    fn test_execute_new_session_with_window_name() {
+    #[tokio::test]
+    async fn test_execute_new_session_with_window_name() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let cmd = Command::NewSession {
             name: "s2".to_string(),
