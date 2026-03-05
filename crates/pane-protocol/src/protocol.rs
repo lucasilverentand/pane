@@ -213,6 +213,7 @@ pub struct WorkspaceSnapshot {
     pub groups: Vec<WindowSnapshot>,
     pub active_group: WindowId,
     pub sync_panes: bool,
+    #[serde(default)]
     pub folded_windows: HashSet<WindowId>,
     pub zoomed_window: Option<WindowId>,
     pub floating_windows: Vec<FloatingWindowSnapshot>,
