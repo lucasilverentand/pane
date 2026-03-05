@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use pane_protocol::config::Config;
 use pane_protocol::event::AppEvent;
-use pane_protocol::layout::{LayoutParams, ResolvedPane, Side, SplitDirection, TabId};
+use pane_protocol::layout::{ResolvedPane, Side, SplitDirection, TabId};
 use pane_protocol::system_stats::SystemStats;
 use crate::window::{Tab, TabKind, Window, WindowId};
 use crate::workspace::Workspace;
@@ -269,7 +269,7 @@ impl ServerState {
                 layout,
                 groups,
                 active_group,
-                leaf_min_sizes: HashMap::new(),
+                folded_windows: HashSet::new(),
                 sync_panes: false,
                 zoomed_window: None,
                 saved_ratios: None,
@@ -340,7 +340,7 @@ impl ServerState {
                     let ws = &mut self.workspaces[ws_idx];
                     if let Some(new_focus) = ws.layout.close_pane(group_id) {
                         ws.groups.remove(&group_id);
-                        ws.prune_leaf_min_sizes();
+                        ws.prune_folded_windows();
                         ws.active_group = new_focus;
                     } else if self.workspaces.len() > 1 {
                         self.workspaces.remove(ws_idx);
@@ -363,51 +363,13 @@ impl ServerState {
         false
     }
 
-    /// Compute proportional leaf sizes and store custom minimums for any pane
-    /// whose size is below the global config default (set by user drag/resize).
-    pub fn update_leaf_mins(&mut self) {
-        let (w, h) = self.last_size;
-        if w == 0 || h == 0 {
-            return;
-        }
-        let bar_h = self.workspace_bar_height();
-        let body_height = h.saturating_sub(1 + bar_h);
-        let body = ratatui::layout::Rect::new(0, bar_h, w, body_height);
-        let min_pw = self.config.behavior.min_pane_width;
-        let min_ph = self.config.behavior.min_pane_height;
-
-        let ws = &mut self.workspaces[self.active_workspace];
-        let resolved = ws.layout.resolve(body);
-        for (id, rect) in resolved {
-            if rect.width < min_pw || rect.height < min_ph {
-                ws.leaf_min_sizes
-                    .insert(id, (rect.width.max(1), rect.height.max(1)));
-            } else {
-                ws.leaf_min_sizes.remove(&id);
-            }
-        }
-    }
-
     /// Focus a pane group and unfold it if it's currently folded.
-    pub fn focus_group(&mut self, id: WindowId, bar_h: u16) {
-        let (w, h) = self.last_size;
-        let body_height = h.saturating_sub(1 + bar_h);
-        let body = ratatui::layout::Rect::new(0, bar_h, w, body_height);
-        let params = LayoutParams::from(&self.config.behavior);
-
-        let ws = &self.workspaces[self.active_workspace];
-        let resolved = ws
-            .layout
-            .resolve_with_fold(body, params, &ws.leaf_min_sizes);
-        let is_folded = resolved
-            .iter()
-            .any(|rp| matches!(rp, ResolvedPane::Folded { id: fid, .. } if *fid == id));
-
+    pub fn focus_group(&mut self, id: WindowId, _bar_h: u16) {
         let ws = &mut self.workspaces[self.active_workspace];
+        let was_folded = ws.folded_windows.remove(&id);
         ws.active_group = id;
-        if is_folded {
-            ws.leaf_min_sizes.clear();
-            ws.layout.unfold_towards(id);
+        if was_folded {
+            let (w, h) = self.last_size;
             self.resize_all_tabs(w, h);
         }
     }
@@ -602,11 +564,10 @@ impl ServerState {
         let body_height = h.saturating_sub(overhead);
         let size = ratatui::layout::Rect::new(0, 0, w, body_height);
 
-        let params = LayoutParams::from(&self.config.behavior);
         for ws in &mut self.workspaces {
             let resolved = ws
                 .layout
-                .resolve_with_fold(size, params, &ws.leaf_min_sizes);
+                .resolve_with_folds(size, &ws.folded_windows);
             for rp in resolved {
                 match rp {
                     ResolvedPane::Visible {
@@ -704,7 +665,7 @@ mod tests {
             layout,
             groups,
             active_group: gid1,
-            leaf_min_sizes: HashMap::new(),
+            folded_windows: HashSet::new(),
             sync_panes: false,
             zoomed_window: None,
             saved_ratios: None,
@@ -868,20 +829,20 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_pty_exited_prunes_leaf_min_sizes() {
+    fn test_handle_pty_exited_prunes_folded_windows() {
         let (mut state, gid1, gid2, _rx) = make_split_state();
         {
             let ws = state.active_workspace_mut();
-            ws.leaf_min_sizes.insert(gid1, (50, 10));
-            ws.leaf_min_sizes.insert(gid2, (60, 12));
+            ws.folded_windows.insert(gid1);
+            ws.folded_windows.insert(gid2);
         }
 
         let pane_id = state.workspaces[0].groups[&gid1].tabs[0].id;
         let should_quit = state.handle_pty_exited(pane_id);
 
         assert!(!should_quit);
-        assert!(!state.workspaces[0].leaf_min_sizes.contains_key(&gid1));
-        assert!(state.workspaces[0].leaf_min_sizes.contains_key(&gid2));
+        assert!(!state.workspaces[0].folded_windows.contains(&gid1));
+        assert!(state.workspaces[0].folded_windows.contains(&gid2));
         assert_eq!(state.workspaces[0].groups.len(), 1);
     }
 
@@ -1252,7 +1213,7 @@ pub fn render_state_from_server(state: &ServerState) -> RenderState {
                 groups,
                 active_group: ws.active_group,
                 sync_panes: ws.sync_panes,
-                leaf_min_sizes: ws.leaf_min_sizes.clone(),
+                folded_windows: ws.folded_windows.clone(),
                 zoomed_window: ws.zoomed_window,
                 floating_windows: ws
                     .floating_windows

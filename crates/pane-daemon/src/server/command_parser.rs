@@ -54,6 +54,7 @@ pub fn parse(input: &str) -> Result<Command> {
         "new-float" => Ok(Command::NewFloat),
         "maximize-focused" | "maximize" => Ok(Command::MaximizeFocused),
         "toggle-zoom" | "zoom" => Ok(Command::ToggleZoom),
+        "toggle-fold" | "fold" => Ok(Command::ToggleFold),
         _ => bail!("unknown command: {}", cmd_name),
     }
 }

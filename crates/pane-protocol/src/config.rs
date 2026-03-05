@@ -162,8 +162,6 @@ impl Theme {
 
 #[derive(Clone, Debug)]
 pub struct Behavior {
-    pub min_pane_width: u16,
-    pub min_pane_height: u16,
     pub fold_bar_size: u16,
     pub vim_navigator: bool,
     pub mouse: bool,
@@ -177,8 +175,6 @@ pub struct Behavior {
 impl Default for Behavior {
     fn default() -> Self {
         Self {
-            min_pane_width: 80,
-            min_pane_height: 20,
             fold_bar_size: 1,
             vim_navigator: false,
             mouse: true,
@@ -743,12 +739,6 @@ impl Config {
 
         // Behavior
         if let Some(b) = raw.behavior {
-            if let Some(v) = b.min_pane_width {
-                config.behavior.min_pane_width = v;
-            }
-            if let Some(v) = b.min_pane_height {
-                config.behavior.min_pane_height = v;
-            }
             if let Some(v) = b.fold_bar_size {
                 config.behavior.fold_bar_size = v;
             }
@@ -934,7 +924,9 @@ struct RawTheme {
 
 #[derive(Deserialize, Default)]
 struct RawBehavior {
+    #[allow(dead_code)]
     min_pane_width: Option<u16>,
+    #[allow(dead_code)]
     min_pane_height: Option<u16>,
     fold_bar_size: Option<u16>,
     vim_navigator: Option<bool>,
@@ -1286,7 +1278,7 @@ mod tests {
         let config = Config::from_raw(raw);
         // Should be identical to default
         assert_eq!(config.theme.accent, Color::Cyan);
-        assert_eq!(config.behavior.min_pane_width, 80);
+        assert_eq!(config.behavior.fold_bar_size, 1);
         assert!(config.status_bar.show_cpu);
     }
 
@@ -1302,10 +1294,9 @@ min_pane_width = 80
         let raw: RawConfig = toml::from_str(toml_str).unwrap();
         let config = Config::from_raw(raw);
         assert_eq!(config.theme.accent, Color::Green);
-        assert_eq!(config.behavior.min_pane_width, 80);
         // Unchanged defaults
         assert_eq!(config.theme.border_active, Color::Cyan);
-        assert_eq!(config.behavior.min_pane_height, 20);
+        assert_eq!(config.behavior.fold_bar_size, 1);
     }
 
     // --- LeaderConfig ---

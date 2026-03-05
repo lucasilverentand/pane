@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use serde::{Deserialize, Serialize};
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::layout::{LayoutNode, TabId};
 use crate::system_stats::SystemStats;
@@ -213,7 +213,7 @@ pub struct WorkspaceSnapshot {
     pub groups: Vec<WindowSnapshot>,
     pub active_group: WindowId,
     pub sync_panes: bool,
-    pub leaf_min_sizes: HashMap<WindowId, (u16, u16)>,
+    pub folded_windows: HashSet<WindowId>,
     pub zoomed_window: Option<WindowId>,
     pub floating_windows: Vec<FloatingWindowSnapshot>,
 }
@@ -406,7 +406,7 @@ mod tests {
                 }],
                 active_group: WindowId::new_v4(),
                 sync_panes: false,
-                leaf_min_sizes: HashMap::new(),
+                folded_windows: HashSet::new(),
                 zoomed_window: None,
                 floating_windows: vec![],
             }],

@@ -678,7 +678,7 @@ async fn handle_client(
                         state.active_workspace = cws;
                     }
                     state.drag_state = None;
-                    state.update_leaf_mins();
+                    // Drag completed — no auto-fold action needed
                     let (w, h) = state.last_size;
                     state.resize_all_tabs(w, h);
                     let cws = state.active_workspace;
@@ -752,11 +752,10 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
         }
     }
 
-    let params = pane_protocol::layout::LayoutParams::from(&state.config.behavior);
     let ws = state.active_workspace();
     let resolved = ws
         .layout
-        .resolve_with_fold(body, params, &ws.leaf_min_sizes);
+        .resolve_with_folds(body, &ws.folded_windows);
 
     // Check fold bar clicks
     for rp in &resolved {

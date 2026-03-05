@@ -12,7 +12,6 @@ use ratatui::Frame;
 
 use pane_protocol::app::Mode;
 use crate::client::Client;
-use pane_protocol::layout::LayoutParams;
 
 /// Render the TUI for a connected client (daemon mode).
 pub fn render_client(client: &Client, frame: &mut Frame) {
@@ -57,7 +56,6 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
 
     // Render workspace body + cursor
     if let Some(ws) = client.active_workspace() {
-        let params = LayoutParams::from(&client.config.behavior);
         let copy_mode_state = if client.mode == Mode::Copy {
             client.copy_mode_state.as_ref()
         } else {
@@ -105,7 +103,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
         } else {
             let resolved = ws
                 .layout
-                .resolve_with_fold(body, params, &ws.leaf_min_sizes);
+                .resolve_with_folds(body, &ws.folded_windows);
 
             // First pass: visible panes
             for rp in &resolved {
