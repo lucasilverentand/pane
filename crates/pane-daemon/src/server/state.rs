@@ -38,38 +38,11 @@ pub struct ServerState {
     pub drag_state: Option<DragState>,
 }
 
-/// Auto-name a workspace: git repo basename → cwd basename → incremental number.
+/// Auto-name a workspace with incremental numbers: "1", "2", "3", …
 fn auto_workspace_name(existing: &[Workspace]) -> String {
     let used: std::collections::HashSet<&str> =
         existing.iter().map(|ws| ws.name.as_str()).collect();
 
-    // Try git repo basename
-    if let Ok(output) = std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-    {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if let Some(name) = std::path::Path::new(&path).file_name() {
-                let name = name.to_string_lossy().to_string();
-                if !name.is_empty() && !used.contains(name.as_str()) {
-                    return name;
-                }
-            }
-        }
-    }
-
-    // Try cwd basename
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Some(name) = cwd.file_name() {
-            let name = name.to_string_lossy().to_string();
-            if !name.is_empty() && !used.contains(name.as_str()) {
-                return name;
-            }
-        }
-    }
-
-    // Fallback: incremental number
     let mut n = 1u32;
     loop {
         let candidate = format!("{}", n);
@@ -712,18 +685,16 @@ mod tests {
     }
 
     #[test]
-    fn test_auto_workspace_name_fallback_numbers() {
-        // When all smart names are taken, falls back to numbers
+    fn test_auto_workspace_name_incremental_numbers() {
         let first = auto_workspace_name(&[]);
+        assert_eq!(first, "1");
         let ws1 = make_named_ws(&first);
         let second = auto_workspace_name(&[ws1]);
-        // Third call: both names taken, create new workspaces with those names
+        assert_eq!(second, "2");
         let ws1b = make_named_ws(&first);
         let ws2b = make_named_ws(&second);
         let third = auto_workspace_name(&[ws1b, ws2b]);
-        assert!(!third.is_empty());
-        assert_ne!(third, first);
-        assert_ne!(third, second);
+        assert_eq!(third, "3");
     }
 
     // ---- find_tab_mut / find_tab_location ----

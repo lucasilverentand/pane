@@ -65,8 +65,8 @@ fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
         let label = format!(" {} ", display_name);
         let label_width = label.len() as u16;
 
-        // Check if this tab fits (reserve space for separator + button on the right)
-        if cursor_x + label_width + sep_width + plus_reserve > max_x && i != active_idx {
+        // Check if this tab fits (reserve space for + button on the right)
+        if cursor_x + label_width + plus_reserve > max_x && i != active_idx {
             tab_ranges.push((0, 0));
             continue;
         }
@@ -116,7 +116,6 @@ pub fn render(
     let layout = compute_layout(workspace_names, active_idx, tab_area);
     let sep = " \u{B7} "; // " · "
 
-    let sep_width = 3u16;
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut first = true;
     let mut content_end = tab_area.x;
@@ -159,11 +158,10 @@ pub fn render(
 
     // Right-align the + button with padding
     if let Some((plus_start, _)) = layout.plus_range {
-        let gap = plus_start.saturating_sub(content_end + sep_width);
+        let gap = plus_start.saturating_sub(content_end);
         if gap > 0 {
             spans.push(Span::raw(" ".repeat(gap as usize)));
         }
-        spans.push(Span::styled(sep, Style::default().fg(theme.dim)));
         spans.push(Span::styled(" + ", Style::default().fg(theme.accent)));
     }
 
