@@ -654,6 +654,9 @@ async fn handle_client(
                     state.active_workspace = cws;
                 }
                 handle_mouse_down_server(&mut state, x, y);
+                let cws = state.active_workspace;
+                let render_state = render_state_for_client(&state, cws);
+                let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
             }
             ClientRequest::MouseDrag { x, y } => {
                 let mut state = state.lock().await;
