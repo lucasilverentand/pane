@@ -23,10 +23,8 @@ pub fn parse(input: &str) -> Result<Command> {
 
     match cmd_name {
         "kill-server" => Ok(Command::KillServer),
-        "list-sessions" | "ls" => Ok(Command::ListSessions),
-        "rename-session" => parse_rename_session(args),
-        "has-session" | "has" => parse_has_session(args),
-        "new-session" | "new" => parse_new_session(args),
+        "new-session" | "new" | "new-workspace" => parse_new_workspace(args),
+        "rename-session" | "rename-workspace" => parse_rename_workspace(args),
         "new-window" | "neww" => parse_new_window(args),
         "kill-window" | "killw" => parse_kill_window(args),
         "select-window" | "selectw" => parse_select_window(args),
@@ -160,41 +158,32 @@ fn parse_target_pane(s: &str) -> Result<TargetPane> {
     }
 }
 
-fn parse_rename_session(args: &[String]) -> Result<Command> {
+fn parse_rename_workspace(args: &[String]) -> Result<Command> {
     if args.is_empty() {
-        bail!("rename-session requires a name");
+        bail!("rename-workspace requires a name");
     }
-    Ok(Command::RenameSession {
+    Ok(Command::RenameWorkspace {
         new_name: args[0].clone(),
     })
 }
 
-fn parse_has_session(args: &[String]) -> Result<Command> {
-    let (target_str, _rest) = extract_target(args);
-    let name = target_str.ok_or_else(|| anyhow::anyhow!("has-session requires -t NAME"))?;
-    Ok(Command::HasSession { name })
-}
-
-fn parse_new_session(args: &[String]) -> Result<Command> {
-    let mut name = None;
+fn parse_new_workspace(args: &[String]) -> Result<Command> {
     let mut window_name = None;
-    let mut detached = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "-s" if i + 1 < args.len() => {
-                name = Some(args[i + 1].clone());
+                // Ignore session name flag (compat)
                 i += 2;
             }
             "-n" if i + 1 < args.len() => {
                 window_name = Some(args[i + 1].clone());
                 i += 2;
             }
-            "-d" => {
-                detached = true;
+            "-d" | "-P" => {
                 i += 1;
             }
-            "-P" | "-F" => {
+            "-F" => {
                 i += 1;
                 if args.get(i).map(|a| !a.starts_with('-')).unwrap_or(false) {
                     i += 1;
@@ -205,12 +194,7 @@ fn parse_new_session(args: &[String]) -> Result<Command> {
             }
         }
     }
-    let name = name.unwrap_or_else(|| "default".to_string());
-    Ok(Command::NewSession {
-        name,
-        window_name,
-        detached,
-    })
+    Ok(Command::NewWorkspace { window_name })
 }
 
 fn parse_new_window(args: &[String]) -> Result<Command> {
@@ -579,24 +563,23 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_list_sessions() {
-        let cmd = parse("list-sessions").unwrap();
-        assert_eq!(cmd, Command::ListSessions);
-    }
-
-    #[test]
-    fn test_parse_list_sessions_alias() {
-        let cmd = parse("ls").unwrap();
-        assert_eq!(cmd, Command::ListSessions);
-    }
-
-    #[test]
-    fn test_parse_rename_session() {
-        let cmd = parse("rename-session my-session").unwrap();
+    fn test_parse_rename_workspace() {
+        let cmd = parse("rename-workspace my-ws").unwrap();
         assert_eq!(
             cmd,
-            Command::RenameSession {
-                new_name: "my-session".to_string()
+            Command::RenameWorkspace {
+                new_name: "my-ws".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_rename_session_compat() {
+        let cmd = parse("rename-session my-ws").unwrap();
+        assert_eq!(
+            cmd,
+            Command::RenameWorkspace {
+                new_name: "my-ws".to_string()
             }
         );
     }
@@ -1222,8 +1205,8 @@ mod tests {
     // --- Commands with missing required arguments ---
 
     #[test]
-    fn test_parse_rename_session_missing_name() {
-        let result = parse("rename-session");
+    fn test_parse_rename_workspace_missing_name() {
+        let result = parse("rename-workspace");
         assert!(result.is_err());
     }
 
@@ -1248,12 +1231,6 @@ mod tests {
     #[test]
     fn test_parse_select_window_missing_target() {
         let result = parse("select-window");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_has_session_missing_target() {
-        let result = parse("has-session");
         assert!(result.is_err());
     }
 
@@ -1344,12 +1321,6 @@ mod tests {
 
     #[test]
     fn test_parse_all_aliases() {
-        assert_eq!(
-            parse("has -t test").unwrap(),
-            Command::HasSession {
-                name: "test".to_string()
-            }
-        );
         assert_eq!(
             parse("neww").unwrap(),
             Command::NewWindow {
@@ -1460,43 +1431,38 @@ mod tests {
         assert!(rest.is_empty());
     }
 
-    // --- New session parsing ---
+    // --- New workspace parsing ---
 
     #[test]
-    fn test_parse_new_session_with_name() {
-        let cmd = parse("new-session -s mysession").unwrap();
+    fn test_parse_new_workspace() {
+        let cmd = parse("new-workspace").unwrap();
         assert_eq!(
             cmd,
-            Command::NewSession {
-                name: "mysession".to_string(),
+            Command::NewWorkspace {
                 window_name: None,
-                detached: false,
             }
         );
     }
 
     #[test]
-    fn test_parse_new_session_detached_with_window_name() {
-        let cmd = parse("new-session -d -s test -n mywindow").unwrap();
+    fn test_parse_new_workspace_with_window_name() {
+        let cmd = parse("new-workspace -n mywindow").unwrap();
         assert_eq!(
             cmd,
-            Command::NewSession {
-                name: "test".to_string(),
+            Command::NewWorkspace {
                 window_name: Some("mywindow".to_string()),
-                detached: true,
             }
         );
     }
 
     #[test]
-    fn test_parse_new_session_default_name() {
-        let cmd = parse("new-session").unwrap();
+    fn test_parse_new_session_compat() {
+        // new-session still works as alias for new-workspace
+        let cmd = parse("new-session -d").unwrap();
         assert_eq!(
             cmd,
-            Command::NewSession {
-                name: "default".to_string(),
+            Command::NewWorkspace {
                 window_name: None,
-                detached: false,
             }
         );
     }

@@ -18,19 +18,9 @@ pub enum SplitSize {
 /// A parsed, typed command that can be executed against the server state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
-    // Session commands
     KillServer,
-    ListSessions,
-    RenameSession {
-        new_name: String,
-    },
-    HasSession {
-        name: String,
-    },
-    NewSession {
-        name: String,
+    NewWorkspace {
         window_name: Option<String>,
-        detached: bool,
     },
 
     // Window (Window) commands
@@ -86,6 +76,9 @@ pub enum Command {
 
     // Workspace commands
     CloseWorkspace,
+    RenameWorkspace {
+        new_name: String,
+    },
     SelectWorkspaceByIndex {
         index: usize,
     },
@@ -191,31 +184,7 @@ pub fn execute(
             Ok(CommandResult::SessionEnded)
         }
 
-        Command::ListSessions => {
-            let names = crate::server::daemon::list_sessions();
-            let output = if names.is_empty() {
-                "no sessions".to_string()
-            } else {
-                names.join("\n")
-            };
-            Ok(CommandResult::Ok(output))
-        }
-
-        Command::RenameSession { new_name } => {
-            state.session_name = new_name.clone();
-            Ok(CommandResult::Ok(String::new()))
-        }
-
-        Command::HasSession { name } => {
-            let sessions = crate::server::daemon::list_sessions();
-            if sessions.contains(name) {
-                Ok(CommandResult::Ok(String::new()))
-            } else {
-                bail!("session not found: {}", name);
-            }
-        }
-
-        Command::NewSession { window_name, .. } => {
+        Command::NewWorkspace { window_name } => {
             // In context of an already-running server, this creates a new workspace
             let (w, h) = state.last_size;
             let bar_h = state.workspace_bar_height();
@@ -517,6 +486,12 @@ pub fn execute(
             state.resize_all_tabs(w, h);
             broadcast_layout(state, broadcast_tx);
             Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::RenameWorkspace { new_name } => {
+            state.active_workspace_mut().name = new_name.clone();
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::Ok(String::new()))
         }
 
         Command::SelectWorkspaceByIndex { index } => {
@@ -878,8 +853,8 @@ fn expand_format(
     result = result.replace("#{pane_title}", pane_title);
     result = result.replace("#{pane_index}", &format!("{}", pane_id));
     result = result.replace("#{pane_current_command}", pane_title);
-    result = result.replace("#{session_name}", &state.session_name);
-    result = result.replace("#{session_id}", &format!("${}", 0)); // session id always $0 for now
+    result = result.replace("#{session_name}", &state.active_workspace().name);
+    result = result.replace("#{session_id}", &format!("${}", 0));
     result = result.replace("#{window_active}", if is_active { "1" } else { "0" });
     result = result.replace("#{pane_active}", if is_active { "1" } else { "0" });
     result = result.replace(
@@ -955,9 +930,6 @@ mod tests {
         let state = ServerState {
             workspaces: vec![workspace],
             active_workspace: 0,
-            session_name: "test-session".to_string(),
-            session_id: uuid::Uuid::new_v4(),
-            session_created_at: chrono::Utc::now(),
             config: Config::default(),
             system_stats: pane_protocol::system_stats::SystemStats::default(),
             event_tx,
@@ -1012,9 +984,6 @@ mod tests {
         let state = ServerState {
             workspaces: vec![workspace],
             active_workspace: 0,
-            session_name: "test-session".to_string(),
-            session_id: uuid::Uuid::new_v4(),
-            session_created_at: chrono::Utc::now(),
             config: Config::default(),
             system_stats: pane_protocol::system_stats::SystemStats::default(),
             event_tx,
@@ -1077,10 +1046,10 @@ mod tests {
     fn test_command_equality() {
         assert_eq!(Command::KillServer, Command::KillServer);
         assert_eq!(
-            Command::RenameSession {
+            Command::RenameWorkspace {
                 new_name: "x".to_string()
             },
-            Command::RenameSession {
+            Command::RenameWorkspace {
                 new_name: "x".to_string()
             },
         );
@@ -1106,8 +1075,7 @@ mod tests {
     /// Helper: create a minimal ServerState + Window for expand_format tests.
     fn make_test_state_and_group() -> (ServerState, crate::window::Window) {
         let (event_tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let state = ServerState::new_session(
-            "my-session".to_string(),
+        let state = ServerState::new(
             &event_tx,
             120,
             40,
@@ -1144,7 +1112,8 @@ mod tests {
     async fn test_expand_format_session_name() {
         let (state, group) = make_test_state_and_group();
         let result = expand_format("#{session_name}", 0, 0, "bash", &group, true, &state);
-        assert_eq!(result, "my-session");
+        // #{session_name} now expands to the active workspace name
+        assert_eq!(result, state.active_workspace().name);
     }
 
     #[tokio::test]
@@ -1177,7 +1146,8 @@ mod tests {
             true,
             &state,
         );
-        assert_eq!(result, "my-session:@2.%7");
+        let expected = format!("{}:@2.%7", state.active_workspace().name);
+        assert_eq!(result, expected);
     }
 
     #[tokio::test]
@@ -1197,14 +1167,14 @@ mod tests {
     // ---- Command execution tests ----
 
     #[test]
-    fn test_execute_rename_session() {
+    fn test_execute_rename_workspace() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
-        let cmd = Command::RenameSession {
+        let cmd = Command::RenameWorkspace {
             new_name: "new-name".to_string(),
         };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(matches!(result, CommandResult::Ok(_)));
-        assert_eq!(state.session_name, "new-name");
+        assert_eq!(state.active_workspace().name, "new-name");
     }
 
     #[test]
@@ -1318,7 +1288,7 @@ mod tests {
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
             CommandResult::Ok(output) => {
-                assert!(output.contains("test-session"));
+                assert!(output.contains("workspace"));
             }
             _ => panic!("expected CommandResult::Ok"),
         }
@@ -1646,7 +1616,7 @@ mod tests {
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
             CommandResult::Ok(output) => {
-                assert_eq!(output, "hello test-session");
+                assert_eq!(output, "hello workspace");
             }
             _ => panic!("expected CommandResult::Ok"),
         }
@@ -1791,13 +1761,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_new_session_creates_workspace() {
+    async fn test_execute_new_workspace_creates_workspace() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         assert_eq!(state.workspaces.len(), 1);
-        let cmd = Command::NewSession {
-            name: "second".to_string(),
+        let cmd = Command::NewWorkspace {
             window_name: None,
-            detached: false,
         };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
@@ -1814,12 +1782,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_new_session_with_window_name() {
+    async fn test_execute_new_workspace_with_window_name() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
-        let cmd = Command::NewSession {
-            name: "s2".to_string(),
+        let cmd = Command::NewWorkspace {
             window_name: Some("my-win".to_string()),
-            detached: false,
         };
         execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         let ws = state.active_workspace();

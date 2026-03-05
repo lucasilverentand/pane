@@ -17,7 +17,6 @@ use pane_protocol::protocol::{
     ClientRequest, SerializableSystemStats, ServerResponse,
 };
 use crate::server::state::{ServerState, render_state_from_server, render_state_for_client};
-use crate::session::{self, session_from_state};
 use crate::system_stats;
 
 /// Global counter for assigning unique client IDs.
@@ -103,58 +102,39 @@ pub fn socket_dir() -> PathBuf {
     base.join(format!("pane-{}", uid))
 }
 
-/// Returns the socket path for a given session name.
-pub fn socket_path(session_name: &str) -> PathBuf {
-    socket_dir().join(format!("{}.sock", session_name))
+/// Returns the fixed socket path for the single pane daemon.
+pub fn socket_path() -> PathBuf {
+    socket_dir().join("pane.sock")
 }
 
-/// Returns the version file path for a given session name.
-fn version_path(session_name: &str) -> PathBuf {
-    socket_dir().join(format!("{}.version", session_name))
+/// Returns the version file path.
+fn version_path() -> PathBuf {
+    socket_dir().join("pane.version")
 }
 
-/// Returns the PID file path for a given session name.
-fn pid_path(session_name: &str) -> PathBuf {
-    socket_dir().join(format!("{}.pid", session_name))
+/// Returns the PID file path.
+fn pid_path() -> PathBuf {
+    socket_dir().join("pane.pid")
 }
 
-/// List running sessions by scanning socket files and testing connectivity.
-pub fn list_sessions() -> Vec<String> {
-    let dir = socket_dir();
-    let mut sessions = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map(|e| e == "sock").unwrap_or(false) {
-                if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
-                    // Test if socket is alive by attempting connection
-                    if std::os::unix::net::UnixStream::connect(&path).is_ok() {
-                        sessions.push(name.to_string());
-                    } else {
-                        // Stale socket, clean up
-                        let _ = std::fs::remove_file(&path);
-                    }
-                }
-            }
-        }
-    }
-    sessions.sort();
-    sessions
+/// Returns the log file path.
+fn log_path() -> PathBuf {
+    socket_dir().join("pane.log")
 }
 
-/// Run the server daemon for a given session.
-pub async fn run_server(session_name: String, config: Config) -> Result<()> {
+/// Run the server daemon.
+pub async fn run_server(config: Config) -> Result<()> {
     let sock_dir = socket_dir();
     std::fs::create_dir_all(&sock_dir)?;
 
-    let sock_path = socket_path(&session_name);
+    let sock_path = socket_path();
     cleanup_stale_socket(&sock_path);
 
     let listener = UnixListener::bind(&sock_path)?;
 
     // Write version and PID files so clients can detect version mismatches
-    std::fs::write(version_path(&session_name), env!("CARGO_PKG_VERSION"))?;
-    std::fs::write(pid_path(&session_name), std::process::id().to_string())?;
+    std::fs::write(version_path(), env!("CARGO_PKG_VERSION"))?;
+    std::fs::write(pid_path(), std::process::id().to_string())?;
 
     // Channel for internal events (PTY output, stats, etc.)
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -164,12 +144,7 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
 
     let auto_suspend_secs = config.behavior.auto_suspend_secs;
 
-    // Try to restore from saved session, otherwise create a new one
-    let state = if let Some(saved) = session::store::load_by_name(&session_name) {
-        ServerState::restore_session(saved, event_tx.clone(), 80, 24, config)?
-    } else {
-        ServerState::new_session(session_name.clone(), &event_tx, 80, 24, config)?
-    };
+    let state = ServerState::new(&event_tx, 80, 24, config)?;
     // Start plugin manager
     let plugin_configs = state.config.plugins.clone();
     let state = Arc::new(Mutex::new(state));
@@ -267,10 +242,8 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
     });
 
     // Set up signal handler for graceful shutdown (SIGTERM + Ctrl-C)
-    let state_clone = Arc::clone(&state);
     let broadcast_tx_term = broadcast_tx.clone();
     let sock_path_clone = sock_path.clone();
-    let session_name_clone = session_name.clone();
     tokio::spawn(async move {
         let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("failed to register SIGTERM handler");
@@ -278,14 +251,10 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
             _ = tokio::signal::ctrl_c() => {}
             _ = sigterm.recv() => {}
         }
-        // Save session and notify clients before exiting
-        let state = state_clone.lock().await;
-        let session = session_from_state(&state);
-        let _ = session::store::save(&session);
         let _ = broadcast_tx_term.send(ServerResponse::SessionEnded);
         let _ = std::fs::remove_file(&sock_path_clone);
-        let _ = std::fs::remove_file(version_path(&session_name_clone));
-        let _ = std::fs::remove_file(pid_path(&session_name_clone));
+        let _ = std::fs::remove_file(version_path());
+        let _ = std::fs::remove_file(pid_path());
         std::process::exit(0);
     });
 
@@ -304,11 +273,9 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
 
     // Auto-suspend: save and exit after N seconds of no connected clients
     if auto_suspend_secs > 0 {
-        let state_clone = Arc::clone(&state);
         let clients_clone = clients.clone();
         let broadcast_tx_suspend = broadcast_tx.clone();
         let sock_path_suspend = sock_path.clone();
-        let session_name_suspend = session_name.clone();
         tokio::spawn(async move {
             let mut last_empty: Option<tokio::time::Instant> = None;
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -321,14 +288,10 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
                     }
                     if let Some(since) = last_empty {
                         if since.elapsed().as_secs() >= auto_suspend_secs {
-                            // Save session and exit
-                            let state = state_clone.lock().await;
-                            let session = session_from_state(&state);
-                            let _ = session::store::save(&session);
                             let _ = broadcast_tx_suspend.send(ServerResponse::SessionEnded);
                             let _ = std::fs::remove_file(&sock_path_suspend);
-                            let _ = std::fs::remove_file(version_path(&session_name_suspend));
-                            let _ = std::fs::remove_file(pid_path(&session_name_suspend));
+                            let _ = std::fs::remove_file(version_path());
+                            let _ = std::fs::remove_file(pid_path());
                             std::process::exit(0);
                         }
                     }
@@ -344,12 +307,9 @@ pub async fn run_server(session_name: String, config: Config) -> Result<()> {
 
     // Clean up
     accept_loop.abort();
-    let state = state.lock().await;
-    let session = session_from_state(&state);
-    let _ = session::store::save(&session);
     let _ = std::fs::remove_file(&sock_path);
-    let _ = std::fs::remove_file(version_path(&session_name));
-    let _ = std::fs::remove_file(pid_path(&session_name));
+    let _ = std::fs::remove_file(version_path());
+    let _ = std::fs::remove_file(pid_path());
 
     Ok(())
 }
@@ -512,20 +472,17 @@ async fn handle_client(
         return Ok(());
     }
 
-    let session_name = match &first_msg {
-        ClientRequest::Attach { session_name } => session_name.clone(),
-        _ => {
-            framing::send(
-                &mut stream,
-                &ServerResponse::Error("expected Attach as first message".to_string()),
-            )
-            .await?;
-            return Ok(());
-        }
-    };
+    if !matches!(&first_msg, ClientRequest::Attach) {
+        framing::send(
+            &mut stream,
+            &ServerResponse::Error("expected Attach as first message".to_string()),
+        )
+        .await?;
+        return Ok(());
+    }
 
     // Send attached confirmation
-    framing::send(&mut stream, &ServerResponse::Attached { session_name }).await?;
+    framing::send(&mut stream, &ServerResponse::Attached).await?;
 
     // Register client with default size and current active workspace
     {
@@ -706,7 +663,7 @@ async fn handle_client(
                     break;
                 }
             }
-            ClientRequest::Attach { .. } => {
+            ClientRequest::Attach => {
                 // Already attached, ignore
             }
             ClientRequest::CommandSync(_) => {
@@ -909,23 +866,19 @@ async fn handle_command(
     false
 }
 
-/// Kill a daemon by PID (SIGTERM) and wait for it to exit.
+/// Kill the daemon by PID (SIGTERM) and wait for it to exit.
 /// Also cleans up socket, version, and PID files.
-pub fn kill_daemon(session_name: &str) {
-    let pid_file = pid_path(session_name);
+pub fn kill_daemon() {
+    let pid_file = pid_path();
     if let Ok(contents) = std::fs::read_to_string(&pid_file) {
         if let Ok(pid) = contents.trim().parse::<i32>() {
             kill_pid(pid);
         }
     }
-    // Also kill any orphan daemons for this session that we don't have a PID
-    // file for (e.g. started before PID tracking was added, or whose PID file
-    // was lost). Uses the process table directly to find them.
-    kill_orphan_daemons(session_name);
-    // Clean up all files
-    let _ = std::fs::remove_file(socket_path(session_name));
+    kill_orphan_daemons();
+    let _ = std::fs::remove_file(socket_path());
     let _ = std::fs::remove_file(pid_file);
-    let _ = std::fs::remove_file(version_path(session_name));
+    let _ = std::fs::remove_file(version_path());
 }
 
 /// Send SIGTERM to a PID and wait up to 1 second for it to exit.
@@ -942,12 +895,12 @@ fn kill_pid(pid: i32) {
     }
 }
 
-/// Find and kill any `pane daemon <session>` processes that aren't tracked by
-/// the PID file. This catches orphans from before PID tracking was added.
-fn kill_orphan_daemons(session_name: &str) {
+/// Find and kill any `pane daemon` processes that aren't tracked by
+/// the PID file.
+fn kill_orphan_daemons() {
     let my_pid = std::process::id() as i32;
     let Ok(output) = std::process::Command::new("pgrep")
-        .args(["-f", &format!("pane daemon {}", session_name)])
+        .args(["-f", "pane daemon"])
         .output()
     else {
         return;
@@ -964,27 +917,24 @@ fn kill_orphan_daemons(session_name: &str) {
     }
 }
 
-/// Start a daemon in the background for the given session.
-/// Forks the current exe with `daemon <session_name>` args, detaches stdio,
+/// Start the daemon in the background.
+/// Forks the current exe with `daemon` arg, detaches stdio,
 /// and waits for the socket to appear (up to 5 seconds).
 /// If a daemon is already running with a different version, it is restarted.
-pub fn start_daemon(session_name: &str) -> Result<()> {
+pub fn start_daemon() -> Result<()> {
     let exe = std::env::current_exe()?;
-    let sock = socket_path(session_name);
+    let sock = socket_path();
 
     // If socket already exists and daemon is alive, check version
     if sock.exists() && std::os::unix::net::UnixStream::connect(&sock).is_ok() {
-        let needs_restart = {
-            let ver = version_path(session_name);
-            match std::fs::read_to_string(&ver) {
-                Ok(v) => v.trim() != env!("CARGO_PKG_VERSION"),
-                Err(_) => true, // No version file = old daemon without version support
-            }
+        let needs_restart = match std::fs::read_to_string(version_path()) {
+            Ok(v) => v.trim() != env!("CARGO_PKG_VERSION"),
+            Err(_) => true,
         };
 
         if needs_restart {
             eprintln!("pane: restarting daemon (version mismatch)");
-            kill_daemon(session_name);
+            kill_daemon();
         } else {
             return Ok(());
         }
@@ -1001,14 +951,12 @@ pub fn start_daemon(session_name: &str) -> Result<()> {
 
     // Fork a background daemon process
     use std::process::{Command, Stdio};
-    let log_path = socket_dir().join(format!("{}.log", session_name));
-    let log_file = std::fs::File::create(&log_path).unwrap_or_else(|_| {
-        // Fall back to /dev/null if we can't create the log file
+    let log = log_path();
+    let log_file = std::fs::File::create(&log).unwrap_or_else(|_| {
         std::fs::File::open("/dev/null").unwrap()
     });
     Command::new(exe)
         .arg("daemon")
-        .arg(session_name)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(log_file))
@@ -1022,10 +970,7 @@ pub fn start_daemon(session_name: &str) -> Result<()> {
         }
     }
 
-    anyhow::bail!(
-        "timed out waiting for daemon to start for session '{}'",
-        session_name
-    )
+    anyhow::bail!("timed out waiting for daemon to start")
 }
 
 fn cleanup_stale_socket(path: &Path) {
@@ -1037,20 +982,14 @@ fn cleanup_stale_socket(path: &Path) {
     }
 }
 
-/// Kill a running session by connecting and sending a kill-server command.
-pub async fn kill_session(session_name: &str) -> Result<()> {
-    let path = socket_path(session_name);
+/// Kill the running daemon by connecting and sending a kill-server command.
+pub async fn kill_session() -> Result<()> {
+    let path = socket_path();
     if !path.exists() {
-        anyhow::bail!("no session named '{}'", session_name);
+        anyhow::bail!("no running daemon");
     }
     let mut stream = UnixStream::connect(&path).await?;
-    framing::send(
-        &mut stream,
-        &ClientRequest::Attach {
-            session_name: session_name.to_string(),
-        },
-    )
-    .await?;
+    framing::send(&mut stream, &ClientRequest::Attach).await?;
     // Wait for Attached response
     let _: ServerResponse = framing::recv_required(&mut stream).await?;
     // Send kill command
@@ -1062,20 +1001,14 @@ pub async fn kill_session(session_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Send keys to a specific pane target (session:window.pane format).
-pub async fn send_keys(session_name: &str, keys: &str) -> Result<()> {
-    let path = socket_path(session_name);
+/// Send keys to the running daemon.
+pub async fn send_keys(keys: &str) -> Result<()> {
+    let path = socket_path();
     if !path.exists() {
-        anyhow::bail!("no session named '{}'", session_name);
+        anyhow::bail!("no running daemon");
     }
     let mut stream = UnixStream::connect(&path).await?;
-    framing::send(
-        &mut stream,
-        &ClientRequest::Attach {
-            session_name: session_name.to_string(),
-        },
-    )
-    .await?;
+    framing::send(&mut stream, &ClientRequest::Attach).await?;
     let _: ServerResponse = framing::recv_required(&mut stream).await?;
 
     // Parse keys: simple text for now, each character as a key event
@@ -1110,7 +1043,7 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let config = Config::default();
 
-        let state = ServerState::new_session("test-session".to_string(), &event_tx, 80, 24, config)
+        let state = ServerState::new(&event_tx, 80, 24, config)
             .unwrap();
         let state = Arc::new(Mutex::new(state));
         let id_map = Arc::new(Mutex::new(IdMap::new()));
@@ -1165,18 +1098,11 @@ mod tests {
 
     /// Helper: attach to the server and consume the initial Attached + LayoutChanged + ClientCountChanged messages.
     async fn attach_and_consume_initial(stream: &mut UnixStream) {
-        framing::send(
-            stream,
-            &ClientRequest::Attach {
-                session_name: "test-session".to_string(),
-            },
-        )
-        .await
-        .unwrap();
+        framing::send(stream, &ClientRequest::Attach).await.unwrap();
 
         // Read Attached
         let resp: ServerResponse = framing::recv_required(stream).await.unwrap();
-        assert!(matches!(resp, ServerResponse::Attached { .. }));
+        assert!(matches!(resp, ServerResponse::Attached));
 
         // Consume LayoutChanged, ClientCountChanged, and any FullScreenDump messages
         let mut seen_layout = false;
@@ -1330,23 +1256,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_command_rename_session() {
+    async fn test_command_rename_workspace() {
         let (mut client, handle, state) = setup_test_server().await;
 
         attach_and_consume_initial(&mut client).await;
 
         framing::send(
             &mut client,
-            &ClientRequest::Command("rename-session new-name".to_string()),
+            &ClientRequest::Command("rename-workspace new-name".to_string()),
         )
         .await
         .unwrap();
 
-        // rename-session returns Ok(""), so no response broadcast
-        // Verify state changed directly
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // rename-workspace broadcasts LayoutChanged
+        let resp: ServerResponse = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            framing::recv_required(&mut client),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(matches!(resp, ServerResponse::LayoutChanged { .. }));
+
         let s = state.lock().await;
-        assert_eq!(s.session_name, "new-name");
+        assert_eq!(s.active_workspace().name, "new-name");
         drop(s);
 
         framing::send(&mut client, &ClientRequest::Detach)
@@ -1433,12 +1366,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_command_sync_rename_session() {
+    async fn test_command_sync_rename_workspace() {
         let (mut client, handle, state) = setup_test_server().await;
 
         framing::send(
             &mut client,
-            &ClientRequest::CommandSync("rename-session sync-name".to_string()),
+            &ClientRequest::CommandSync("rename-workspace sync-name".to_string()),
         )
         .await
         .unwrap();
@@ -1460,7 +1393,7 @@ mod tests {
         // Verify the state was actually changed
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let s = state.lock().await;
-        assert_eq!(s.session_name, "sync-name");
+        assert_eq!(s.active_workspace().name, "sync-name");
         drop(s);
 
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
@@ -1634,7 +1567,8 @@ mod tests {
                 success, output, ..
             } => {
                 assert!(success);
-                assert_eq!(output, "test-session", "should expand session name");
+                // #{session_name} now expands to the active workspace name
+                assert!(!output.is_empty(), "should expand to workspace name");
             }
             other => panic!("expected CommandOutput, got {:?}", other),
         }

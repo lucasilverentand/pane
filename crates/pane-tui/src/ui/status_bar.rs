@@ -155,7 +155,7 @@ fn build_client_vars(client: &Client) -> HashMap<String, String> {
     if let Some(ws) = client.active_workspace() {
         vars.insert(
             "session_name".to_string(),
-            client.render_state.session_name.clone(),
+            "pane".to_string(),
         );
         vars.insert("window_name".to_string(), ws.name.clone());
 

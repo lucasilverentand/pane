@@ -20,7 +20,7 @@ pub fn handle_tmux_args(args: Vec<String>) -> Result<()> {
     }
 
     // Determine the tmux subcommand (skip global flags like -S, -L, -f).
-    let (session_override, subcmd, subcmd_args) = parse_global_flags(&args)?;
+    let (_session_override, subcmd, subcmd_args) = parse_global_flags(&args)?;
 
     match subcmd.as_str() {
         "-V" => {
@@ -28,31 +28,29 @@ pub fn handle_tmux_args(args: Vec<String>) -> Result<()> {
             Ok(())
         }
         "has-session" | "has" => {
-            let name = extract_session_name(&subcmd_args, &session_override)?;
-            let sessions = daemon::list_sessions();
-            if sessions.iter().any(|s| s == &name) {
+            // Single session — check if the daemon is running
+            let path = daemon::socket_path();
+            if path.exists() {
                 Ok(())
             } else {
-                // tmux exits 1 for missing session
                 std::process::exit(1);
             }
         }
         "list-sessions" | "ls" => {
-            let sessions = daemon::list_sessions();
-            if sessions.is_empty() {
+            let path = daemon::socket_path();
+            if path.exists() {
+                println!("pane: 1 windows (created -) [80x24]");
+            } else {
                 eprintln!("no server running on this host");
                 std::process::exit(1);
             }
-            for name in &sessions {
-                println!("{}: 1 windows (created -) [80x24]", name);
-            }
             Ok(())
         }
-        "new-session" | "new" => handle_new_session(&subcmd_args, &session_override),
-        "kill-session" => handle_kill_session(&subcmd_args, &session_override),
+        "new-session" | "new" => handle_new_session(&subcmd_args),
+        "kill-session" => handle_kill_session(),
         _ => {
             // All other commands go through the socket via CommandSync.
-            handle_socket_command(&subcmd, &subcmd_args, &session_override)
+            handle_socket_command(&subcmd, &subcmd_args)
         }
     }
 }
@@ -135,79 +133,7 @@ fn is_subcommand(s: &str) -> bool {
     )
 }
 
-/// Extract session name from -t flag or override.
-fn extract_session_name(args: &[String], session_override: &Option<String>) -> Result<String> {
-    // Check -t flag
-    for (i, arg) in args.iter().enumerate() {
-        if arg == "-t" {
-            if let Some(name) = args.get(i + 1) {
-                // Target may include `:window.pane`, take just the session part
-                let session = name.split(':').next().unwrap_or(name);
-                return Ok(session.to_string());
-            }
-        }
-    }
-    if let Some(s) = session_override {
-        return Ok(s.clone());
-    }
-    // Try TMUX env var to find current session
-    if let Ok(tmux_val) = std::env::var("TMUX") {
-        if let Some(sock_path) = tmux_val.split(',').next() {
-            let path = std::path::Path::new(sock_path);
-            if let Some(stem) = path.file_stem() {
-                return Ok(stem.to_string_lossy().into_owned());
-            }
-        }
-    }
-    Ok("default".to_string())
-}
-
-/// Determine which session to connect to for socket commands.
-fn resolve_session(args: &[String], session_override: &Option<String>) -> Result<String> {
-    // Check -t flag for session:window.pane format
-    for (i, arg) in args.iter().enumerate() {
-        if arg == "-t" {
-            if let Some(target) = args.get(i + 1) {
-                // If target contains ':', the part before ':' is the session name
-                if let Some(session) = target.split(':').next() {
-                    if !session.starts_with('%') && !session.starts_with('@') && !session.is_empty()
-                    {
-                        // Check if this is actually a session name (not a pane/window target)
-                        let sessions = daemon::list_sessions();
-                        if sessions.iter().any(|s| s == session) {
-                            return Ok(session.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if let Some(s) = session_override {
-        return Ok(s.clone());
-    }
-
-    // Use TMUX env var
-    if let Ok(tmux_val) = std::env::var("TMUX") {
-        if let Some(sock_path) = tmux_val.split(',').next() {
-            let path = std::path::Path::new(sock_path);
-            if let Some(stem) = path.file_stem() {
-                return Ok(stem.to_string_lossy().into_owned());
-            }
-        }
-    }
-
-    // Fall back to first running session
-    let sessions = daemon::list_sessions();
-    if let Some(first) = sessions.first() {
-        return Ok(first.clone());
-    }
-
-    bail!("no sessions running");
-}
-
-fn handle_new_session(args: &[String], session_override: &Option<String>) -> Result<()> {
-    let mut name = session_override.clone();
+fn handle_new_session(args: &[String]) -> Result<()> {
     let mut window_name = None;
     let mut detached = false;
     let mut print_info = false;
@@ -217,7 +143,7 @@ fn handle_new_session(args: &[String], session_override: &Option<String>) -> Res
     while i < args.len() {
         match args[i].as_str() {
             "-s" if i + 1 < args.len() => {
-                name = Some(args[i + 1].clone());
+                // Ignore session name (single session)
                 i += 2;
             }
             "-n" if i + 1 < args.len() => {
@@ -242,24 +168,20 @@ fn handle_new_session(args: &[String], session_override: &Option<String>) -> Res
         }
     }
 
-    let session_name = name.unwrap_or_else(|| "default".to_string());
+    let path = daemon::socket_path();
 
-    // Check if session already exists
-    let sessions = daemon::list_sessions();
-    if sessions.iter().any(|s| s == &session_name) {
-        // Session exists — if we need to create resources in it, send command
-        if window_name.is_some() || print_info {
-            let mut cmd_parts = vec!["new-window".to_string()];
-            if let Some(ref wname) = window_name {
-                cmd_parts.push("-n".to_string());
-                cmd_parts.push(wname.clone());
-            }
-            let cmd_str = cmd_parts.join(" ");
-            let rt = tokio::runtime::Runtime::new()?;
-            let result = rt.block_on(send_command_sync(&session_name, &cmd_str))?;
-            if print_info {
-                print_formatted_output(&result, &format, &session_name);
-            }
+    // If daemon is already running, create a new workspace inside it
+    if path.exists() {
+        let mut cmd_parts = vec!["new-workspace".to_string()];
+        if let Some(ref wname) = window_name {
+            cmd_parts.push("-n".to_string());
+            cmd_parts.push(wname.clone());
+        }
+        let cmd_str = cmd_parts.join(" ");
+        let rt = tokio::runtime::Runtime::new()?;
+        let result = rt.block_on(send_command_sync(&cmd_str))?;
+        if print_info {
+            print_formatted_output(&result, &format);
         }
         return Ok(());
     }
@@ -267,10 +189,9 @@ fn handle_new_session(args: &[String], session_override: &Option<String>) -> Res
     if detached {
         // Start server in background
         let config = pane_protocol::config::Config::load();
-        let session_name_clone = session_name.clone();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
-            let _ = rt.block_on(daemon::run_server(session_name_clone, config));
+            let _ = rt.block_on(daemon::run_server(config));
         });
         // Wait briefly for the server to start
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -278,15 +199,14 @@ fn handle_new_session(args: &[String], session_override: &Option<String>) -> Res
         if let Some(wname) = &window_name {
             let rt = tokio::runtime::Runtime::new()?;
             let _ = rt.block_on(send_command_sync(
-                &session_name,
                 &format!("rename-window {}", wname),
             ));
         }
 
         if print_info {
-            let fmt = format.as_deref().unwrap_or("#{session_name}:");
+            let fmt = format.as_deref().unwrap_or("pane:");
             let output = fmt
-                .replace("#{session_name}", &session_name)
+                .replace("#{session_name}", "pane")
                 .replace("#{window_id}", "@0")
                 .replace("#{window_index}", "0")
                 .replace("#{pane_id}", "%0");
@@ -297,19 +217,17 @@ fn handle_new_session(args: &[String], session_override: &Option<String>) -> Res
     Ok(())
 }
 
-fn handle_kill_session(args: &[String], session_override: &Option<String>) -> Result<()> {
-    let name = extract_session_name(args, session_override)?;
+fn handle_kill_session() -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(daemon::kill_session(&name))
+    rt.block_on(daemon::kill_session())
 }
 
 /// Send a command through the socket and get a synchronous response.
-fn handle_socket_command(
-    subcmd: &str,
-    args: &[String],
-    session_override: &Option<String>,
-) -> Result<()> {
-    let session = resolve_session(args, session_override)?;
+fn handle_socket_command(subcmd: &str, args: &[String]) -> Result<()> {
+    let path = daemon::socket_path();
+    if !path.exists() {
+        bail!("no server running");
+    }
 
     // Check for -P (print info) and -F (format) flags
     let mut print_info = false;
@@ -327,7 +245,7 @@ fn handle_socket_command(
     let cmd_str = build_command_string(subcmd, args);
 
     let rt = tokio::runtime::Runtime::new()?;
-    let result = rt.block_on(send_command_sync(&session, &cmd_str))?;
+    let result = rt.block_on(send_command_sync(&cmd_str))?;
 
     match result {
         ServerResponse::CommandOutput {
@@ -356,7 +274,7 @@ fn handle_socket_command(
                             "#{window_index}",
                             &window_id.map(|n| format!("{}", n)).unwrap_or_default(),
                         )
-                        .replace("#{session_name}", &session);
+                        .replace("#{session_name}", "pane");
                     println!("{}", formatted);
                 } else if let Some(pane_n) = pane_id {
                     println!("%{}", pane_n);
@@ -397,11 +315,11 @@ fn build_command_string(subcmd: &str, args: &[String]) -> String {
     parts.join(" ")
 }
 
-/// Connect to the session socket, send a CommandSync, return the response.
-async fn send_command_sync(session_name: &str, cmd: &str) -> Result<ServerResponse> {
-    let path = daemon::socket_path(session_name);
+/// Connect to the daemon socket, send a CommandSync, return the response.
+async fn send_command_sync(cmd: &str) -> Result<ServerResponse> {
+    let path = daemon::socket_path();
     if !path.exists() {
-        bail!("no server running for session '{}'", session_name);
+        bail!("no server running");
     }
     let mut stream = UnixStream::connect(&path).await?;
     framing::send(&mut stream, &ClientRequest::CommandSync(cmd.to_string())).await?;
@@ -409,7 +327,7 @@ async fn send_command_sync(session_name: &str, cmd: &str) -> Result<ServerRespon
     Ok(response)
 }
 
-fn print_formatted_output(response: &ServerResponse, format: &Option<String>, session_name: &str) {
+fn print_formatted_output(response: &ServerResponse, format: &Option<String>) {
     if let ServerResponse::CommandOutput {
         pane_id, window_id, ..
     } = response
@@ -428,7 +346,7 @@ fn print_formatted_output(response: &ServerResponse, format: &Option<String>, se
                     "#{window_index}",
                     &window_id.map(|n| format!("{}", n)).unwrap_or_default(),
                 )
-                .replace("#{session_name}", session_name);
+                .replace("#{session_name}", "pane");
             println!("{}", formatted);
         } else if let Some(pane_n) = pane_id {
             println!("%{}", pane_n);
@@ -623,7 +541,6 @@ mod tests {
 
     #[test]
     fn test_parse_global_flags_unknown_flag_skipped() {
-        // An unknown flag (like -u) that doesn't look like a subcommand gets skipped
         let args: Vec<String> = vec!["-u".to_string(), "list-sessions".to_string()];
         let (session, subcmd, rest) = parse_global_flags(&args).unwrap();
         assert_eq!(session, None);
@@ -633,7 +550,6 @@ mod tests {
 
     #[test]
     fn test_parse_global_flags_subcommand_at_start() {
-        // Subcommand recognized immediately without any flags
         let args: Vec<String> = vec![
             "send-keys".to_string(),
             "-t".to_string(),
@@ -647,70 +563,6 @@ mod tests {
             rest,
             vec!["-t".to_string(), "%0".to_string(), "hello".to_string()]
         );
-    }
-
-    // --- extract_session_name tests ---
-
-    #[test]
-    fn test_extract_session_name_from_target() {
-        let args = vec!["-t".to_string(), "mysession".to_string()];
-        let name = extract_session_name(&args, &None).unwrap();
-        assert_eq!(name, "mysession");
-    }
-
-    #[test]
-    fn test_extract_session_name_target_with_window() {
-        let args = vec!["-t".to_string(), "mysession:0".to_string()];
-        let name = extract_session_name(&args, &None).unwrap();
-        assert_eq!(name, "mysession");
-    }
-
-    #[test]
-    fn test_extract_session_name_target_with_window_and_pane() {
-        let args = vec!["-t".to_string(), "mysession:0.1".to_string()];
-        let name = extract_session_name(&args, &None).unwrap();
-        assert_eq!(name, "mysession");
-    }
-
-    #[test]
-    fn test_extract_session_name_from_override() {
-        let args: Vec<String> = vec![];
-        let name = extract_session_name(&args, &Some("override".to_string())).unwrap();
-        assert_eq!(name, "override");
-    }
-
-    #[test]
-    fn test_extract_session_name_target_takes_precedence_over_override() {
-        let args = vec!["-t".to_string(), "fromtarget".to_string()];
-        let name = extract_session_name(&args, &Some("fromoverride".to_string())).unwrap();
-        assert_eq!(name, "fromtarget");
-    }
-
-    #[test]
-    fn test_extract_session_name_default_fallback() {
-        // No -t, no override, no TMUX env var → "default"
-        let args: Vec<String> = vec![];
-        // We can't fully control env, but without TMUX set we get "default"
-        // (TMUX may or may not be set in test env, so just check we get some string)
-        let name = extract_session_name(&args, &None).unwrap();
-        assert!(!name.is_empty());
-    }
-
-    #[test]
-    fn test_extract_session_name_target_colon_only() {
-        // Target is just ":" — session part before colon is empty string
-        let args = vec!["-t".to_string(), ":0".to_string()];
-        let name = extract_session_name(&args, &None).unwrap();
-        assert_eq!(name, "");
-    }
-
-    #[test]
-    fn test_extract_session_name_t_at_end_without_value() {
-        // -t is last arg with no following value
-        let args = vec!["-t".to_string()];
-        // Falls through to override/default since args.get(i+1) is None
-        let name = extract_session_name(&args, &Some("fallback".to_string())).unwrap();
-        assert_eq!(name, "fallback");
     }
 
     // --- is_subcommand comprehensive tests ---

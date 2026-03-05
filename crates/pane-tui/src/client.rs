@@ -57,13 +57,12 @@ pub enum RenameTarget {
 }
 
 impl Client {
-    pub fn new(config: Config, session_name: &str) -> Self {
+    pub fn new(config: Config) -> Self {
         Self {
             mode: Mode::Interact,
             render_state: RenderState {
                 workspaces: Vec::new(),
                 active_workspace: 0,
-                session_name: session_name.to_string(),
             },
             screens: HashMap::new(),
             system_stats: SystemStats::default(),
@@ -86,27 +85,17 @@ impl Client {
     }
 
     /// Connect to a daemon and run the TUI event loop.
-    pub async fn run(session_name: &str, config: Config) -> Result<()> {
-        let sock = daemon::socket_path(session_name);
+    pub async fn run(config: Config) -> Result<()> {
+        let sock = daemon::socket_path();
         if !sock.exists() {
-            anyhow::bail!(
-                "no running session '{}'. Start one with: pane daemon {}",
-                session_name,
-                session_name
-            );
+            anyhow::bail!("no running daemon. Start one with: pane");
         }
 
         let mut stream = UnixStream::connect(&sock).await?;
 
         // Attach with timeout — if the daemon is stuck, don't hang forever
         let handshake = async {
-            framing::send(
-                &mut stream,
-                &ClientRequest::Attach {
-                    session_name: session_name.to_string(),
-                },
-            )
-            .await?;
+            framing::send(&mut stream, &ClientRequest::Attach).await?;
 
             let resp: ServerResponse = framing::recv_required(&mut stream).await?;
             match resp {
@@ -124,7 +113,7 @@ impl Client {
             .map_err(|_| anyhow::anyhow!("daemon handshake timed out — is the daemon healthy?"))?
             ?;
 
-        let mut client = Client::new(config, session_name);
+        let mut client = Client::new(config);
 
         // Apply initial LayoutChanged
         if let ServerResponse::LayoutChanged { render_state } = resp {
@@ -404,7 +393,7 @@ impl Client {
                                     let _ = send_request(
                                         &mut *w,
                                         &ClientRequest::Command(
-                                            "new-session -d".to_string(),
+                                            "new-workspace".to_string(),
                                         ),
                                     )
                                     .await;
@@ -893,7 +882,7 @@ impl Client {
                 if !name.is_empty() {
                     let cmd = match self.rename_target {
                         RenameTarget::Window => format!("rename-window {}", name),
-                        RenameTarget::Workspace => format!("rename-session {}", name),
+                        RenameTarget::Workspace => format!("rename-workspace {}", name),
                     };
                     let mut w = writer.lock().await;
                     let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
@@ -1137,13 +1126,12 @@ impl Client {
 
     fn update_terminal_title(&self) {
         if let Some(ref fmt) = self.config.behavior.terminal_title_format {
-            let session = &self.render_state.session_name;
             let workspace = self
                 .active_workspace()
                 .map(|ws| ws.name.as_str())
                 .unwrap_or("");
             let title = fmt
-                .replace("{session}", session)
+                .replace("{session}", "pane")
                 .replace("{workspace}", workspace);
             // OSC 0 - set terminal title
             print!("\x1b]0;{}\x07", title);
@@ -1182,7 +1170,7 @@ async fn send_request(
 /// Translate an Action to a server command string.
 fn action_to_command(action: &Action) -> Option<String> {
     match action {
-        Action::NewWorkspace => Some("new-session -d".to_string()),
+        Action::NewWorkspace => Some("new-workspace".to_string()),
         Action::CloseWorkspace => Some("close-workspace".to_string()),
         Action::SwitchWorkspace(n) => Some(format!("select-workspace -t {}", (*n as usize) - 1)),
         // Action::NewTab is handled client-side (opens picker)
