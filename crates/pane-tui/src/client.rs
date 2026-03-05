@@ -404,7 +404,7 @@ impl Client {
                                     let _ = send_request(
                                         &mut *w,
                                         &ClientRequest::Command(
-                                            "new-session -d -s workspace".to_string(),
+                                            "new-session -d".to_string(),
                                         ),
                                     )
                                     .await;
@@ -1182,7 +1182,7 @@ async fn send_request(
 /// Translate an Action to a server command string.
 fn action_to_command(action: &Action) -> Option<String> {
     match action {
-        Action::NewWorkspace => Some("new-session -d -s workspace".to_string()),
+        Action::NewWorkspace => Some("new-session -d".to_string()),
         Action::CloseWorkspace => Some("close-workspace".to_string()),
         Action::SwitchWorkspace(n) => Some(format!("select-workspace -t {}", (*n as usize) - 1)),
         // Action::NewTab is handled client-side (opens picker)

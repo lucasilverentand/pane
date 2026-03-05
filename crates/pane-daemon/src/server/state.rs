@@ -238,7 +238,7 @@ impl ServerState {
 
             let active_group = ws_config.active_group;
             workspaces.push(Workspace {
-                name: ws_config.name.clone(),
+                name: auto_workspace_name(&workspaces),
                 layout,
                 groups,
                 active_group,
