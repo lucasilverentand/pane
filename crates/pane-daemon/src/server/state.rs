@@ -1195,13 +1195,18 @@ pub fn render_state_from_server(state: &ServerState) -> RenderState {
                     tabs: group
                         .tabs
                         .iter()
-                        .map(|pane| TabSnapshot {
-                            id: pane.id,
-                            kind: pane.kind.clone(),
-                            title: pane.title.clone(),
-                            exited: pane.exited,
-                            foreground_process: pane.foreground_process.clone(),
-                            cwd: pane.cwd.to_string_lossy().to_string(),
+                        .map(|pane| {
+                            let (rows, cols) = pane.screen().size();
+                            TabSnapshot {
+                                id: pane.id,
+                                kind: pane.kind.clone(),
+                                title: pane.title.clone(),
+                                exited: pane.exited,
+                                foreground_process: pane.foreground_process.clone(),
+                                cwd: pane.cwd.to_string_lossy().to_string(),
+                                cols,
+                                rows,
+                            }
                         })
                         .collect(),
                     active_tab: group.active_tab,

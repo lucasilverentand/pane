@@ -234,6 +234,19 @@ pub struct TabSnapshot {
     pub exited: bool,
     pub foreground_process: Option<String>,
     pub cwd: String,
+    /// Current PTY dimensions so the client can size its vt100 parser correctly.
+    #[serde(default = "default_pty_cols")]
+    pub cols: u16,
+    #[serde(default = "default_pty_rows")]
+    pub rows: u16,
+}
+
+fn default_pty_cols() -> u16 {
+    80
+}
+
+fn default_pty_rows() -> u16 {
+    24
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +415,8 @@ mod tests {
                         exited: false,
                         foreground_process: None,
                         cwd: "/tmp".to_string(),
+                        cols: 80,
+                        rows: 24,
                     }],
                     active_tab: 0,
                 }],

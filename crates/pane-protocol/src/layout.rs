@@ -1445,6 +1445,7 @@ mod tests {
     }
 
     // --- Unfold edge case tests ---
+    #[test]
     fn test_neighbor_deep_same_direction_chain() {
         // 4 panes in a horizontal chain: [id1 | [id2 | [id3 | id4]]]
         let id1 = TabId::new_v4();

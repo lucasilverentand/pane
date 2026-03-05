@@ -255,19 +255,19 @@ impl Tab {
     pub fn scroll_up(&mut self, n: usize) {
         let max_offset = self.vt.screen().size().0 as usize;
         self.scroll_offset = self.scroll_offset.saturating_add(n).min(max_offset);
-        self.vt.set_scrollback(self.scroll_offset);
+        self.vt.screen_mut().set_scrollback(self.scroll_offset);
         self.scroll_offset = self.vt.screen().scrollback();
     }
 
     pub fn scroll_down(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
-        self.vt.set_scrollback(self.scroll_offset);
+        self.vt.screen_mut().set_scrollback(self.scroll_offset);
         self.scroll_offset = self.vt.screen().scrollback();
     }
 
     pub fn scroll_to_bottom(&mut self) {
         self.scroll_offset = 0;
-        self.vt.set_scrollback(0);
+        self.vt.screen_mut().set_scrollback(0);
     }
 
     pub fn process_output(&mut self, bytes: &[u8]) {
@@ -288,7 +288,7 @@ impl Tab {
         if self.scroll_offset > 0 {
             self.scroll_to_bottom();
         }
-        self.vt.set_size(rows, cols);
+        self.vt.screen_mut().set_size(rows, cols);
         if let Some(master) = &self.pty_master {
             let _ = master.resize(PtySize {
                 rows,

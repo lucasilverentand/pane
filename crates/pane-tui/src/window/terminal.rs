@@ -3,6 +3,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
+use unicode_width::UnicodeWidthStr;
 
 /// Convert a vt100 screen to ratatui Lines for rendering.
 pub fn render_screen(screen: &vt100::Screen, area: Rect) -> Vec<Line<'static>> {
@@ -32,6 +33,7 @@ fn render_screen_inner(
         let mut spans: Vec<Span<'static>> = Vec::new();
         let mut current_text = String::new();
         let mut current_style = Style::default();
+        let mut rendered_cols = 0usize;
 
         for col in 0..cols {
             let cell = screen.cell(row as u16, col as u16);
@@ -68,19 +70,39 @@ fn render_screen_inner(
             }
             current_style = style;
 
-            match cell {
+            let mut text = match cell {
                 Some(cell) => {
                     let ch = cell.contents();
                     if ch.is_empty() {
-                        current_text.push(' ');
+                        " ".to_string()
                     } else {
-                        current_text.push_str(&ch);
+                        ch.to_string()
                     }
                 }
-                None => {
-                    current_text.push(' ');
-                }
+                None => " ".to_string(),
+            };
+
+            let mut width = UnicodeWidthStr::width(text.as_str());
+            if width == 0 {
+                text = " ".to_string();
+                width = 1;
             }
+
+            let remaining = cols.saturating_sub(rendered_cols);
+            if remaining == 0 {
+                break;
+            }
+            if width > remaining {
+                text = " ".repeat(remaining);
+                width = remaining;
+            }
+
+            current_text.push_str(&text);
+            rendered_cols += width;
+        }
+
+        if rendered_cols < cols {
+            current_text.push_str(&" ".repeat(cols - rendered_cols));
         }
 
         if !current_text.is_empty() {
@@ -102,6 +124,9 @@ fn cell_style(cell: &vt100::Cell) -> Style {
     if cell.bold() {
         style = style.add_modifier(Modifier::BOLD);
     }
+    if cell.dim() {
+        style = style.add_modifier(Modifier::DIM);
+    }
     if cell.italic() {
         style = style.add_modifier(Modifier::ITALIC);
     }
@@ -110,6 +135,12 @@ fn cell_style(cell: &vt100::Cell) -> Style {
     }
     if cell.inverse() {
         style = style.add_modifier(Modifier::REVERSED);
+    }
+    if cell.strikethrough() {
+        style = style.add_modifier(Modifier::CROSSED_OUT);
+    }
+    if cell.blink() {
+        style = style.add_modifier(Modifier::SLOW_BLINK);
     }
 
     style

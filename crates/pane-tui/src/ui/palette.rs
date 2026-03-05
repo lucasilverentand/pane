@@ -98,6 +98,7 @@ impl UnifiedPaletteState {
     }
 
     /// Transition from compact hints to full search, carrying over typed chars as query.
+    #[allow(dead_code)]
     pub fn transition_to_full_search(&mut self, keymap: &KeyMap, leader: &LeaderConfig) {
         self.all_entries = build_palette_entries(keymap, leader);
         self.view = PaletteView::FullSearch;

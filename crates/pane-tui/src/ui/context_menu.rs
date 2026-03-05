@@ -17,6 +17,7 @@ pub struct ContextMenuItem {
 
 /// Which UI region was right-clicked.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum ContextMenuContext {
     TabBar,
     WorkspaceBar,
@@ -27,6 +28,7 @@ pub enum ContextMenuContext {
 pub struct ContextMenuState {
     pub items: Vec<ContextMenuItem>,
     pub selected: usize,
+    #[allow(dead_code)]
     pub context: ContextMenuContext,
     /// Anchor position (top-left of the menu popup).
     pub anchor_x: u16,
@@ -52,6 +54,7 @@ impl ContextMenuState {
 }
 
 /// Create a context menu for right-clicking a tab in the tab bar.
+#[allow(dead_code)]
 pub fn tab_bar_menu(x: u16, y: u16) -> ContextMenuState {
     ContextMenuState {
         items: vec![

@@ -124,6 +124,9 @@ fn cell_style(cell: &vt100::Cell) -> Style {
     if cell.bold() {
         style = style.add_modifier(Modifier::BOLD);
     }
+    if cell.dim() {
+        style = style.add_modifier(Modifier::DIM);
+    }
     if cell.italic() {
         style = style.add_modifier(Modifier::ITALIC);
     }
@@ -132,6 +135,12 @@ fn cell_style(cell: &vt100::Cell) -> Style {
     }
     if cell.inverse() {
         style = style.add_modifier(Modifier::REVERSED);
+    }
+    if cell.strikethrough() {
+        style = style.add_modifier(Modifier::CROSSED_OUT);
+    }
+    if cell.blink() {
+        style = style.add_modifier(Modifier::SLOW_BLINK);
     }
 
     style

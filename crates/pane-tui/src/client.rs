@@ -228,10 +228,17 @@ impl Client {
             for group in &ws.groups {
                 for pane in &group.tabs {
                     live_pane_ids.insert(pane.id);
-                    // Ensure a vt100 parser exists for each pane
-                    self.screens
+                    let rows = pane.rows.max(1);
+                    let cols = pane.cols.max(1);
+                    let parser = self
+                        .screens
                         .entry(pane.id)
-                        .or_insert_with(|| vt100::Parser::new(24, 80, 1000));
+                        .or_insert_with(|| vt100::Parser::new(rows, cols, 1000));
+                    // Resize existing parsers when dimensions change
+                    let (cur_rows, cur_cols) = parser.screen().size();
+                    if cur_rows != rows || cur_cols != cols {
+                        parser.screen_mut().set_size(rows, cols);
+                    }
                 }
             }
         }

@@ -641,7 +641,8 @@ async fn handle_client(
                 let group = ws.groups.get_mut(&ws.active_group);
                 if let Some(group) = group {
                     let pane = group.active_tab_mut();
-                    let bytes = pane_protocol::keys::key_to_bytes(key_event);
+                    let app_cursor = pane.screen().application_cursor();
+                    let bytes = pane_protocol::keys::key_to_bytes(key_event, app_cursor);
                     if !bytes.is_empty() {
                         pane.write_input(&bytes);
                     }

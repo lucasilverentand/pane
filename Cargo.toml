@@ -5,3 +5,6 @@ members = [
     "crates/pane-tui",
 ]
 resolver = "2"
+
+[patch.crates-io]
+vt100 = { path = "crates/vt100-patched" }

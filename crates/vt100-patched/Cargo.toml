@@ -1,0 +1,15 @@
+[package]
+name = "vt100"
+version = "0.16.2"
+edition = "2021"
+description = "Library for parsing terminal data (patched with extended SGR attributes)"
+license = "MIT"
+
+[lib]
+name = "vt100"
+path = "src/lib.rs"
+
+[dependencies]
+itoa = "1.0.15"
+unicode-width = "0.2.0"
+vte = "0.15.0"
