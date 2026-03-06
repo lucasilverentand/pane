@@ -170,11 +170,10 @@ fn render_tab_bar_from_snapshot(
     // Right-align the + button
     if PLUS_RESERVE <= max_x.saturating_sub(area.x) {
         let plus_start = max_x - PLUS_RESERVE;
-        let gap = plus_start.saturating_sub(cursor_x + SEP_WIDTH);
+        let gap = plus_start.saturating_sub(cursor_x);
         if gap > 0 {
             spans.push(Span::raw(" ".repeat(gap as usize)));
         }
-        spans.push(Span::styled(SEP, Style::default().fg(theme.dim)));
         spans.push(Span::styled(PLUS_TEXT, Style::default().fg(theme.accent)));
     }
 
