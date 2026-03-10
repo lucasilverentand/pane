@@ -32,7 +32,10 @@ pub fn start_event_loop(event_tx: mpsc::UnboundedSender<AppEvent>) {
                                 x: m.column,
                                 y: m.row,
                             },
-                            MouseEventKind::Up(_) => AppEvent::MouseUp,
+                            MouseEventKind::Up(_) => AppEvent::MouseUp {
+                                x: m.column,
+                                y: m.row,
+                            },
                             MouseEventKind::ScrollUp => AppEvent::MouseScroll { up: true },
                             MouseEventKind::ScrollDown => AppEvent::MouseScroll { up: false },
                             _ => continue,

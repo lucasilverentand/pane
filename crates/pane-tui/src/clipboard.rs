@@ -121,4 +121,135 @@ mod tests {
         assert!(result.ends_with('='));
         assert!(!result.ends_with("=="));
     }
+
+    // --- Binary data: all byte values 0-255 ---
+
+    #[test]
+    fn test_base64_encode_all_bytes() {
+        let data: Vec<u8> = (0..=255).collect();
+        let result = base64_encode(&data);
+
+        // 256 bytes → ceil(256/3) = 86 groups, but 256 % 3 = 1,
+        // so 85 full groups + 1 partial = 86 groups → 86 * 4 = 344 chars
+        assert_eq!(result.len(), 344);
+
+        // Verify it's valid base64 characters
+        for c in result.chars() {
+            assert!(
+                c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=',
+                "invalid base64 char: {:?}",
+                c
+            );
+        }
+
+        // Verify padding: 256 % 3 = 1 → 2 pad chars ("==")
+        assert!(result.ends_with("=="));
+    }
+
+    #[test]
+    fn test_base64_encode_all_bytes_first_128() {
+        let data: Vec<u8> = (0..128).collect();
+        let result = base64_encode(&data);
+
+        // 128 bytes → 128 % 3 = 2, so single "=" pad
+        assert!(result.ends_with('='));
+        assert!(!result.ends_with("=="));
+
+        for c in result.chars() {
+            assert!(
+                c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=',
+                "invalid base64 char: {:?}",
+                c
+            );
+        }
+    }
+
+    #[test]
+    fn test_base64_encode_binary_roundtrip_length() {
+        // For N input bytes, output length = ceil(N/3) * 4
+        for n in 0..=50 {
+            let data: Vec<u8> = (0..n).map(|i| i as u8).collect();
+            let result = base64_encode(&data);
+            let expected_len = if n == 0 {
+                0
+            } else {
+                ((n as usize + 2) / 3) * 4
+            };
+            assert_eq!(
+                result.len(),
+                expected_len,
+                "wrong length for {} input bytes",
+                n
+            );
+        }
+    }
+
+    // --- Very long strings ---
+
+    #[test]
+    fn test_base64_encode_long_string() {
+        let input = "A".repeat(10_000);
+        let result = base64_encode(input.as_bytes());
+
+        // 10000 bytes → ceil(10000/3) * 4 = 3334 * 4 = 13336
+        // 10000 % 3 = 1 → "==" padding
+        assert_eq!(result.len(), 13336);
+        assert!(result.ends_with("=="));
+
+        // Verify the content is consistent (all 'A' bytes = 0x41)
+        // "AAA" → base64 "QUFB" (repeating pattern)
+        // First 4 chars should be "QUFB"
+        assert!(result.starts_with("QUFB"));
+    }
+
+    #[test]
+    fn test_base64_encode_long_mixed() {
+        let input: Vec<u8> = (0..5000).map(|i| (i % 256) as u8).collect();
+        let result = base64_encode(&input);
+
+        // 5000 % 3 = 2 → single "=" pad
+        assert!(result.ends_with('='));
+        assert!(!result.ends_with("=="));
+
+        let expected_len = ((5000 + 2) / 3) * 4;
+        assert_eq!(result.len(), expected_len);
+    }
+
+    #[test]
+    fn test_base64_encode_exactly_divisible_by_3() {
+        // 999 bytes / 3 = 333 groups → no padding
+        let data: Vec<u8> = (0..999).map(|i| (i % 256) as u8).collect();
+        let result = base64_encode(&data);
+        assert!(!result.ends_with('='), "no padding for length divisible by 3");
+        assert_eq!(result.len(), 333 * 4);
+    }
+
+    // --- Edge cases ---
+
+    #[test]
+    fn test_base64_encode_newlines() {
+        let result = base64_encode(b"\n\n\n");
+        assert_eq!(result, "CgoK");
+    }
+
+    #[test]
+    fn test_base64_encode_null_bytes() {
+        let result = base64_encode(b"\x00\x00\x00\x00\x00\x00");
+        assert_eq!(result, "AAAAAAAA");
+    }
+
+    #[test]
+    fn test_base64_encode_max_bytes() {
+        let result = base64_encode(b"\xff\xff\xff");
+        assert_eq!(result, "////");
+    }
+
+    #[test]
+    fn test_base64_encode_unicode_string() {
+        // UTF-8 encoding of emoji
+        let result = base64_encode("🦀".as_bytes());
+        // 🦀 = 4 bytes (F0 9F A6 80), 4 % 3 = 1 → "==" padding
+        assert_eq!(result.len(), 8);
+        assert!(result.ends_with("=="));
+    }
 }

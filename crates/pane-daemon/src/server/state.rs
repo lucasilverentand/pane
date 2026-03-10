@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
 use pane_protocol::config::Config;
@@ -31,18 +32,87 @@ pub struct ServerState {
     pub drag_state: Option<DragState>,
 }
 
-/// Auto-name a workspace with incremental numbers: "1", "2", "3", …
-fn auto_workspace_name(existing: &[Workspace]) -> String {
+/// Auto-name a workspace based on the git repo name, then folder name, with
+/// numeric suffix for duplicates.
+fn auto_workspace_name(existing: &[Workspace], cwd: &Path) -> String {
     let used: std::collections::HashSet<&str> =
         existing.iter().map(|ws| ws.name.as_str()).collect();
 
-    let mut n = 1u32;
+    let base = git_repo_name(cwd)
+        .or_else(|| cwd.file_name().map(|f| f.to_string_lossy().to_string()))
+        .unwrap_or_else(|| "1".to_string());
+
+    if !used.contains(base.as_str()) {
+        return base;
+    }
+
+    let mut n = 2u32;
     loop {
-        let candidate = format!("{}", n);
+        let candidate = format!("{} {}", base, n);
         if !used.contains(candidate.as_str()) {
             return candidate;
         }
         n += 1;
+    }
+}
+
+/// Get the repository name from a git working directory by reading the remote
+/// origin URL or falling back to the repo root folder name.
+fn git_repo_name(cwd: &Path) -> Option<String> {
+    // Find the git repo root by walking up
+    let mut dir = cwd.to_path_buf();
+    loop {
+        if dir.join(".git").exists() {
+            break;
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+
+    // Try to get repo name from origin remote URL
+    if let Ok(config) = std::fs::read_to_string(dir.join(".git/config")) {
+        if let Some(url) = parse_git_remote_url(&config) {
+            if let Some(name) = repo_name_from_url(&url) {
+                return Some(name);
+            }
+        }
+    }
+
+    // Fall back to the repo root directory name
+    dir.file_name().map(|f| f.to_string_lossy().to_string())
+}
+
+/// Parse the origin remote URL from a git config file.
+fn parse_git_remote_url(config: &str) -> Option<String> {
+    let mut in_origin = false;
+    for line in config.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[remote \"origin\"]" {
+            in_origin = true;
+        } else if trimmed.starts_with('[') {
+            in_origin = false;
+        } else if in_origin {
+            if let Some(url) = trimmed.strip_prefix("url = ") {
+                return Some(url.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extract the repository name from a git remote URL.
+fn repo_name_from_url(url: &str) -> Option<String> {
+    // Handle SSH (git@github.com:user/repo.git) and HTTPS (https://github.com/user/repo.git)
+    let path = url
+        .strip_suffix(".git")
+        .unwrap_or(url);
+    let name = path.rsplit('/').next()
+        .or_else(|| path.rsplit(':').next())?;
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
     }
 }
 
@@ -110,6 +180,7 @@ impl ServerState {
     ) -> anyhow::Result<Self> {
         let pane_id = TabId::new_v4();
         let group_id = WindowId::new_v4();
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
 
         let socket_path = crate::server::daemon::socket_path();
         let tmux_env = crate::window::pty::TmuxEnv {
@@ -125,14 +196,14 @@ impl ServerState {
             event_tx.clone(),
             None,
             Some(tmux_env),
-            None,
+            Some(&cwd),
         ) {
             Ok(p) => p,
             Err(e) => Tab::spawn_error(pane_id, TabKind::Shell, &e.to_string()),
         };
 
         let group = Window::new(group_id, pane);
-        let workspace = Workspace::new(auto_workspace_name(&[]), group_id, group);
+        let workspace = Workspace::new(auto_workspace_name(&[], &cwd), cwd, group_id, group);
 
         Ok(Self {
             workspaces: vec![workspace],
@@ -236,6 +307,7 @@ impl ServerState {
     ) -> anyhow::Result<TabId> {
         let pane_id = TabId::new_v4();
         let tmux_env = self.next_tmux_env();
+        let ws_cwd = self.active_workspace().cwd.clone();
         let pane = match Tab::spawn_with_env(
             pane_id,
             kind.clone(),
@@ -244,7 +316,7 @@ impl ServerState {
             self.event_tx.clone(),
             command,
             Some(tmux_env),
-            None,
+            Some(&ws_cwd),
         ) {
             Ok(p) => p,
             Err(e) => Tab::spawn_error(pane_id, kind, &e.to_string()),
@@ -265,12 +337,14 @@ impl ServerState {
         &mut self,
         direction: SplitDirection,
         kind: TabKind,
+        command: Option<String>,
         cols: u16,
         rows: u16,
     ) -> anyhow::Result<(WindowId, TabId)> {
         let new_group_id = WindowId::new_v4();
         let pane_id = TabId::new_v4();
         let tmux_env = self.next_tmux_env();
+        let ws_cwd = self.active_workspace().cwd.clone();
 
         let pane = match Tab::spawn_with_env(
             pane_id,
@@ -278,9 +352,9 @@ impl ServerState {
             cols,
             rows,
             self.event_tx.clone(),
-            None,
+            command,
             Some(tmux_env),
-            None,
+            Some(&ws_cwd),
         ) {
             Ok(p) => p,
             Err(e) => Tab::spawn_error(pane_id, kind, &e.to_string()),
@@ -298,10 +372,12 @@ impl ServerState {
         Ok((new_group_id, pane_id))
     }
 
-    pub fn new_workspace(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
+    pub fn new_workspace(&mut self, cols: u16, rows: u16, cwd: Option<PathBuf>) -> anyhow::Result<()> {
         let pane_id = TabId::new_v4();
         let group_id = WindowId::new_v4();
         let tmux_env = self.next_tmux_env();
+        // Use provided cwd, or inherit from the current workspace.
+        let cwd = cwd.unwrap_or_else(|| self.active_workspace().cwd.clone());
 
         let pane = match Tab::spawn_with_env(
             pane_id,
@@ -311,14 +387,14 @@ impl ServerState {
             self.event_tx.clone(),
             None,
             Some(tmux_env),
-            None,
+            Some(&cwd),
         ) {
             Ok(p) => p,
             Err(e) => Tab::spawn_error(pane_id, TabKind::Shell, &e.to_string()),
         };
 
         let group = Window::new(group_id, pane);
-        let workspace = Workspace::new(auto_workspace_name(&self.workspaces), group_id, group);
+        let workspace = Workspace::new(auto_workspace_name(&self.workspaces, &cwd), cwd, group_id, group);
         self.workspaces.push(workspace);
         self.active_workspace = self.workspaces.len() - 1;
 
@@ -362,6 +438,7 @@ impl ServerState {
         }
 
         let tmux_env = self.next_tmux_env();
+        let ws_cwd = self.active_workspace().cwd.clone();
         let new_pane = match Tab::spawn_with_env(
             id,
             kind.clone(),
@@ -370,7 +447,7 @@ impl ServerState {
             self.event_tx.clone(),
             command,
             Some(tmux_env),
-            None,
+            Some(&ws_cwd),
         ) {
             Ok(p) => p,
             Err(e) => Tab::spawn_error(id, kind, &e.to_string()),
@@ -402,7 +479,7 @@ impl ServerState {
                     } => {
                         if let Some(group) = ws.groups.get_mut(&group_id) {
                             let cols = rect.width.saturating_sub(4);
-                            let rows = rect.height.saturating_sub(3); // 2 borders + tab bar
+                            let rows = rect.height.saturating_sub(4); // 2 borders + tab bar + separator
                             if cols > 0 && rows > 0 {
                                 for pane in &mut group.tabs {
                                     pane.resize_pty(cols, rows);
@@ -422,6 +499,34 @@ impl ServerState {
         } else {
             3
         }
+    }
+
+    /// Compute the PTY cols/rows for the active window based on the resolved layout.
+    /// Falls back to full-body estimate when layout resolution fails.
+    pub fn active_window_pty_size(&self) -> (u16, u16) {
+        let (w, h) = self.last_size;
+        let overhead = 1 + self.workspace_bar_height();
+        let body_height = h.saturating_sub(overhead);
+        let body = ratatui::layout::Rect::new(0, 0, w, body_height);
+
+        let ws = self.active_workspace();
+        let resolved = ws.layout.resolve_with_folds(body, &ws.folded_windows);
+        for rp in &resolved {
+            if let ResolvedPane::Visible { id, rect, .. } = rp {
+                if *id == ws.active_group {
+                    let cols = rect.width.saturating_sub(4);
+                    let rows = rect.height.saturating_sub(4);
+                    if cols > 0 && rows > 0 {
+                        return (cols, rows);
+                    }
+                }
+            }
+        }
+
+        // Fallback: assume single window fills body
+        let cols = w.saturating_sub(4);
+        let rows = body_height.saturating_sub(4);
+        (cols.max(1), rows.max(1))
     }
 
     pub fn scroll_active_tab(&mut self, f: impl FnOnce(&mut Tab)) {
@@ -447,7 +552,7 @@ mod tests {
         let group_id = WindowId::new_v4();
         let pane = Tab::spawn_error(pane_id, TabKind::Shell, "test");
         let group = Window::new(group_id, pane);
-        let workspace = Workspace::new("workspace".to_string(), group_id, group);
+        let workspace = Workspace::new("workspace".to_string(), PathBuf::from("/tmp"), group_id, group);
         let state = ServerState {
             workspaces: vec![workspace],
             active_workspace: 0,
@@ -486,6 +591,7 @@ mod tests {
         };
         let workspace = Workspace {
             name: "workspace".to_string(),
+            cwd: PathBuf::from("/tmp"),
             layout,
             groups,
             active_group: gid1,
@@ -514,35 +620,66 @@ mod tests {
         let gid = WindowId::new_v4();
         let p = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t");
         let g = Window::new(gid, p);
-        Workspace::new(name.to_string(), gid, g)
+        Workspace::new(name.to_string(), PathBuf::from("/tmp"), gid, g)
     }
 
     #[test]
     fn test_auto_workspace_name_empty_returns_nonempty() {
-        let name = auto_workspace_name(&[]);
+        let name = auto_workspace_name(&[], Path::new("/tmp/myproject"));
         assert!(!name.is_empty());
     }
 
     #[test]
+    fn test_auto_workspace_name_uses_folder_name() {
+        let name = auto_workspace_name(&[], Path::new("/home/user/myproject"));
+        assert_eq!(name, "myproject");
+    }
+
+    #[test]
     fn test_auto_workspace_name_avoids_duplicates() {
-        let first = auto_workspace_name(&[]);
+        let cwd = Path::new("/tmp/myproject");
+        let first = auto_workspace_name(&[], cwd);
         let ws1 = make_named_ws(&first);
-        let second = auto_workspace_name(&[ws1]);
+        let second = auto_workspace_name(&[ws1], cwd);
         assert_ne!(first, second);
         assert!(!second.is_empty());
     }
 
     #[test]
-    fn test_auto_workspace_name_incremental_numbers() {
-        let first = auto_workspace_name(&[]);
-        assert_eq!(first, "1");
+    fn test_auto_workspace_name_duplicate_suffix() {
+        let cwd = Path::new("/tmp/myproject");
+        let first = auto_workspace_name(&[], cwd);
+        assert_eq!(first, "myproject");
         let ws1 = make_named_ws(&first);
-        let second = auto_workspace_name(&[ws1]);
-        assert_eq!(second, "2");
-        let ws1b = make_named_ws(&first);
-        let ws2b = make_named_ws(&second);
-        let third = auto_workspace_name(&[ws1b, ws2b]);
-        assert_eq!(third, "3");
+        let second = auto_workspace_name(&[ws1], cwd);
+        assert_eq!(second, "myproject 2");
+    }
+
+    #[test]
+    fn test_parse_git_remote_url_https() {
+        let config = "[remote \"origin\"]\n\turl = https://github.com/user/repo.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n";
+        assert_eq!(parse_git_remote_url(config), Some("https://github.com/user/repo.git".to_string()));
+    }
+
+    #[test]
+    fn test_parse_git_remote_url_ssh() {
+        let config = "[remote \"origin\"]\n\turl = git@github.com:user/repo.git\n";
+        assert_eq!(parse_git_remote_url(config), Some("git@github.com:user/repo.git".to_string()));
+    }
+
+    #[test]
+    fn test_repo_name_from_url_https() {
+        assert_eq!(repo_name_from_url("https://github.com/user/repo.git"), Some("repo".to_string()));
+    }
+
+    #[test]
+    fn test_repo_name_from_url_ssh() {
+        assert_eq!(repo_name_from_url("git@github.com:user/repo.git"), Some("repo".to_string()));
+    }
+
+    #[test]
+    fn test_repo_name_from_url_no_git_suffix() {
+        assert_eq!(repo_name_from_url("https://github.com/user/repo"), Some("repo".to_string()));
     }
 
     // ---- find_tab_mut / find_tab_location ----
@@ -585,7 +722,7 @@ mod tests {
         let pid2 = TabId::new_v4();
         let p2 = Tab::spawn_error(pid2, TabKind::Shell, "ws2-pane");
         let g2 = Window::new(gid2, p2);
-        let ws2 = Workspace::new("workspace 2".to_string(), gid2, g2);
+        let ws2 = Workspace::new("workspace 2".to_string(), PathBuf::from("/tmp"), gid2, g2);
         state.workspaces.push(ws2);
 
         let (ws_idx, found_gid) = state.find_tab_location(pid2).unwrap();
@@ -695,7 +832,7 @@ mod tests {
         let pid2 = TabId::new_v4();
         let p2 = Tab::spawn_error(pid2, TabKind::Shell, "ws2");
         let g2 = Window::new(gid2, p2);
-        let ws2 = Workspace::new("workspace 2".to_string(), gid2, g2);
+        let ws2 = Workspace::new("workspace 2".to_string(), PathBuf::from("/tmp"), gid2, g2);
         state.workspaces.push(ws2);
         assert_eq!(state.workspaces.len(), 2);
 
@@ -802,7 +939,7 @@ mod tests {
         assert_eq!(state.active_workspace().groups.len(), 1);
 
         let (new_gid, _new_pid) = state
-            .split_active_group(SplitDirection::Horizontal, TabKind::Shell, 40, 22)
+            .split_active_group(SplitDirection::Horizontal, TabKind::Shell, None, 40, 22)
             .unwrap();
         assert_eq!(state.active_workspace().groups.len(), 2);
         assert!(state.active_workspace().groups.contains_key(&new_gid));
@@ -822,11 +959,11 @@ mod tests {
         let first_name = state.workspaces[0].name.clone();
         assert!(!first_name.is_empty());
 
-        state.new_workspace(80, 24).unwrap();
+        state.new_workspace(80, 24, None).unwrap();
         let second_name = state.workspaces[1].name.clone();
         assert_ne!(first_name, second_name);
 
-        state.new_workspace(80, 24).unwrap();
+        state.new_workspace(80, 24, None).unwrap();
         let third_name = state.workspaces[2].name.clone();
         assert_ne!(first_name, third_name);
         assert_ne!(second_name, third_name);
@@ -838,8 +975,8 @@ mod tests {
         let mut state =
             ServerState::new(&event_tx, 80, 24, Config::default())
                 .unwrap();
-        state.new_workspace(80, 24).unwrap();
-        state.new_workspace(80, 24).unwrap();
+        state.new_workspace(80, 24, None).unwrap();
+        state.new_workspace(80, 24, None).unwrap();
         assert_eq!(state.workspaces.len(), 3);
         // active_workspace is 2 (last created)
         assert_eq!(state.active_workspace, 2);
@@ -863,7 +1000,7 @@ mod tests {
         let gid2 = WindowId::new_v4();
         let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "ws2");
         let g2 = Window::new(gid2, p2);
-        let ws2 = Workspace::new("workspace 2".to_string(), gid2, g2);
+        let ws2 = Workspace::new("workspace 2".to_string(), PathBuf::from("/tmp"), gid2, g2);
         state.workspaces.push(ws2);
         state.active_workspace = 0;
 
@@ -933,7 +1070,7 @@ mod tests {
         let mut state =
             ServerState::new(&event_tx, 80, 24, Config::default())
                 .unwrap();
-        state.new_workspace(80, 24).unwrap();
+        state.new_workspace(80, 24, None).unwrap();
         assert_eq!(state.workspaces.len(), 2);
         assert_eq!(state.active_workspace, 1);
     }
@@ -976,6 +1113,225 @@ mod tests {
 
         state.next_tmux_env(); // assigns %2
         assert_eq!(state.last_pane_number(), 2);
+    }
+
+    // ---- active_window_pty_size ----
+
+    #[test]
+    fn test_active_window_pty_size_single_window() {
+        let (state, _rx) = make_test_state();
+        let (cols, rows) = state.active_window_pty_size();
+        // With last_size (120, 40), overhead = 1 + workspace_bar_height(3) = 4
+        // body_height = 40 - 4 = 36, single leaf gets full body
+        // cols = 120 - 4 = 116, rows = 36 - 4 = 32
+        assert!(cols > 0, "cols should be positive");
+        assert!(rows > 0, "rows should be positive");
+        assert!(cols <= 120, "cols should not exceed total width");
+        assert!(rows <= 40, "rows should not exceed total height");
+    }
+
+    #[test]
+    fn test_active_window_pty_size_split_layout() {
+        let (state, gid1, _gid2, _rx) = make_split_state();
+        assert_eq!(state.active_workspace().active_group, gid1);
+        let (cols, rows) = state.active_window_pty_size();
+        // In a 50/50 horizontal split, each window gets roughly half the width
+        assert!(cols > 0);
+        assert!(rows > 0);
+        // cols should be less than full width minus borders
+        assert!(cols < 116, "split window should be narrower than single");
+    }
+
+    #[test]
+    fn test_active_window_pty_size_after_focus_change() {
+        let (mut state, _gid1, gid2, _rx) = make_split_state();
+        let (cols1, rows1) = state.active_window_pty_size();
+
+        state.active_workspace_mut().active_group = gid2;
+        let (cols2, rows2) = state.active_window_pty_size();
+
+        // Both halves of a 50/50 split should have similar sizes
+        assert_eq!(cols1, cols2);
+        assert_eq!(rows1, rows2);
+    }
+
+    // ---- resize_all_tabs with folded windows ----
+
+    #[test]
+    fn test_resize_all_tabs_with_folded_window() {
+        let (mut state, gid1, gid2, _rx) = make_split_state();
+        // Fold gid1
+        state.active_workspace_mut().folded_windows.insert(gid1);
+
+        // Resize should not panic
+        state.resize_all_tabs(120, 40);
+
+        // gid2 (unfolded) should have been resized - just verify it doesn't panic
+        // and the pane still has valid dimensions
+        let ws = state.active_workspace();
+        let group2 = ws.groups.get(&gid2).unwrap();
+        let (rows, cols) = group2.active_tab().screen().size();
+        assert!(cols > 0);
+        assert!(rows > 0);
+    }
+
+    #[test]
+    fn test_resize_all_tabs_all_folded_except_one() {
+        let (mut state, gid1, gid2, _rx) = make_split_state();
+        // Fold gid1, only gid2 visible
+        state.active_workspace_mut().folded_windows.insert(gid1);
+        state.resize_all_tabs(100, 30);
+
+        // The visible window (gid2) should get nearly full size
+        let ws = state.active_workspace();
+        let group2 = ws.groups.get(&gid2).unwrap();
+        let (rows, cols) = group2.active_tab().screen().size();
+        assert!(cols > 0);
+        assert!(rows > 0);
+    }
+
+    #[test]
+    fn test_resize_all_tabs_small_terminal() {
+        let (mut state, _rx) = make_test_state();
+        // Very small terminal: should not panic
+        state.resize_all_tabs(10, 10);
+    }
+
+    // ---- workspace_bar_height ----
+
+    #[test]
+    fn test_workspace_bar_height_single_workspace() {
+        let (state, _rx) = make_test_state();
+        // With 1 workspace, bar height = 3
+        assert_eq!(state.workspace_bar_height(), 3);
+    }
+
+    #[test]
+    fn test_workspace_bar_height_multiple_workspaces() {
+        let (mut state, _rx) = make_test_state();
+        // Add more workspaces
+        let gid2 = WindowId::new_v4();
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "ws2");
+        let g2 = Window::new(gid2, p2);
+        state.workspaces.push(Workspace::new("ws2".to_string(), PathBuf::from("/tmp"), gid2, g2));
+
+        let gid3 = WindowId::new_v4();
+        let p3 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "ws3");
+        let g3 = Window::new(gid3, p3);
+        state.workspaces.push(Workspace::new("ws3".to_string(), PathBuf::from("/tmp"), gid3, g3));
+
+        assert_eq!(state.workspace_bar_height(), 3);
+    }
+
+    #[test]
+    fn test_workspace_bar_height_empty_workspaces() {
+        let (mut state, _rx) = make_test_state();
+        state.workspaces.clear();
+        assert_eq!(state.workspace_bar_height(), 0);
+    }
+
+    // ---- focus_group unfolds ----
+
+    #[test]
+    fn test_focus_group_unfolds_folded_window() {
+        let (mut state, _gid1, gid2, _rx) = make_split_state();
+        state.active_workspace_mut().folded_windows.insert(gid2);
+        assert!(state.active_workspace().folded_windows.contains(&gid2));
+
+        state.focus_group(gid2, 1);
+        assert_eq!(state.active_workspace().active_group, gid2);
+        assert!(!state.active_workspace().folded_windows.contains(&gid2));
+    }
+
+    #[test]
+    fn test_focus_group_non_folded_keeps_others() {
+        let (mut state, gid1, gid2, _rx) = make_split_state();
+        state.active_workspace_mut().folded_windows.insert(gid1);
+
+        // Focus gid2 which is not folded
+        state.focus_group(gid2, 1);
+        assert_eq!(state.active_workspace().active_group, gid2);
+        // gid1 should still be folded
+        assert!(state.active_workspace().folded_windows.contains(&gid1));
+    }
+
+    // ---- scroll_active_tab ----
+
+    #[test]
+    fn test_scroll_active_tab() {
+        let (mut state, _rx) = make_test_state();
+        // Produce scrollback content
+        let gid = state.active_workspace().active_group;
+        {
+            let ws = state.active_workspace_mut();
+            let tab = ws.groups.get_mut(&gid).unwrap().active_tab_mut();
+            tab.vt = vt100::Parser::new(3, 80, 1000);
+            for i in 0..20 {
+                tab.vt.process(format!("line {}\r\n", i).as_bytes());
+            }
+        }
+
+        state.scroll_active_tab(|tab| tab.scroll_up(5));
+        let ws = state.active_workspace();
+        let tab = ws.groups.get(&gid).unwrap().active_tab();
+        assert!(tab.scroll_offset > 0);
+    }
+
+    // ---- restart_active_tab ----
+
+    #[test]
+    fn test_restart_active_tab_non_exited_is_noop() {
+        let (mut state, _rx) = make_test_state();
+        let gid = state.active_workspace().active_group;
+        // The error pane starts with exited = true
+        state.active_workspace_mut().groups.get_mut(&gid).unwrap().tabs[0].exited = false;
+        // Restart should be a no-op because pane is not exited
+        state.restart_active_tab(80, 24).unwrap();
+        // Still 1 tab
+        assert_eq!(state.active_workspace().groups[&gid].tab_count(), 1);
+    }
+
+    // ---- render_state_from_server ----
+
+    #[test]
+    fn test_render_state_from_server_basic() {
+        let (state, _rx) = make_test_state();
+        let rs = render_state_from_server(&state);
+        assert_eq!(rs.workspaces.len(), 1);
+        assert_eq!(rs.active_workspace, 0);
+        assert_eq!(rs.workspaces[0].name, "workspace");
+        assert!(!rs.workspaces[0].groups.is_empty());
+    }
+
+    #[test]
+    fn test_render_state_for_client_clamps_index() {
+        let (state, _rx) = make_test_state();
+        let rs = render_state_for_client(&state, 999);
+        assert_eq!(rs.active_workspace, 0); // clamped to valid range
+    }
+
+    #[test]
+    fn test_render_state_captures_folded_windows() {
+        let (mut state, gid1, _gid2, _rx) = make_split_state();
+        state.active_workspace_mut().folded_windows.insert(gid1);
+        let rs = render_state_from_server(&state);
+        assert!(rs.workspaces[0].folded_windows.contains(&gid1));
+    }
+
+    #[test]
+    fn test_render_state_captures_sync_panes() {
+        let (mut state, _rx) = make_test_state();
+        state.active_workspace_mut().sync_panes = true;
+        let rs = render_state_from_server(&state);
+        assert!(rs.workspaces[0].sync_panes);
+    }
+
+    #[test]
+    fn test_render_state_captures_zoomed_window() {
+        let (mut state, gid1, _gid2, _rx) = make_split_state();
+        state.active_workspace_mut().zoomed_window = Some(gid1);
+        let rs = render_state_from_server(&state);
+        assert_eq!(rs.workspaces[0].zoomed_window, Some(gid1));
     }
 }
 
@@ -1027,6 +1383,7 @@ pub fn render_state_from_server(state: &ServerState) -> RenderState {
                 .collect();
             WorkspaceSnapshot {
                 name: ws.name.clone(),
+                cwd: ws.cwd.to_string_lossy().to_string(),
                 layout: ws.layout.clone(),
                 groups,
                 active_group: ws.active_group,

@@ -14,6 +14,7 @@ public struct RenderState: Codable, Hashable, Sendable {
 /// Mirrors Rust `WorkspaceSnapshot`.
 public struct WorkspaceSnapshot: Codable, Hashable, Sendable {
     public let name: String
+    public let cwd: String
     public let layout: LayoutNode
     public let groups: [WindowSnapshot]
     public let activeGroup: WindowId
@@ -24,6 +25,7 @@ public struct WorkspaceSnapshot: Codable, Hashable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case name
+        case cwd
         case layout
         case groups
         case activeGroup = "active_group"
@@ -36,6 +38,7 @@ public struct WorkspaceSnapshot: Codable, Hashable, Sendable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd) ?? ""
         layout = try container.decode(LayoutNode.self, forKey: .layout)
         groups = try container.decode([WindowSnapshot].self, forKey: .groups)
         activeGroup = try container.decode(WindowId.self, forKey: .activeGroup)

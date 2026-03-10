@@ -277,10 +277,216 @@ mod tests {
     #[test]
     fn menu_clamped_to_screen() {
         let area = Rect::new(0, 0, 20, 10);
-        // Anchor at far right -- should clamp
+        // Anchor at far right — should clamp
         let menu = pane_body_menu(18, 8);
         // Just verify render doesn't panic
         let result = hit_test(&menu, area, 0, 0);
         assert_eq!(result, None);
+    }
+
+    // --- Menu with zero items ---
+
+    #[test]
+    fn empty_menu_selected_action_is_none() {
+        let menu = ContextMenuState {
+            items: vec![],
+            selected: 0,
+            context: ContextMenuContext::PaneBody,
+            anchor_x: 0,
+            anchor_y: 0,
+        };
+        assert_eq!(menu.selected_action(), None);
+    }
+
+    #[test]
+    fn empty_menu_move_up_stays_at_zero() {
+        let mut menu = ContextMenuState {
+            items: vec![],
+            selected: 0,
+            context: ContextMenuContext::PaneBody,
+            anchor_x: 0,
+            anchor_y: 0,
+        };
+        menu.move_up();
+        assert_eq!(menu.selected, 0);
+    }
+
+    #[test]
+    fn empty_menu_move_down_stays_at_zero() {
+        let mut menu = ContextMenuState {
+            items: vec![],
+            selected: 0,
+            context: ContextMenuContext::PaneBody,
+            anchor_x: 0,
+            anchor_y: 0,
+        };
+        menu.move_down();
+        assert_eq!(menu.selected, 0);
+    }
+
+    #[test]
+    fn empty_menu_hit_test_returns_none() {
+        let area = Rect::new(0, 0, 80, 40);
+        let menu = ContextMenuState {
+            items: vec![],
+            selected: 0,
+            context: ContextMenuContext::PaneBody,
+            anchor_x: 10,
+            anchor_y: 10,
+        };
+        // The menu_dimensions gives max_label=10 (default), item_count=0 → height=2
+        // With height=2, inner_h=0 → no items to click
+        for x in 0..80 {
+            for y in 0..40 {
+                assert_eq!(hit_test(&menu, area, x, y), None);
+            }
+        }
+    }
+
+    // --- Navigation wrapping (no wrapping in current impl) ---
+
+    #[test]
+    fn navigation_does_not_wrap_top() {
+        let mut menu = tab_bar_menu(0, 0);
+        assert_eq!(menu.selected, 0);
+        // Repeatedly press up — should stay at 0
+        for _ in 0..10 {
+            menu.move_up();
+        }
+        assert_eq!(menu.selected, 0);
+    }
+
+    #[test]
+    fn navigation_does_not_wrap_bottom() {
+        let mut menu = tab_bar_menu(0, 0);
+        // tab_bar_menu has 2 items (indices 0, 1)
+        for _ in 0..10 {
+            menu.move_down();
+        }
+        assert_eq!(menu.selected, 1); // clamped at last item
+    }
+
+    #[test]
+    fn navigation_selected_action_tracks() {
+        let mut menu = pane_body_menu(0, 0);
+        assert_eq!(menu.selected_action(), Some(&Action::SplitHorizontal));
+        menu.move_down();
+        assert_eq!(menu.selected_action(), Some(&Action::SplitVertical));
+        menu.move_down();
+        assert_eq!(menu.selected_action(), Some(&Action::CloseTab));
+        menu.move_down();
+        assert_eq!(menu.selected_action(), Some(&Action::CopyMode));
+        menu.move_down();
+        assert_eq!(menu.selected_action(), Some(&Action::PasteClipboard));
+    }
+
+    // --- Hit test at exact boundaries ---
+
+    #[test]
+    fn hit_test_at_inner_top_left() {
+        let area = Rect::new(0, 0, 80, 40);
+        let menu = pane_body_menu(10, 10);
+        let (menu_w, menu_h) = menu_dimensions(&menu, area);
+        let popup = dialog::popup_rect(
+            dialog::PopupSize::Fixed { width: menu_w, height: menu_h },
+            dialog::PopupAnchor::Position { x: 10, y: 10 },
+            area,
+        );
+        // Inner area starts at (popup.x+1, popup.y+1)
+        let ix = popup.x + 1;
+        let iy = popup.y + 1;
+        assert_eq!(hit_test(&menu, area, ix, iy), Some(0));
+    }
+
+    #[test]
+    fn hit_test_at_inner_bottom_right() {
+        let area = Rect::new(0, 0, 80, 40);
+        let menu = pane_body_menu(10, 10);
+        let (menu_w, menu_h) = menu_dimensions(&menu, area);
+        let popup = dialog::popup_rect(
+            dialog::PopupSize::Fixed { width: menu_w, height: menu_h },
+            dialog::PopupAnchor::Position { x: 10, y: 10 },
+            area,
+        );
+        // Inner area: x in [popup.x+1, popup.x+menu_w-1), y in [popup.y+1, popup.y+menu_h-1)
+        let ix_last = popup.x + popup.width - 2; // last inner x
+        let iy_last = popup.y + popup.height - 2; // last inner y
+        let expected_idx = (iy_last - (popup.y + 1)) as usize;
+        if expected_idx < menu.items.len() {
+            assert_eq!(hit_test(&menu, area, ix_last, iy_last), Some(expected_idx));
+        }
+    }
+
+    #[test]
+    fn hit_test_on_border_returns_none() {
+        let area = Rect::new(0, 0, 80, 40);
+        let menu = pane_body_menu(10, 10);
+        // The popup starts at (10, 10). The border is the outer edge.
+        // Top border row
+        assert_eq!(hit_test(&menu, area, 10, 10), None);
+        // Left border column
+        assert_eq!(hit_test(&menu, area, 10, 11), None);
+    }
+
+    #[test]
+    fn hit_test_just_outside_inner_returns_none() {
+        let area = Rect::new(0, 0, 80, 40);
+        let menu = pane_body_menu(10, 10);
+        let (menu_w, menu_h) = menu_dimensions(&menu, area);
+        let popup = dialog::popup_rect(
+            dialog::PopupSize::Fixed { width: menu_w, height: menu_h },
+            dialog::PopupAnchor::Position { x: 10, y: 10 },
+            area,
+        );
+        // One pixel past the inner bottom
+        let past_bottom = popup.y + popup.height - 1;
+        assert_eq!(hit_test(&menu, area, popup.x + 1, past_bottom), None);
+        // One pixel past the inner right
+        let past_right = popup.x + popup.width - 1;
+        assert_eq!(hit_test(&menu, area, past_right, popup.y + 1), None);
+    }
+
+    #[test]
+    fn hit_test_beyond_item_count_returns_none() {
+        let area = Rect::new(0, 0, 80, 40);
+        // workspace_bar_menu has 2 items
+        let menu = workspace_bar_menu(10, 10);
+        let (menu_w, menu_h) = menu_dimensions(&menu, area);
+        let popup = dialog::popup_rect(
+            dialog::PopupSize::Fixed { width: menu_w, height: menu_h },
+            dialog::PopupAnchor::Position { x: 10, y: 10 },
+            area,
+        );
+        // Try clicking row after the last item (if inner area has room)
+        let inner_y = popup.y + 1;
+        let beyond_items = inner_y + menu.items.len() as u16;
+        if beyond_items < popup.y + popup.height - 1 {
+            assert_eq!(
+                hit_test(&menu, area, popup.x + 1, beyond_items),
+                None,
+                "clicking beyond items should return None"
+            );
+        }
+    }
+
+    // --- Single-item menu ---
+
+    #[test]
+    fn single_item_menu() {
+        let mut menu = ContextMenuState {
+            items: vec![ContextMenuItem {
+                label: "Only Option".into(),
+                action: Action::CloseTab,
+            }],
+            selected: 0,
+            context: ContextMenuContext::PaneBody,
+            anchor_x: 5,
+            anchor_y: 5,
+        };
+        assert_eq!(menu.selected_action(), Some(&Action::CloseTab));
+        menu.move_down();
+        assert_eq!(menu.selected, 0); // can't go beyond single item
+        menu.move_up();
+        assert_eq!(menu.selected, 0);
     }
 }

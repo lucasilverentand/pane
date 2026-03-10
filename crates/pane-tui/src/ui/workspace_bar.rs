@@ -442,7 +442,7 @@ mod tests {
         // Area starts at x=10, y=5
         let ws = vec!["ab"];
         let area = Rect::new(10, 5, 80, 1);
-        // Padded area starts at x=11. " ab " = 4 chars -> [11, 15)
+        // Padded area starts at x=11. " ab " = 4 chars → [11, 15)
         assert_eq!(
             hit_test(&ws, 0, area, 11, 5),
             Some(WorkspaceBarClick::Tab(0))
@@ -454,7 +454,7 @@ mod tests {
         // Outside area y
         assert_eq!(hit_test(&ws, 0, area, 11, 4), None);
         assert_eq!(hit_test(&ws, 0, area, 11, 6), None);
-        // Before padded area x -- should be None
+        // Before padded area x — should be None
         assert_eq!(hit_test(&ws, 0, area, 10, 5), None);
     }
 
@@ -469,5 +469,178 @@ mod tests {
         );
         assert_eq!(hit_test(&ws, 0, area, 2, 0), None);
         assert_eq!(hit_test(&ws, 0, area, 2, 2), None);
+    }
+
+    // --- Many workspaces overflow (additional) ---
+
+    #[test]
+    fn test_many_workspaces_active_is_last() {
+        let ws: Vec<&str> = (0..10).map(|_| "workspace_long").collect();
+        let area = Rect::new(0, 0, 50, 1);
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&ws, 9, padded);
+        // The active (last) tab should be visible even when others overflow
+        let (start, end) = layout.tab_ranges[9];
+        assert!(start != 0 || end != 0, "active tab at end should be visible");
+    }
+
+    #[test]
+    fn test_overflow_skipped_tabs_not_clickable() {
+        let ws = vec![
+            "workspace_one",
+            "workspace_two",
+            "workspace_three",
+            "workspace_four",
+            "workspace_five",
+        ];
+        let area = Rect::new(0, 0, 40, 1);
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&ws, 0, padded);
+
+        // For any skipped tab, hit_test should not return it
+        for (i, &(start, end)) in layout.tab_ranges.iter().enumerate() {
+            if start == 0 && end == 0 {
+                // This tab is skipped; no x position should resolve to it
+                for x in 0..40 {
+                    assert_ne!(
+                        hit_test(&ws, 0, area, x, 0),
+                        Some(WorkspaceBarClick::Tab(i)),
+                        "skipped tab {} should not be clickable at x={}",
+                        i,
+                        x
+                    );
+                }
+            }
+        }
+    }
+
+    // --- Single-char workspace names ---
+
+    #[test]
+    fn test_single_char_names() {
+        let ws = vec!["1", "2", "3", "4", "5"];
+        let area = Rect::new(0, 0, 80, 1);
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&ws, 0, padded);
+        // All single-char names should fit easily in 80 cols
+        for (start, end) in &layout.tab_ranges {
+            assert!(
+                *start != 0 || *end != 0,
+                "all single-char tabs should be visible"
+            );
+        }
+    }
+
+    #[test]
+    fn test_single_char_names_hit_test() {
+        let ws = vec!["1", "2", "3"];
+        let area = Rect::new(0, 0, 80, 1);
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&ws, 0, padded);
+
+        // Each " X " = 3 chars, separators " · " = 3 chars
+        // First tab: [1, 4)
+        assert_eq!(layout.tab_ranges[0], (1, 4));
+        assert_eq!(
+            hit_test(&ws, 0, area, 1, 0),
+            Some(WorkspaceBarClick::Tab(0))
+        );
+        assert_eq!(
+            hit_test(&ws, 0, area, 3, 0),
+            Some(WorkspaceBarClick::Tab(0))
+        );
+        // Gap between tabs (separator at 4,5,6)
+        assert_ne!(
+            hit_test(&ws, 0, area, 5, 0),
+            Some(WorkspaceBarClick::Tab(0))
+        );
+        // Second tab: starts at 7 = 4 + 3 (sep)
+        assert_eq!(layout.tab_ranges[1], (7, 10));
+        assert_eq!(
+            hit_test(&ws, 0, area, 7, 0),
+            Some(WorkspaceBarClick::Tab(1))
+        );
+    }
+
+    #[test]
+    fn test_many_single_char_names_narrow_area() {
+        // 20 single-char workspaces in a narrow area
+        let names: Vec<&str> = vec![
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H",
+            "I", "J", "K",
+        ];
+        let area = Rect::new(0, 0, 30, 1);
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&names, 0, padded);
+
+        let visible: usize = layout
+            .tab_ranges
+            .iter()
+            .filter(|&&(s, e)| s != 0 || e != 0)
+            .count();
+        assert!(
+            visible < 20,
+            "not all 20 tabs should fit in 30 cols"
+        );
+        assert!(visible > 0, "at least some tabs should be visible");
+    }
+
+    // --- Truncation edge cases ---
+
+    #[test]
+    fn test_truncate_name_max_3() {
+        // max=3 means "..." = exactly 3 chars
+        let result = truncate_name("abcdef", 3);
+        assert_eq!(result, "...");
+    }
+
+    #[test]
+    fn test_truncate_name_unicode() {
+        // Note: truncate_name uses byte-level slicing, so this tests basic ASCII behavior
+        let result = truncate_name("abcdefghijklmnopqrstuvwxyz", 10);
+        assert_eq!(result, "abcdefg...");
+        assert_eq!(result.len(), 10);
+    }
+
+    #[test]
+    fn test_truncate_single_char_name() {
+        assert_eq!(truncate_name("x", 20), "x");
+        assert_eq!(truncate_name("x", 1), "x");
+    }
+
+    // --- Plus button in narrow area ---
+
+    #[test]
+    fn test_plus_button_very_narrow() {
+        let ws = vec!["workspace"];
+        // Area barely fits anything
+        let area = Rect::new(0, 0, 6, 1);
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&ws, 0, padded);
+        // Plus button takes 3 chars, area is only 4 after padding (6-2)
+        // Behavior depends on whether there's room
+        if let Some((start, end)) = layout.plus_range {
+            assert!(end <= padded.x + padded.width);
+            assert!(start < end);
+        }
+    }
+
+    // --- padded_tab_area edge cases ---
+
+    #[test]
+    fn test_padded_tab_area_zero_width() {
+        let area = Rect::new(0, 0, 0, 0);
+        let result = padded_tab_area(area);
+        assert_eq!(result, Rect::new(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_padded_tab_area_minimum_bordered() {
+        // 3x3 is the minimum bordered area (borders take 2, padding takes 2 more)
+        let area = Rect::new(0, 0, 3, 3);
+        let result = padded_tab_area(area);
+        // inner after border: width=1, then padding subtracts 2 → 0 (saturating)
+        // This just shouldn't panic
+        assert!(result.width == 0 || result.width <= 1);
     }
 }

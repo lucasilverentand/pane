@@ -8,7 +8,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 
-use pane_protocol::app::{LeaderState, Mode};
+use crate::event::AppEvent;
+use pane_protocol::app::{LeaderState, Mode, ResizeBorder, ResizeState};
 use crate::clipboard;
 use pane_protocol::config::{self, Action, Config};
 use crate::copy_mode::{CopyModeAction, CopyModeState};
@@ -44,16 +45,241 @@ pub struct Client {
     pub context_menu_state: Option<ContextMenuState>,
     pub pending_confirm_action: Option<Action>,
     pub confirm_message: Option<String>,
+    pub resize_state: Option<ResizeState>,
     pub workspace_bar_focused: bool,
     pub should_quit: bool,
+    pub needs_redraw: bool,
     pub rename_input: String,
     pub rename_target: RenameTarget,
+    pub new_workspace_input: Option<NewWorkspaceInputState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RenameTarget {
     Window,
     Workspace,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NewWorkspaceStage {
+    /// Stage 1: pick a directory
+    Directory,
+    /// Stage 2: optionally name the workspace
+    Name,
+}
+
+pub struct NewWorkspaceInputState {
+    pub stage: NewWorkspaceStage,
+    pub name: String,
+    pub browser: DirBrowser,
+}
+
+pub struct DirBrowser {
+    pub current_dir: std::path::PathBuf,
+    /// All directory entries in current_dir.
+    all_entries: Vec<DirEntry>,
+    /// Filtered indices into all_entries.
+    pub filtered: Vec<usize>,
+    /// Text typed by the user to filter entries.
+    pub input: String,
+    pub selected: usize,
+    pub scroll_offset: usize,
+}
+
+pub struct DirEntry {
+    pub name: String,
+}
+
+impl DirBrowser {
+    pub fn new(path: std::path::PathBuf) -> Self {
+        let mut browser = Self {
+            current_dir: path,
+            all_entries: Vec::new(),
+            filtered: Vec::new(),
+            input: String::new(),
+            selected: 0,
+            scroll_offset: 0,
+        };
+        browser.refresh();
+        browser
+    }
+
+    pub fn refresh(&mut self) {
+        self.all_entries.clear();
+        if let Ok(read_dir) = std::fs::read_dir(&self.current_dir) {
+            let mut dirs: Vec<DirEntry> = read_dir
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
+                })
+                .map(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    DirEntry { name }
+                })
+                .collect();
+            dirs.sort_by(|a, b| {
+                let a_hidden = a.name.starts_with('.');
+                let b_hidden = b.name.starts_with('.');
+                a_hidden.cmp(&b_hidden).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            });
+            self.all_entries = dirs;
+        }
+        self.input.clear();
+        self.update_filter();
+    }
+
+    pub fn update_filter(&mut self) {
+        if self.input.is_empty() {
+            self.filtered = (0..self.all_entries.len()).collect();
+        } else {
+            let query = self.input.to_lowercase();
+            self.filtered = self
+                .all_entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.name.to_lowercase().contains(&query))
+                .map(|(i, _)| i)
+                .collect();
+        }
+        if self.selected >= self.filtered.len() {
+            self.selected = self.filtered.len().saturating_sub(1);
+        }
+        self.scroll_offset = 0;
+    }
+
+    /// Get the visible (filtered) entries.
+    pub fn visible_entries(&self) -> Vec<&DirEntry> {
+        self.filtered.iter().map(|&i| &self.all_entries[i]).collect()
+    }
+
+    /// Enter the selected filtered entry.
+    pub fn enter_selected(&mut self) {
+        if let Some(&idx) = self.filtered.get(self.selected) {
+            let entry = &self.all_entries[idx];
+            let new_path = self.current_dir.join(&entry.name);
+            if new_path.is_dir() {
+                self.current_dir = new_path;
+                self.refresh();
+            }
+        }
+    }
+
+    /// Tab-complete: if there's exactly one match, enter it.
+    /// If there's a common prefix among filtered entries, fill it.
+    pub fn tab_complete(&mut self) {
+        if self.filtered.len() == 1 {
+            self.enter_selected();
+            return;
+        }
+        // Fill the common prefix of filtered entries
+        if self.filtered.is_empty() {
+            return;
+        }
+        let names: Vec<&str> = self
+            .filtered
+            .iter()
+            .map(|&i| self.all_entries[i].name.as_str())
+            .collect();
+        if let Some(prefix) = common_prefix(&names) {
+            if prefix.len() > self.input.len() {
+                self.input = prefix;
+                self.update_filter();
+            } else {
+                // Prefix already typed — enter the selected entry
+                self.enter_selected();
+            }
+        }
+    }
+
+    pub fn go_up(&mut self) {
+        if let Some(parent) = self.current_dir.parent() {
+            let old_name = self.current_dir.file_name()
+                .map(|n| n.to_string_lossy().to_string());
+            self.current_dir = parent.to_path_buf();
+            self.refresh();
+            // Try to select the directory we came from
+            if let Some(name) = old_name {
+                if let Some(pos) = self.filtered.iter().position(|&i| self.all_entries[i].name == name) {
+                    self.selected = pos;
+                    self.clamp_scroll(14);
+                }
+            }
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+            self.clamp_scroll(14);
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        if self.selected + 1 < self.filtered.len() {
+            self.selected += 1;
+            self.clamp_scroll(14);
+        }
+    }
+
+    pub fn clamp_scroll(&mut self, visible_height: usize) {
+        if visible_height == 0 {
+            return;
+        }
+        if self.selected >= self.scroll_offset + visible_height {
+            self.scroll_offset = self.selected + 1 - visible_height;
+        }
+        if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        }
+    }
+
+    pub fn display_path(&self) -> String {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let path = self.current_dir.to_string_lossy();
+        if !home.is_empty() && path.starts_with(&home) {
+            format!("~{}", &path[home.len()..])
+        } else {
+            path.to_string()
+        }
+    }
+
+    /// Display path including the currently selected entry (for preview).
+    pub fn display_path_with_selected(&self) -> String {
+        let base = self.display_path();
+        if let Some(&idx) = self.filtered.get(self.selected) {
+            let name = &self.all_entries[idx].name;
+            if base.ends_with('/') {
+                format!("{}{}", base, name)
+            } else {
+                format!("{}/{}", base, name)
+            }
+        } else {
+            base
+        }
+    }
+}
+
+/// Find the longest common prefix of a set of strings (case-sensitive).
+fn common_prefix(strings: &[&str]) -> Option<String> {
+    if strings.is_empty() {
+        return None;
+    }
+    let first = strings[0];
+    let mut len = first.len();
+    for s in &strings[1..] {
+        len = len.min(s.len());
+        for (i, (a, b)) in first.chars().zip(s.chars()).enumerate() {
+            if a != b {
+                len = len.min(i);
+                break;
+            }
+        }
+    }
+    if len == 0 {
+        None
+    } else {
+        Some(first[..len].to_string())
+    }
 }
 
 impl Client {
@@ -77,10 +303,13 @@ impl Client {
             context_menu_state: None,
             pending_confirm_action: None,
             confirm_message: None,
+            resize_state: None,
             workspace_bar_focused: false,
             should_quit: false,
+            needs_redraw: true,
             rename_input: String::new(),
             rename_target: RenameTarget::Window,
+            new_workspace_input: None,
         }
     }
 
@@ -185,7 +414,10 @@ impl Client {
         });
 
         loop {
-            tui.draw(|frame| ui::render_client(&client, frame))?;
+            if client.needs_redraw {
+                client.needs_redraw = false;
+                tui.draw(|frame| ui::render_client(&client, frame))?;
+            }
 
             if let Some(event) = event_rx.recv().await {
                 client.handle_event(event, &tui, &writer).await?;
@@ -204,13 +436,33 @@ impl Client {
 
         // Clean up
         server_reader.abort();
-        let mut w = writer.lock().await;
-        let _ = send_request(&mut *w, &ClientRequest::Detach).await;
+        // Try to send Detach, but don't hang if the server is already gone
+        let detach = async {
+            let mut w = writer.lock().await;
+            let _ = send_request(&mut *w, &ClientRequest::Detach).await;
+        };
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), detach).await;
+
+        // Restore terminal before printing
+        tui.exit();
+
+        // Print summary of what's still running in the daemon
+        print_detach_summary(&client.render_state);
 
         Ok(())
     }
 
     fn apply_layout(&mut self, render_state: RenderState) {
+        // Preserve our own active_workspace across broadcasts from other clients.
+        // On first layout (no workspaces yet), accept the server's value.
+        let preserved_ws = if self.render_state.workspaces.is_empty() {
+            render_state.active_workspace
+        } else {
+            self.render_state
+                .active_workspace
+                .min(render_state.workspaces.len().saturating_sub(1))
+        };
+
         // Reconcile screen map: add new panes, remove dead ones
         let mut live_pane_ids: std::collections::HashSet<TabId> = std::collections::HashSet::new();
         for ws in &render_state.workspaces {
@@ -234,6 +486,7 @@ impl Client {
         // Remove screens for panes that no longer exist
         self.screens.retain(|id, _| live_pane_ids.contains(id));
         self.render_state = render_state;
+        self.render_state.active_workspace = preserved_ws;
     }
 
     async fn handle_event(
@@ -243,11 +496,17 @@ impl Client {
         writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     ) -> Result<()> {
         match event {
+            ServerEvent::Terminal(AppEvent::Tick) => {
+                // Tick is only used as a keepalive for the event loop;
+                // no state changed so no redraw needed.
+            }
             ServerEvent::Terminal(app_event) => {
                 self.handle_terminal_event(app_event, tui, writer).await?;
+                self.needs_redraw = true;
             }
             ServerEvent::Server(response) => {
                 self.handle_server_response(response);
+                self.needs_redraw = true;
             }
             ServerEvent::Disconnected => {
                 self.should_quit = true;
@@ -378,6 +637,7 @@ impl Client {
                             self.workspace_bar_focused = true;
                             match click {
                                 crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
+                                    self.render_state.active_workspace = i;
                                     let mut w = writer.lock().await;
                                     let _ = send_request(
                                         &mut *w,
@@ -389,18 +649,27 @@ impl Client {
                                     .await;
                                 }
                                 crate::ui::workspace_bar::WorkspaceBarClick::NewWorkspace => {
-                                    let mut w = writer.lock().await;
-                                    let _ = send_request(
-                                        &mut *w,
-                                        &ClientRequest::Command(
-                                            "new-workspace".to_string(),
-                                        ),
-                                    )
-                                    .await;
+                                    let home = std::env::var("HOME")
+                                        .map(std::path::PathBuf::from)
+                                        .unwrap_or_else(|_| std::path::PathBuf::from("/"));
+                                    self.new_workspace_input = Some(NewWorkspaceInputState {
+                                        stage: NewWorkspaceStage::Directory,
+                                        name: String::new(),
+                                        browser: DirBrowser::new(home),
+                                    });
+                                    self.mode = Mode::NewWorkspaceInput;
                                 }
                             }
                             return Ok(());
                         }
+                    }
+
+                    // Check if click hit a tab bar + button (open picker client-side)
+                    if self.hit_test_tab_bar_plus(tui, x, y) {
+                        self.tab_picker_state =
+                            Some(TabPickerState::new(&self.config.tab_picker_entries));
+                        self.mode = Mode::TabPicker;
+                        return Ok(());
                     }
 
                     // Forward mouse to server (click on body clears workspace bar focus)
@@ -413,9 +682,9 @@ impl Client {
                 let mut w = writer.lock().await;
                 let _ = send_request(&mut *w, &ClientRequest::MouseDrag { x, y }).await;
             }
-            AppEvent::MouseUp => {
+            AppEvent::MouseUp { x, y } => {
                 let mut w = writer.lock().await;
-                let _ = send_request(&mut *w, &ClientRequest::MouseUp).await;
+                let _ = send_request(&mut *w, &ClientRequest::MouseUp { x, y }).await;
             }
             AppEvent::MouseScroll { up } => {
                 let mut w = writer.lock().await;
@@ -430,7 +699,32 @@ impl Client {
                     let show_workspace_bar = !self.render_state.workspaces.is_empty();
 
                     if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
-                        // Right-click on workspace bar
+                        // Right-click on workspace bar — select the clicked workspace first
+                        let names: Vec<&str> = self
+                            .render_state
+                            .workspaces
+                            .iter()
+                            .map(|ws| ws.name.as_str())
+                            .collect();
+                        let bar_area =
+                            Rect::new(0, 0, tui.size()?.width, crate::ui::workspace_bar::HEIGHT);
+                        if let Some(crate::ui::workspace_bar::WorkspaceBarClick::Tab(i)) =
+                            crate::ui::workspace_bar::hit_test(
+                                &names,
+                                self.render_state.active_workspace,
+                                bar_area,
+                                x,
+                                y,
+                            )
+                        {
+                            self.render_state.active_workspace = i;
+                            let mut w = writer.lock().await;
+                            let _ = send_request(
+                                &mut *w,
+                                &ClientRequest::Command(format!("select-workspace -t {}", i)),
+                            )
+                            .await;
+                        }
                         self.context_menu_state =
                             Some(crate::ui::context_menu::workspace_bar_menu(x, y));
                         self.mode = Mode::ContextMenu;
@@ -442,25 +736,7 @@ impl Client {
                     }
                 }
             }
-            AppEvent::Tick => {
-                if let Some(ref mut ls) = self.leader_state {
-                    if !ls.popup_visible {
-                        let elapsed = ls.entered_at.elapsed().as_millis() as u64;
-                        if elapsed >= self.config.leader.timeout_ms {
-                            if ls.path.is_empty() {
-                                // Root level timeout → open command palette
-                                self.leader_state = None;
-                                self.palette_state =
-                                    Some(UnifiedPaletteState::new_full_search(&self.config.keys, &self.config.leader));
-                                self.mode = Mode::Palette;
-                            } else {
-                                // Sub-group timeout → show which-key as before
-                                ls.popup_visible = true;
-                            }
-                        }
-                    }
-                }
-            }
+            AppEvent::Tick => {}
             AppEvent::PtyOutput { .. } | AppEvent::PtyExited { .. } | AppEvent::SystemStats(_) => {
                 // These come from the server, not terminal
             }
@@ -483,15 +759,16 @@ impl Client {
             Mode::Confirm => return self.handle_confirm_key(key, writer).await,
             Mode::Leader => return self.handle_leader_key(key, tui, writer).await,
             Mode::Rename => return self.handle_rename_key(key, writer).await,
+            Mode::NewWorkspaceInput => return self.handle_new_workspace_key(key, writer).await,
             Mode::ContextMenu => return self.handle_context_menu_key(key, tui, writer).await,
+            Mode::Resize => return self.handle_resize_key(key, writer).await,
             Mode::Normal => return self.handle_normal_key(key, tui, writer).await,
             Mode::Interact => return self.handle_interact_key(key, tui, writer).await,
         }
     }
 
-    /// Interact mode: forward ALL keys to PTY except Escape (-> Normal).
-    /// The leader key (space) is NOT intercepted here — use Escape to enter
-    /// Normal mode first, then press space for the leader popup.
+    /// Interact mode: forward all keys to PTY except global bindings.
+    /// Use Ctrl+Space to exit back to Normal mode.
     async fn handle_interact_key(
         &mut self,
         key: KeyEvent,
@@ -500,13 +777,7 @@ impl Client {
     ) -> Result<()> {
         let normalized = config::normalize_key(key);
 
-        // Escape -> Normal mode
-        if normalized.code == KeyCode::Esc {
-            self.mode = Mode::Normal;
-            return Ok(());
-        }
-
-        // Check global keymap (ctrl+q etc.)
+        // Check global keymap (ctrl+space, shift+pageup, etc.)
         if let Some(action) = self.config.keys.lookup(&normalized).cloned() {
             return self.execute_action(action, _tui, writer).await;
         }
@@ -576,8 +847,7 @@ impl Client {
         self.leader_state = Some(LeaderState {
             path: Vec::new(),
             current_node: root,
-            entered_at: std::time::Instant::now(),
-            popup_visible: false,
+            popup_visible: true,
         });
         self.mode = Mode::Leader;
     }
@@ -594,6 +864,7 @@ impl Client {
                 Action::FocusLeft => {
                     let idx = self.render_state.active_workspace;
                     if idx > 0 {
+                        self.render_state.active_workspace = idx - 1;
                         let mut w = writer.lock().await;
                         let _ = send_request(
                             &mut *w,
@@ -606,6 +877,7 @@ impl Client {
                 Action::FocusRight => {
                     let idx = self.render_state.active_workspace;
                     if idx + 1 < self.render_state.workspaces.len() {
+                        self.render_state.active_workspace = idx + 1;
                         let mut w = writer.lock().await;
                         let _ = send_request(
                             &mut *w,
@@ -716,6 +988,22 @@ impl Client {
                 self.mode = Mode::TabPicker;
                 return Ok(());
             }
+            Action::SplitHorizontal => {
+                self.tab_picker_state = Some(TabPickerState::with_mode(
+                    &self.config.tab_picker_entries,
+                    crate::ui::tab_picker::TabPickerMode::SplitHorizontal,
+                ));
+                self.mode = Mode::TabPicker;
+                return Ok(());
+            }
+            Action::SplitVertical => {
+                self.tab_picker_state = Some(TabPickerState::with_mode(
+                    &self.config.tab_picker_entries,
+                    crate::ui::tab_picker::TabPickerMode::SplitVertical,
+                ));
+                self.mode = Mode::TabPicker;
+                return Ok(());
+            }
             Action::RenameWindow => {
                 self.rename_input.clear();
                 self.rename_target = RenameTarget::Window;
@@ -726,6 +1014,23 @@ impl Client {
                 self.rename_input.clear();
                 self.rename_target = RenameTarget::Workspace;
                 self.mode = Mode::Rename;
+                return Ok(());
+            }
+            Action::NewWorkspace => {
+                let home = std::env::var("HOME")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| std::path::PathBuf::from("/"));
+                self.new_workspace_input = Some(NewWorkspaceInputState {
+                    stage: NewWorkspaceStage::Directory,
+                    name: String::new(),
+                    browser: DirBrowser::new(home),
+                });
+                self.mode = Mode::NewWorkspaceInput;
+                return Ok(());
+            }
+            Action::ResizeMode => {
+                self.resize_state = Some(ResizeState { selected: None });
+                self.mode = Mode::Resize;
                 return Ok(());
             }
             Action::PasteClipboard => {
@@ -790,6 +1095,14 @@ impl Client {
             _ => {}
         }
 
+        // Workspace switch — update locally before sending to server
+        if let Action::SwitchWorkspace(n) = &action {
+            let idx = (*n as usize).saturating_sub(1);
+            if idx < self.render_state.workspaces.len() {
+                self.render_state.active_workspace = idx;
+            }
+        }
+
         // Server-mutating actions — translate to commands
         if let Some(cmd) = action_to_command(&action) {
             let mut w = writer.lock().await;
@@ -817,7 +1130,20 @@ impl Client {
                 self.mode = Mode::Normal;
             }
             KeyCode::Enter => {
-                if let Some(cmd) = state.selected_command() {
+                let cmd = if let Some(cmd) = state.selected_command() {
+                    Some(cmd)
+                } else if !state.input.trim().is_empty() {
+                    // No match — run the typed input as a custom command
+                    let base = match state.mode {
+                        crate::ui::tab_picker::TabPickerMode::NewTab => "new-window",
+                        crate::ui::tab_picker::TabPickerMode::SplitHorizontal => "split-window -h",
+                        crate::ui::tab_picker::TabPickerMode::SplitVertical => "split-window -v",
+                    };
+                    Some(format!("{} -c {}", base, state.input.trim()))
+                } else {
+                    None
+                };
+                if let Some(cmd) = cmd {
                     let mut w = writer.lock().await;
                     let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
                 }
@@ -826,15 +1152,20 @@ impl Client {
             }
             KeyCode::Up => state.move_up(),
             KeyCode::Down => state.move_down(),
-            KeyCode::Backspace => {
-                state.input.pop();
-                state.update_filter();
+            KeyCode::Char(' ') if state.input.is_empty() => {
+                // Space on empty input → open command palette (leader key)
+                self.tab_picker_state = None;
+                self.palette_state = Some(UnifiedPaletteState::new_full_search(
+                    &self.config.keys,
+                    &self.config.leader,
+                ));
+                self.mode = Mode::Palette;
             }
-            KeyCode::Char(c) => {
-                state.input.push(c);
-                state.update_filter();
+            _ => {
+                if ui::dialog::handle_text_input(key.code, &mut state.input) {
+                    state.update_filter();
+                }
             }
-            _ => {}
         }
         Ok(())
     }
@@ -888,11 +1219,164 @@ impl Client {
                     let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
                 }
             }
-            KeyCode::Backspace => {
-                self.rename_input.pop();
+            _ => {
+                ui::dialog::handle_text_input(key.code, &mut self.rename_input);
             }
-            KeyCode::Char(c) => {
-                self.rename_input.push(c);
+        }
+        Ok(())
+    }
+
+    async fn handle_new_workspace_key(
+        &mut self,
+        key: KeyEvent,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        let state = match self.new_workspace_input.as_mut() {
+            Some(s) => s,
+            None => {
+                self.mode = Mode::Normal;
+                return Ok(());
+            }
+        };
+
+        match state.stage {
+            NewWorkspaceStage::Directory => match (key.code, key.modifiers) {
+                (KeyCode::Esc, _) => {
+                    if !state.browser.input.is_empty() {
+                        state.browser.input.clear();
+                        state.browser.update_filter();
+                    } else {
+                        self.new_workspace_input = None;
+                        self.mode = Mode::Normal;
+                    }
+                }
+                (KeyCode::Enter, _) => {
+                    // Enter the selected folder (if any) and confirm
+                    if !state.browser.filtered.is_empty() {
+                        state.browser.enter_selected();
+                    }
+                    // Auto-fill name from git repo or folder name
+                    state.name = auto_workspace_name_suggestion(&state.browser.current_dir);
+                    state.stage = NewWorkspaceStage::Name;
+                }
+                (KeyCode::Tab, _) => {
+                    state.browser.tab_complete();
+                }
+                (KeyCode::Up, _) => state.browser.move_up(),
+                (KeyCode::Down, _) => state.browser.move_down(),
+                (KeyCode::Right, _) => state.browser.enter_selected(),
+                (KeyCode::Left, _) => state.browser.go_up(),
+                (KeyCode::Backspace, _) => {
+                    if state.browser.input.is_empty() {
+                        state.browser.go_up();
+                    } else {
+                        state.browser.input.pop();
+                        state.browser.update_filter();
+                    }
+                }
+                (KeyCode::Char(c), _) => {
+                    state.browser.input.push(c);
+                    state.browser.update_filter();
+                }
+                _ => {}
+            },
+            NewWorkspaceStage::Name => match key.code {
+                KeyCode::Esc => {
+                    // Go back to directory stage
+                    state.stage = NewWorkspaceStage::Directory;
+                }
+                KeyCode::Enter => {
+                    // Create the workspace
+                    let name = state.name.clone();
+                    let dir = state.browser.current_dir.to_string_lossy().to_string();
+                    self.new_workspace_input = None;
+                    self.mode = Mode::Normal;
+
+                    // New workspace will be appended and become active
+                    self.render_state.active_workspace = self.render_state.workspaces.len();
+                    let cmd = format!("new-workspace -c \"{}\"", dir);
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                    if !name.is_empty() {
+                        let _ = send_request(
+                            &mut *w,
+                            &ClientRequest::Command(format!("rename-workspace {}", name)),
+                        )
+                        .await;
+                    }
+                }
+                _ => {
+                    ui::dialog::handle_text_input(key.code, &mut state.name);
+                }
+            },
+        }
+        Ok(())
+    }
+
+    async fn handle_resize_key(
+        &mut self,
+        key: KeyEvent,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        let state = match self.resize_state.as_mut() {
+            Some(s) => s,
+            None => {
+                self.mode = Mode::Normal;
+                return Ok(());
+            }
+        };
+
+        match key.code {
+            KeyCode::Esc => {
+                self.resize_state = None;
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Char('=') => {
+                let mut w = writer.lock().await;
+                let _ =
+                    send_request(&mut *w, &ClientRequest::Command("equalize-layout".to_string()))
+                        .await;
+            }
+            KeyCode::Char(c @ ('h' | 'j' | 'k' | 'l')) => {
+                if let Some(selected) = state.selected {
+                    // Border already selected → h/l or j/k move it.
+                    // -R = grow active pane, -L = shrink. For the Left border,
+                    // pressing 'h' (push border left) grows the pane, so invert.
+                    let cmd = match selected {
+                        ResizeBorder::Right => match c {
+                            'l' => "resize-pane -R",
+                            'h' => "resize-pane -L",
+                            _ => return Ok(()),
+                        },
+                        ResizeBorder::Left => match c {
+                            'h' => "resize-pane -R",
+                            'l' => "resize-pane -L",
+                            _ => return Ok(()),
+                        },
+                        ResizeBorder::Bottom => match c {
+                            'j' => "resize-pane -D",
+                            'k' => "resize-pane -U",
+                            _ => return Ok(()),
+                        },
+                        ResizeBorder::Top => match c {
+                            'k' => "resize-pane -D",
+                            'j' => "resize-pane -U",
+                            _ => return Ok(()),
+                        },
+                    };
+                    let mut w = writer.lock().await;
+                    let _ =
+                        send_request(&mut *w, &ClientRequest::Command(cmd.to_string())).await;
+                } else {
+                    // No border selected yet → select this one
+                    state.selected = Some(match c {
+                        'h' => ResizeBorder::Left,
+                        'l' => ResizeBorder::Right,
+                        'j' => ResizeBorder::Bottom,
+                        'k' => ResizeBorder::Top,
+                        _ => unreachable!(),
+                    });
+                }
             }
             _ => {}
         }
@@ -1040,15 +1524,11 @@ impl Client {
                 }
                 KeyCode::Up => cp.move_up(),
                 KeyCode::Down => cp.move_down(),
-                KeyCode::Backspace => {
-                    cp.input.pop();
-                    cp.update_filter();
+                _ => {
+                    if ui::dialog::handle_text_input(key.code, &mut cp.input) {
+                        cp.update_filter();
+                    }
                 }
-                KeyCode::Char(c) => {
-                    cp.input.push(c);
-                    cp.update_filter();
-                }
-                _ => {}
             }
         } else {
             self.mode = Mode::Normal;
@@ -1101,8 +1581,6 @@ impl Client {
                 let ls = self.leader_state.as_mut().unwrap();
                 ls.path.push(normalized);
                 ls.current_node = group;
-                ls.entered_at = std::time::Instant::now();
-                ls.popup_visible = false;
             }
             None => {
                 self.leader_state = None;
@@ -1122,6 +1600,59 @@ impl Client {
 
     pub fn pane_screen(&self, pane_id: TabId) -> Option<&vt100::Screen> {
         self.screens.get(&pane_id).map(|p| p.screen())
+    }
+
+    /// Check if a click hits the + button in any visible window's tab bar.
+    fn hit_test_tab_bar_plus(&self, tui: &Tui, x: u16, y: u16) -> bool {
+        let ws = match self.active_workspace() {
+            Some(ws) => ws,
+            None => return false,
+        };
+        let size = match tui.size() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let show_workspace_bar = !self.render_state.workspaces.is_empty();
+        let bar_h = if show_workspace_bar {
+            crate::ui::workspace_bar::HEIGHT
+        } else {
+            0
+        };
+        let body_height = size.height.saturating_sub(bar_h + 1); // 1 for status bar
+        let body = Rect::new(0, bar_h, size.width, body_height);
+
+        let resolved = ws
+            .layout
+            .resolve_with_folds(body, &ws.folded_windows);
+        for rp in &resolved {
+            if let pane_protocol::layout::ResolvedPane::Visible { id: group_id, rect } = rp {
+                if let Some(group) = ws.groups.iter().find(|g| g.id == *group_id) {
+                    // Compute tab bar area: same as tab_bar_area() in daemon
+                    let block = ratatui::widgets::Block::default()
+                        .borders(ratatui::widgets::Borders::ALL)
+                        .border_type(ratatui::widgets::BorderType::Rounded);
+                    let inner = block.inner(*rect);
+                    if inner.width <= 2 || inner.height == 0 {
+                        continue;
+                    }
+                    let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, 1);
+                    let tab_bar_y = padded.y;
+                    let max_x = padded.x + padded.width;
+                    let plus_reserve: u16 = 3;
+                    if plus_reserve > max_x.saturating_sub(padded.x) {
+                        continue;
+                    }
+                    let plus_start = max_x - plus_reserve;
+                    if y == tab_bar_y && x >= plus_start && x < max_x {
+                        // Check that the group actually has tabs (sanity check)
+                        if !group.tabs.is_empty() {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 
     fn update_terminal_title(&self) {
@@ -1170,15 +1701,13 @@ async fn send_request(
 /// Translate an Action to a server command string.
 fn action_to_command(action: &Action) -> Option<String> {
     match action {
-        Action::NewWorkspace => Some("new-workspace".to_string()),
         Action::CloseWorkspace => Some("close-workspace".to_string()),
         Action::SwitchWorkspace(n) => Some(format!("select-workspace -t {}", (*n as usize) - 1)),
         // Action::NewTab is handled client-side (opens picker)
         Action::NextTab => Some("next-window".to_string()),
         Action::PrevTab => Some("previous-window".to_string()),
         Action::CloseTab => Some("kill-pane".to_string()),
-        Action::SplitHorizontal => Some("split-window -h".to_string()),
-        Action::SplitVertical => Some("split-window -v".to_string()),
+        // SplitHorizontal/SplitVertical handled client-side (opens picker)
         Action::RestartPane => Some("restart-pane".to_string()),
         Action::FocusLeft => Some("select-pane -L".to_string()),
         Action::FocusDown => Some("select-pane -D".to_string()),
@@ -1217,8 +1746,85 @@ fn action_to_command(action: &Action) -> Option<String> {
         | Action::EnterNormal
         | Action::Detach
         | Action::SessionPicker
+        | Action::NewWorkspace // opens input dialog client-side
         | Action::NewTab // NewTab opens picker client-side
+        | Action::SplitHorizontal // opens picker client-side
+        | Action::SplitVertical // opens picker client-side
         | Action::NewPane
-        | Action::ClientPicker => None,
+        | Action::ClientPicker
+        | Action::ResizeMode => None,
     }
+}
+
+/// Suggest a workspace name from a directory: git repo name, then folder name.
+fn auto_workspace_name_suggestion(dir: &std::path::Path) -> String {
+    // Try git repo name
+    if let Some(name) = git_repo_name_for_dir(dir) {
+        return name;
+    }
+    // Fall back to folder name
+    dir.file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+fn print_detach_summary(state: &RenderState) {
+    let total_tabs: usize = state.workspaces.iter()
+        .flat_map(|ws| &ws.groups)
+        .map(|g| g.tabs.len())
+        .sum();
+
+    if total_tabs == 0 {
+        return;
+    }
+
+    eprintln!("\x1b[2m[detached — {} tab{} running across {} workspace{}]\x1b[0m",
+        total_tabs,
+        if total_tabs == 1 { "" } else { "s" },
+        state.workspaces.len(),
+        if state.workspaces.len() == 1 { "" } else { "s" },
+    );
+
+    for ws in &state.workspaces {
+        let window_count = ws.groups.len();
+        let tab_count: usize = ws.groups.iter().map(|g| g.tabs.len()).sum();
+        eprintln!("\x1b[2m  {} — {} window{}, {} tab{}\x1b[0m",
+            ws.name,
+            window_count,
+            if window_count == 1 { "" } else { "s" },
+            tab_count,
+            if tab_count == 1 { "" } else { "s" },
+        );
+    }
+}
+
+/// Get the repository name from a directory by finding the git root and
+/// reading the origin remote URL.
+fn git_repo_name_for_dir(dir: &std::path::Path) -> Option<String> {
+    let mut d = dir.to_path_buf();
+    loop {
+        if d.join(".git").exists() {
+            break;
+        }
+        if !d.pop() {
+            return None;
+        }
+    }
+    if let Ok(config) = std::fs::read_to_string(d.join(".git/config")) {
+        for line in config.lines() {
+            let trimmed = line.trim();
+            if let Some(url) = trimmed.strip_prefix("url = ") {
+                let url = url.trim();
+                let path = url.strip_suffix(".git").unwrap_or(url);
+                let name = path.rsplit('/').next()
+                    .or_else(|| path.rsplit(':').next())
+                    .filter(|n| !n.is_empty());
+                if let Some(n) = name {
+                    return Some(n.to_string());
+                }
+            }
+        }
+    }
+    // Fall back to repo root directory name
+    d.file_name().map(|f| f.to_string_lossy().to_string())
 }

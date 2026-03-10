@@ -21,6 +21,7 @@ pub enum Command {
     KillServer,
     NewWorkspace {
         window_name: Option<String>,
+        cwd: Option<String>,
     },
 
     // Window (Window) commands
@@ -48,6 +49,7 @@ pub enum Command {
         horizontal: bool,
         target: Option<TargetPane>,
         size: Option<SplitSize>,
+        command: Option<String>,
     },
     KillPane {
         target: Option<TargetPane>,
@@ -78,6 +80,9 @@ pub enum Command {
     CloseWorkspace,
     RenameWorkspace {
         new_name: String,
+    },
+    SetWorkspaceDir {
+        path: String,
     },
     SelectWorkspaceByIndex {
         index: usize,
@@ -184,13 +189,29 @@ pub fn execute(
             Ok(CommandResult::SessionEnded)
         }
 
-        Command::NewWorkspace { window_name } => {
-            // In context of an already-running server, this creates a new workspace
-            let (w, h) = state.last_size;
-            let bar_h = state.workspace_bar_height();
-            let cols = w.saturating_sub(4);
-            let rows = h.saturating_sub(2 + bar_h + 1);
-            state.new_workspace(cols, rows)?;
+        Command::NewWorkspace { window_name, cwd } => {
+            // Resolve cwd if provided
+            let ws_cwd = cwd.as_ref().map(|path| {
+                let expanded = if path.starts_with("~/") || path == "~" {
+                    if let Some(home) = std::env::var_os("HOME") {
+                        let home = std::path::PathBuf::from(home);
+                        if path == "~" { home } else { home.join(&path[2..]) }
+                    } else {
+                        std::path::PathBuf::from(path)
+                    }
+                } else {
+                    std::path::PathBuf::from(path)
+                };
+                let resolved = if expanded.is_absolute() {
+                    expanded
+                } else {
+                    state.active_workspace().cwd.join(&expanded)
+                };
+                resolved.canonicalize().unwrap_or(resolved)
+            });
+
+            let (cols, rows) = state.active_window_pty_size();
+            state.new_workspace(cols, rows, ws_cwd)?;
             if let Some(wname) = window_name {
                 let ws = state.active_workspace_mut();
                 if let Some(group) = ws.groups.get_mut(&ws.active_group) {
@@ -218,10 +239,7 @@ pub fn execute(
             command,
             ..
         } => {
-            let (w, h) = state.last_size;
-            let bar_h = state.workspace_bar_height();
-            let cols = w.saturating_sub(4);
-            let rows = h.saturating_sub(2 + bar_h + 1);
+            let (cols, rows) = state.active_window_pty_size();
             let pane_id =
                 state.add_tab_to_active_group(TabKind::Shell, command.clone(), cols, rows)?;
             if let Some(wname) = window_name {
@@ -314,7 +332,7 @@ pub fn execute(
         }
 
         Command::SplitWindow {
-            horizontal, target, ..
+            horizontal, target, command, ..
         } => {
             if let Some(target) = target {
                 let group_id = resolve_pane_to_group(target, state, id_map)?;
@@ -325,12 +343,9 @@ pub fn execute(
             } else {
                 SplitDirection::Vertical
             };
-            let (w, h) = state.last_size;
-            let bar_h = state.workspace_bar_height();
-            let cols = w.saturating_sub(4);
-            let rows = h.saturating_sub(2 + bar_h + 1);
+            let (cols, rows) = state.active_window_pty_size();
             let (new_group_id, new_pane_id) =
-                state.split_active_group(direction, TabKind::Shell, cols, rows)?;
+                state.split_active_group(direction, TabKind::Shell, command.clone(), cols, rows)?;
             let pane_n = id_map.register_pane(new_pane_id);
             let win_n = id_map.register_window(new_group_id);
             broadcast_layout(state, broadcast_tx);
@@ -464,12 +479,14 @@ pub fn execute(
                 state.active_workspace_mut().active_group = group_id;
             }
             let active = state.active_workspace().active_group;
-            let delta = match direction {
-                ResizeDirection::Left | ResizeDirection::Up => -0.05,
-                ResizeDirection::Right | ResizeDirection::Down => 0.05,
+            let (delta, axis) = match direction {
+                ResizeDirection::Left => (-0.05, Some(pane_protocol::layout::SplitDirection::Horizontal)),
+                ResizeDirection::Right => (0.05, Some(pane_protocol::layout::SplitDirection::Horizontal)),
+                ResizeDirection::Up => (-0.05, Some(pane_protocol::layout::SplitDirection::Vertical)),
+                ResizeDirection::Down => (0.05, Some(pane_protocol::layout::SplitDirection::Vertical)),
             };
             for _ in 0..*amount {
-                state.active_workspace_mut().layout.resize(active, delta);
+                state.active_workspace_mut().layout.resize_dir(active, delta, axis);
             }
             let (w, h) = state.last_size;
             state.resize_all_tabs(w, h);
@@ -490,6 +507,31 @@ pub fn execute(
 
         Command::RenameWorkspace { new_name } => {
             state.active_workspace_mut().name = new_name.clone();
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::Ok(String::new()))
+        }
+
+        Command::SetWorkspaceDir { path } => {
+            let expanded = if path.starts_with("~/") || path == "~" {
+                if let Some(home) = std::env::var_os("HOME") {
+                    let home = std::path::PathBuf::from(home);
+                    if path == "~" { home } else { home.join(&path[2..]) }
+                } else {
+                    std::path::PathBuf::from(path)
+                }
+            } else {
+                std::path::PathBuf::from(path)
+            };
+            let resolved = if expanded.is_absolute() {
+                expanded
+            } else {
+                state.active_workspace().cwd.join(&expanded)
+            };
+            let resolved = resolved.canonicalize().unwrap_or(resolved);
+            if !resolved.is_dir() {
+                bail!("not a directory: {}", resolved.display());
+            }
+            state.active_workspace_mut().cwd = resolved;
             broadcast_layout(state, broadcast_tx);
             Ok(CommandResult::Ok(String::new()))
         }
@@ -523,10 +565,7 @@ pub fn execute(
         }
 
         Command::RestartPane => {
-            let (w, h) = state.last_size;
-            let bar_h = state.workspace_bar_height();
-            let cols = w.saturating_sub(4);
-            let rows = h.saturating_sub(2 + bar_h + 1);
+            let (cols, rows) = state.active_window_pty_size();
             state.restart_active_tab(cols, rows)?;
             broadcast_layout(state, broadcast_tx);
             Ok(CommandResult::LayoutChanged)
@@ -675,6 +714,7 @@ pub fn execute(
             let tmux_env = state.next_tmux_env();
             let cols = fw_w.saturating_sub(2);
             let rows = fw_h.saturating_sub(2);
+            let ws_cwd = state.active_workspace().cwd.clone();
             let pane = match crate::window::Tab::spawn_with_env(
                 pane_id,
                 crate::window::TabKind::Shell,
@@ -683,7 +723,7 @@ pub fn execute(
                 state.event_tx.clone(),
                 None,
                 Some(tmux_env),
-                None,
+                Some(&ws_cwd),
             ) {
                 Ok(p) => p,
                 Err(e) => crate::window::Tab::spawn_error(
@@ -864,7 +904,7 @@ fn expand_format(
     );
     result = result.replace(
         "#{pane_height}",
-        &format!("{}", state.last_size.1.saturating_sub(3)),
+        &format!("{}", state.last_size.1.saturating_sub(4)),
     );
     // Handle pane_pid: not available directly, use 0 as placeholder
     result = result.replace("#{pane_pid}", "0");
@@ -927,7 +967,7 @@ mod tests {
         let group_id = WindowId::new_v4();
         let pane = Tab::spawn_error(pane_id, TabKind::Shell, "test");
         let group = Window::new(group_id, pane);
-        let workspace = Workspace::new("workspace".to_string(), group_id, group);
+        let workspace = Workspace::new("workspace".to_string(), std::path::PathBuf::from("/tmp"), group_id, group);
         let state = ServerState {
             workspaces: vec![workspace],
             active_workspace: 0,
@@ -973,6 +1013,7 @@ mod tests {
         };
         let workspace = Workspace {
             name: "workspace".to_string(),
+            cwd: std::path::PathBuf::from("/tmp"),
             layout,
             groups,
             active_group: gid1,
@@ -1193,7 +1234,7 @@ mod tests {
         let gid2 = WindowId::new_v4();
         let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "ws2");
         let g2 = Window::new(gid2, p2);
-        let ws2 = Workspace::new("workspace 2".to_string(), gid2, g2);
+        let ws2 = Workspace::new("workspace 2".to_string(), std::path::PathBuf::from("/tmp"), gid2, g2);
         state.workspaces.push(ws2);
 
         let cmd = Command::SelectWorkspaceByIndex { index: 1 };
@@ -1226,7 +1267,7 @@ mod tests {
         let g2 = Window::new(gid2, p2);
         state
             .workspaces
-            .push(Workspace::new("workspace 2".to_string(), gid2, g2));
+            .push(Workspace::new("workspace 2".to_string(), std::path::PathBuf::from("/tmp"), gid2, g2));
         state.active_workspace = 1;
 
         let cmd = Command::CloseWorkspace;
@@ -1663,6 +1704,7 @@ mod tests {
             horizontal: true,
             target: None,
             size: None,
+            command: None,
         };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
@@ -1684,6 +1726,7 @@ mod tests {
             horizontal: false,
             target: None,
             size: None,
+            command: None,
         };
         execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert_eq!(state.active_workspace().groups.len(), 2);
@@ -1767,6 +1810,7 @@ mod tests {
         assert_eq!(state.workspaces.len(), 1);
         let cmd = Command::NewWorkspace {
             window_name: None,
+            cwd: None,
         };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
@@ -1787,6 +1831,7 @@ mod tests {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let cmd = Command::NewWorkspace {
             window_name: Some("my-win".to_string()),
+            cwd: None,
         };
         execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         let ws = state.active_workspace();
@@ -1843,5 +1888,287 @@ mod tests {
             state.active_workspace().groups[&gid2].name,
             Some("renamed".to_string())
         );
+    }
+
+    // ---- NewWorkspace with cwd ----
+
+    #[tokio::test]
+    async fn test_execute_new_workspace_with_absolute_cwd() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let cmd = Command::NewWorkspace {
+            window_name: None,
+            cwd: Some("/tmp".to_string()),
+        };
+        let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert!(matches!(result, CommandResult::OkWithId { .. }));
+        assert_eq!(state.workspaces.len(), 2);
+        // The new workspace's cwd should be /tmp (or its canonical form)
+        let ws_cwd = &state.workspaces[1].cwd;
+        // /tmp may canonicalize to /private/tmp on macOS
+        assert!(ws_cwd.to_string_lossy().contains("tmp"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_new_workspace_inherits_cwd_when_none() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        // Set the existing workspace's cwd
+        state.active_workspace_mut().cwd = std::path::PathBuf::from("/tmp");
+        let cmd = Command::NewWorkspace {
+            window_name: None,
+            cwd: None,
+        };
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        // New workspace should inherit the parent workspace's cwd
+        let new_cwd = &state.workspaces[1].cwd;
+        // On macOS /tmp -> /private/tmp canonicalization may occur
+        assert!(
+            new_cwd.to_string_lossy().contains("tmp"),
+            "should inherit cwd from parent workspace"
+        );
+    }
+
+    // ---- RenameWorkspace ----
+
+    #[test]
+    fn test_execute_rename_workspace_to_empty() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let cmd = Command::RenameWorkspace {
+            new_name: "".to_string(),
+        };
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert_eq!(state.active_workspace().name, "");
+    }
+
+    #[test]
+    fn test_execute_rename_workspace_with_special_chars() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let cmd = Command::RenameWorkspace {
+            new_name: "my-project (dev) #1".to_string(),
+        };
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert_eq!(state.active_workspace().name, "my-project (dev) #1");
+    }
+
+    // ---- CloseWorkspace when only one exists ----
+
+    #[test]
+    fn test_execute_close_workspace_only_one_ends_session() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        assert_eq!(state.workspaces.len(), 1);
+        let cmd = Command::CloseWorkspace;
+        let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert!(
+            matches!(result, CommandResult::SessionEnded),
+            "closing the only workspace should end the session"
+        );
+        // Workspace is still there (caller handles shutdown)
+        assert_eq!(state.workspaces.len(), 1);
+    }
+
+    // ---- ToggleFold ----
+
+    #[test]
+    fn test_execute_toggle_fold_folds_active() {
+        let (mut state, mut id_map, broadcast_tx, gid1, gid2) = make_split_state();
+        assert_eq!(state.active_workspace().active_group, gid1);
+        assert!(state.active_workspace().folded_windows.is_empty());
+
+        let cmd = Command::ToggleFold;
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+
+        // gid1 should be folded, focus should move to gid2
+        assert!(state.active_workspace().folded_windows.contains(&gid1));
+        assert_eq!(state.active_workspace().active_group, gid2);
+    }
+
+    #[test]
+    fn test_execute_toggle_fold_unfolds() {
+        let (mut state, mut id_map, broadcast_tx, gid1, _gid2) = make_split_state();
+        // Fold gid1 first
+        state.active_workspace_mut().folded_windows.insert(gid1);
+        state.active_workspace_mut().active_group = gid1;
+
+        let cmd = Command::ToggleFold;
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+
+        // gid1 should now be unfolded
+        assert!(!state.active_workspace().folded_windows.contains(&gid1));
+    }
+
+    #[test]
+    fn test_execute_toggle_fold_single_window_noop() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let gid = state.active_workspace().active_group;
+
+        let cmd = Command::ToggleFold;
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+
+        // Cannot fold the only window — should not fold
+        assert!(!state.active_workspace().folded_windows.contains(&gid));
+    }
+
+    #[test]
+    fn test_execute_toggle_fold_cannot_fold_all() {
+        let (mut state, mut id_map, broadcast_tx, gid1, _gid2) = make_split_state();
+        // Fold gid1 first
+        state.active_workspace_mut().folded_windows.insert(gid1);
+        let gid2 = state.active_workspace().groups.keys()
+            .find(|id| **id != gid1).copied().unwrap();
+        state.active_workspace_mut().active_group = gid2;
+
+        // Try to fold gid2 — would leave no visible window
+        let cmd = Command::ToggleFold;
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+
+        // gid2 should NOT be folded (it would leave nothing visible)
+        assert!(!state.active_workspace().folded_windows.contains(&gid2));
+    }
+
+    // ---- ToggleZoom ----
+
+    #[test]
+    fn test_execute_toggle_zoom_sets_zoomed() {
+        let (mut state, mut id_map, broadcast_tx, gid1, _gid2) = make_split_state();
+        assert!(state.active_workspace().zoomed_window.is_none());
+
+        let cmd = Command::ToggleZoom;
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+
+        assert_eq!(state.active_workspace().zoomed_window, Some(gid1));
+    }
+
+    #[test]
+    fn test_execute_toggle_zoom_unzooms() {
+        let (mut state, mut id_map, broadcast_tx, gid1, _gid2) = make_split_state();
+        state.active_workspace_mut().zoomed_window = Some(gid1);
+
+        let cmd = Command::ToggleZoom;
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+
+        assert!(state.active_workspace().zoomed_window.is_none());
+    }
+
+    #[test]
+    fn test_execute_toggle_zoom_switch_window_changes_zoom() {
+        let (mut state, mut id_map, broadcast_tx, gid1, gid2) = make_split_state();
+        // Zoom gid1
+        state.active_workspace_mut().zoomed_window = Some(gid1);
+
+        // Switch focus to gid2 and toggle zoom
+        state.active_workspace_mut().active_group = gid2;
+        let cmd = Command::ToggleZoom;
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+
+        // Now gid2 should be zoomed (gid1's zoom was different from active)
+        assert_eq!(state.active_workspace().zoomed_window, Some(gid2));
+    }
+
+    // ---- RestartPane ----
+
+    #[test]
+    fn test_execute_restart_pane_non_exited_noop() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let gid = state.active_workspace().active_group;
+        // Mark pane as not exited
+        state.active_workspace_mut().groups.get_mut(&gid).unwrap().tabs[0].exited = false;
+
+        let cmd = Command::RestartPane;
+        let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert!(matches!(result, CommandResult::LayoutChanged));
+        // Still 1 tab
+        assert_eq!(state.active_workspace().groups[&gid].tab_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_execute_restart_pane_exited_restarts() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let gid = state.active_workspace().active_group;
+        let original_id = state.active_workspace().groups[&gid].active_tab().id;
+        // Pane is already exited (spawn_error sets exited=true)
+        assert!(state.active_workspace().groups[&gid].active_tab().exited);
+
+        let cmd = Command::RestartPane;
+        let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert!(matches!(result, CommandResult::LayoutChanged));
+        // Tab should still exist with same id (restarted in-place)
+        assert_eq!(state.active_workspace().groups[&gid].active_tab().id, original_id);
+    }
+
+    // ---- MaximizeFocused ----
+
+    #[test]
+    fn test_execute_maximize_focused_saves_and_restores() {
+        let (mut state, mut id_map, broadcast_tx, _gid1, _gid2) = make_split_state();
+        assert!(state.active_workspace().saved_ratios.is_none());
+
+        // Maximize
+        let cmd = Command::MaximizeFocused;
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert!(state.active_workspace().saved_ratios.is_some());
+
+        // Restore (toggle)
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert!(state.active_workspace().saved_ratios.is_none());
+    }
+
+    // ---- DetachClient ----
+
+    #[test]
+    fn test_execute_detach_client() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let cmd = Command::DetachClient;
+        let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert!(matches!(result, CommandResult::DetachRequested));
+    }
+
+    // ---- SendKeys ----
+
+    #[test]
+    fn test_execute_send_keys() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let cmd = Command::SendKeys {
+            target: None,
+            keys: vec!["ls".to_string(), "Enter".to_string()],
+        };
+        let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert!(matches!(result, CommandResult::Ok(_)));
+    }
+
+    // ---- EqualizeLayout clears folds ----
+
+    #[test]
+    fn test_execute_equalize_layout_clears_folds() {
+        let (mut state, mut id_map, broadcast_tx, gid1, _gid2) = make_split_state();
+        state.active_workspace_mut().folded_windows.insert(gid1);
+        assert!(!state.active_workspace().folded_windows.is_empty());
+
+        let cmd = Command::EqualizeLayout;
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+
+        assert!(state.active_workspace().folded_windows.is_empty());
+    }
+
+    // ---- SetWorkspaceDir ----
+
+    #[test]
+    fn test_execute_set_workspace_dir() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let cmd = Command::SetWorkspaceDir {
+            path: "/tmp".to_string(),
+        };
+        let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert!(matches!(result, CommandResult::Ok(_)));
+        let cwd = &state.active_workspace().cwd;
+        assert!(cwd.to_string_lossy().contains("tmp"));
+    }
+
+    #[test]
+    fn test_execute_set_workspace_dir_invalid() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let cmd = Command::SetWorkspaceDir {
+            path: "/nonexistent/path/that/does/not/exist".to_string(),
+        };
+        let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx);
+        assert!(result.is_err());
     }
 }

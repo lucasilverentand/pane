@@ -215,17 +215,17 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                     if let pane_protocol::config::LeaderNode::Group { ref children, .. } =
                         ls.current_node
                     {
-                        // Build display path: "\u{2389}" for root, "\u{2389} w" for leader->w, etc.
-                        let mut path_parts = vec!["\u{2389}".to_string()];
+                        // Build display path: "⎵" for root, "⎵ w" for leader→w, etc.
+                        let mut path_parts = vec!["⎵".to_string()];
                         for k in &ls.path {
                             path_parts.push(palette::key_event_to_string(k));
                         }
                         // If in a subgroup, show the group label
                         let path = if let pane_protocol::config::LeaderNode::Group { ref label, .. } = ls.current_node {
                             if ls.path.is_empty() {
-                                "\u{2389}".to_string()
+                                "⎵".to_string()
                             } else {
-                                format!("{} \u{2192} {}", path_parts.join(" "), label)
+                                format!("{} → {}", path_parts.join(" "), label)
                             }
                         } else {
                             path_parts.join(" ")
@@ -248,6 +248,35 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
         Mode::ContextMenu => {
             if let Some(ref cm_state) = client.context_menu_state {
                 context_menu::render(cm_state, theme, frame, frame.area());
+            }
+        }
+        Mode::Rename => {
+            render_rename_dialog(client, theme, frame, frame.area());
+        }
+        Mode::NewWorkspaceInput => {
+            render_new_workspace_dialog(client, theme, frame, frame.area());
+        }
+        Mode::Resize => {
+            if let Some(ref rs) = client.resize_state {
+                if let Some(ws) = client.active_workspace() {
+                    // Find the active window's rect
+                    let resolved = ws.layout.resolve_with_folds(body, &ws.folded_windows);
+                    for rp in &resolved {
+                        if let pane_protocol::layout::ResolvedPane::Visible { id, rect } = rp {
+                            if *id == ws.active_group {
+                                render_resize_borders(
+                                    &ws.layout,
+                                    ws.active_group,
+                                    rs,
+                                    theme,
+                                    frame,
+                                    *rect,
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
         _ => {}
@@ -325,6 +354,293 @@ fn render_confirm_dialog(
     frame.render_widget(paragraph, inner);
 }
 
+fn render_rename_dialog(
+    client: &Client,
+    theme: &pane_protocol::config::Theme,
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+) {
+    use ratatui::{
+        style::{Color, Style},
+        text::{Line, Span},
+        widgets::Paragraph,
+    };
+
+    let target = match client.rename_target {
+        crate::client::RenameTarget::Window => "window",
+        crate::client::RenameTarget::Workspace => "workspace",
+    };
+
+    let title = format!("rename {}", target);
+    // Width: title + border padding + some input room, at least 30 for typing
+    let title_w = title.len() as u16 + 4; // " title " + borders
+    let popup_w = title_w.max(30);
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::Fixed { width: popup_w, height: 3 },
+        dialog::PopupAnchor::Center,
+        area,
+    );
+    let inner = dialog::render_popup(frame, popup_area, &title, theme);
+
+    if inner.height >= 1 {
+        let input_line = Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                format!("{}_", client.rename_input),
+                Style::default().fg(Color::White),
+            ),
+        ]);
+        frame.render_widget(
+            Paragraph::new(input_line),
+            ratatui::layout::Rect::new(inner.x, inner.y, inner.width, 1),
+        );
+    }
+}
+
+fn render_new_workspace_dialog(
+    client: &crate::client::Client,
+    theme: &pane_protocol::config::Theme,
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+) {
+    let state = match &client.new_workspace_input {
+        Some(s) => s,
+        None => return,
+    };
+
+    match state.stage {
+        crate::client::NewWorkspaceStage::Directory => {
+            render_new_workspace_dir_stage(state, theme, frame, area);
+        }
+        crate::client::NewWorkspaceStage::Name => {
+            render_new_workspace_name_stage(state, theme, frame, area);
+        }
+    }
+}
+
+/// Stage 1: directory picker with type-to-filter.
+fn render_new_workspace_dir_stage(
+    state: &crate::client::NewWorkspaceInputState,
+    theme: &pane_protocol::config::Theme,
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+) {
+    use ratatui::{
+        style::{Color, Modifier, Style},
+        text::{Line, Span},
+        widgets::Paragraph,
+    };
+
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::FixedClamped { width: 50, height: 22, pad: 4 },
+        dialog::PopupAnchor::Center,
+        area,
+    );
+    let inner = dialog::render_popup(frame, popup_area, "new workspace", theme);
+
+    if inner.height < 5 || inner.width < 10 {
+        return;
+    }
+
+    let mut row = inner.y;
+
+    // ── Path display ──
+    // Show the full path including selected folder
+    let has_filter = !state.browser.input.is_empty();
+    let path_display = if has_filter {
+        // When filtering, show: path/filter_
+        let base = state.browser.display_path();
+        let base_slash = if base.ends_with('/') { base } else { format!("{}/", base) };
+        format!("{}{}", base_slash, state.browser.input)
+    } else {
+        // When browsing, show path including highlighted folder
+        state.browser.display_path_with_selected()
+    };
+
+    let max_w = inner.width.saturating_sub(4) as usize;
+    let display = if path_display.len() > max_w {
+        format!("…{}", &path_display[path_display.len() - max_w + 1..])
+    } else {
+        path_display
+    };
+
+    let input_line = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(display, Style::default().fg(Color::White)),
+        if has_filter {
+            Span::styled("_", Style::default().fg(Color::DarkGray))
+        } else {
+            Span::raw("")
+        },
+    ]);
+    frame.render_widget(
+        Paragraph::new(input_line),
+        ratatui::layout::Rect::new(inner.x, row, inner.width, 1),
+    );
+    row += 1;
+
+    // ── Separator ──
+    dialog::render_separator(
+        frame,
+        ratatui::layout::Rect::new(inner.x, row, inner.width, 1),
+    );
+    row += 1;
+
+    // ── Directory listing (filtered) ──
+    let hint_height = 2u16;
+    let list_height = (inner.y + inner.height)
+        .saturating_sub(row + hint_height) as usize;
+    if list_height == 0 {
+        return;
+    }
+
+    let entries = state.browser.visible_entries();
+    let selected = state.browser.selected;
+
+    let scroll = {
+        let mut s = state.browser.scroll_offset;
+        if selected >= s + list_height {
+            s = selected + 1 - list_height;
+        }
+        if selected < s {
+            s = selected;
+        }
+        s
+    };
+
+    let dir_style = Style::default().fg(theme.fg);
+    let selected_style = Style::default()
+        .fg(theme.accent)
+        .add_modifier(Modifier::BOLD);
+
+    if entries.is_empty() {
+        let msg = if state.browser.input.is_empty() {
+            "  (empty)"
+        } else {
+            "  (no matches)"
+        };
+        let empty_line = Line::from(vec![Span::styled(
+            msg,
+            Style::default().fg(theme.dim),
+        )]);
+        frame.render_widget(
+            Paragraph::new(empty_line),
+            ratatui::layout::Rect::new(inner.x, row, inner.width, 1),
+        );
+    } else {
+        for (i, entry) in entries.iter().enumerate().skip(scroll).take(list_height) {
+            let is_selected = i == selected;
+            let prefix = if is_selected { " > " } else { "   " };
+            let display = format!("{}{}/", prefix, entry.name);
+            let max_w = inner.width as usize;
+            let display = if display.len() > max_w {
+                format!("{}…", &display[..max_w - 1])
+            } else {
+                display
+            };
+            let style = if is_selected {
+                selected_style
+            } else {
+                dir_style
+            };
+            let line = Line::from(vec![Span::styled(display, style)]);
+            let line_y = row + (i - scroll) as u16;
+            frame.render_widget(
+                Paragraph::new(line),
+                ratatui::layout::Rect::new(inner.x, line_y, inner.width, 1),
+            );
+        }
+    }
+
+    // ── Hint bar at bottom ──
+    let hint_y = inner.y + inner.height - hint_height;
+    dialog::render_separator(
+        frame,
+        ratatui::layout::Rect::new(inner.x, hint_y, inner.width, 1),
+    );
+    let hint_line = Line::from(vec![
+        Span::raw("  "),
+        Span::styled("enter", Style::default().fg(theme.accent)),
+        Span::styled(" select  ", Style::default().fg(theme.dim)),
+        Span::styled("tab", Style::default().fg(theme.accent)),
+        Span::styled(" complete  ", Style::default().fg(theme.dim)),
+        Span::styled("\u{2192}", Style::default().fg(theme.accent)),
+        Span::styled(" open  ", Style::default().fg(theme.dim)),
+        Span::styled("esc", Style::default().fg(theme.accent)),
+        Span::styled(" cancel", Style::default().fg(theme.dim)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(hint_line),
+        ratatui::layout::Rect::new(inner.x, hint_y + 1, inner.width, 1),
+    );
+}
+
+/// Stage 2: name input.
+fn render_new_workspace_name_stage(
+    state: &crate::client::NewWorkspaceInputState,
+    theme: &pane_protocol::config::Theme,
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+) {
+    use ratatui::{
+        style::Style,
+        text::{Line, Span},
+        widgets::Paragraph,
+    };
+
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::Fixed { width: 44, height: 9 },
+        dialog::PopupAnchor::Center,
+        area,
+    );
+    let inner = dialog::render_popup(frame, popup_area, "name workspace", theme);
+
+    if inner.height < 5 || inner.width < 10 {
+        return;
+    }
+
+    let mut row = inner.y;
+
+    // ── Selected directory (dimmed context) ──
+    let path_display = state.browser.display_path();
+    let max_path = inner.width.saturating_sub(4) as usize;
+    let path_short = if path_display.len() > max_path {
+        format!("…{}", &path_display[path_display.len() - max_path + 1..])
+    } else {
+        path_display
+    };
+    let dir_line = Line::from(vec![
+        Span::raw("  "),
+        Span::styled(path_short, Style::default().fg(theme.dim)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(dir_line),
+        ratatui::layout::Rect::new(inner.x, row, inner.width, 1),
+    );
+    row += 2; // gap
+
+    // ── Name input ──
+    dialog::render_text_field(
+        frame, inner, row,
+        "name", &state.name, "(press enter to skip)",
+        true, theme,
+    );
+
+    // ── Hint bar at bottom ──
+    let hint_y = inner.y + inner.height - 1;
+    let hint_line = Line::from(vec![
+        Span::raw("  "),
+        Span::styled("enter", Style::default().fg(theme.accent)),
+        Span::styled(" create  ", Style::default().fg(theme.dim)),
+        Span::styled("esc", Style::default().fg(theme.accent)),
+        Span::styled(" back", Style::default().fg(theme.dim)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(hint_line),
+        ratatui::layout::Rect::new(inner.x, hint_y, inner.width, 1),
+    );
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConfirmDialogClick {
     Cancel,
@@ -369,3 +685,61 @@ pub fn confirm_dialog_hit_test(
         None
     }
 }
+
+fn render_resize_borders(
+    _layout: &pane_protocol::layout::LayoutNode,
+    _active_group: pane_protocol::layout::TabId,
+    resize_state: &pane_protocol::app::ResizeState,
+    theme: &pane_protocol::config::Theme,
+    frame: &mut Frame,
+    rect: ratatui::layout::Rect,
+) {
+    use pane_protocol::app::ResizeBorder;
+    use ratatui::style::Style;
+
+    let selected = match resize_state.selected {
+        Some(b) => b,
+        None => return,
+    };
+
+    let style = Style::default().fg(theme.border_interact);
+    let buf = frame.buffer_mut();
+
+    match selected {
+        ResizeBorder::Left => {
+            for y in rect.y..rect.y + rect.height {
+                if let Some(cell) =
+                    buf.cell_mut(ratatui::layout::Position { x: rect.x, y })
+                {
+                    cell.set_style(style);
+                }
+            }
+        }
+        ResizeBorder::Right => {
+            let x = rect.x + rect.width.saturating_sub(1);
+            for y in rect.y..rect.y + rect.height {
+                if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
+                    cell.set_style(style);
+                }
+            }
+        }
+        ResizeBorder::Top => {
+            for x in rect.x..rect.x + rect.width {
+                if let Some(cell) =
+                    buf.cell_mut(ratatui::layout::Position { x, y: rect.y })
+                {
+                    cell.set_style(style);
+                }
+            }
+        }
+        ResizeBorder::Bottom => {
+            let y = rect.y + rect.height.saturating_sub(1);
+            for x in rect.x..rect.x + rect.width {
+                if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
+                    cell.set_style(style);
+                }
+            }
+        }
+    }
+}
+

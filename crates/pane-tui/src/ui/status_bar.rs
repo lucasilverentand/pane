@@ -80,20 +80,53 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
             String::new(),
             "type to filter  enter spawn  esc cancel ".to_string(),
         ),
-        Mode::Rename => {
-            let target = match client.rename_target {
-                crate::client::RenameTarget::Window => "window",
-                crate::client::RenameTarget::Workspace => "workspace",
+        Mode::Rename => (
+            String::new(),
+            "enter confirm  esc cancel ".to_string(),
+        ),
+        Mode::NewWorkspaceInput => {
+            let hint = if let Some(ref nw) = client.new_workspace_input {
+                match nw.stage {
+                    crate::client::NewWorkspaceStage::Directory => {
+                        "enter select  tab complete  \u{2192} open  esc cancel "
+                    }
+                    crate::client::NewWorkspaceStage::Name => {
+                        "enter create  esc back "
+                    }
+                }
+            } else {
+                "esc cancel "
             };
-            (
-                format!("Rename {}: {}_ ", target, client.rename_input),
-                "enter confirm  esc cancel ".to_string(),
-            )
+            (String::new(), hint.to_string())
         }
         Mode::ContextMenu => (
             String::new(),
             "j/k navigate  enter select  esc cancel ".to_string(),
-        )
+        ),
+        Mode::Resize => {
+            let selected = client.resize_state.as_ref().and_then(|rs| rs.selected);
+            match selected {
+                None => (
+                    " RESIZE".to_string(),
+                    "hjkl select border  = equalize  esc quit ".to_string(),
+                ),
+                Some(b) => {
+                    let label = match b {
+                        pane_protocol::app::ResizeBorder::Left => "LEFT",
+                        pane_protocol::app::ResizeBorder::Right => "RIGHT",
+                        pane_protocol::app::ResizeBorder::Top => "TOP",
+                        pane_protocol::app::ResizeBorder::Bottom => "BOTTOM",
+                    };
+                    let hint = match b {
+                        pane_protocol::app::ResizeBorder::Left
+                        | pane_protocol::app::ResizeBorder::Right => "h/l move  esc quit ",
+                        pane_protocol::app::ResizeBorder::Top
+                        | pane_protocol::app::ResizeBorder::Bottom => "j/k move  esc quit ",
+                    };
+                    (format!(" RESIZE [{}]", label), hint.to_string())
+                }
+            }
+        }
     };
 
     // Build plugin segment string
@@ -144,6 +177,99 @@ fn client_pane_title(client: &Client) -> String {
         }
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_leader_key_lowercase() {
+        let key = crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Char('a'),
+            modifiers: crossterm::event::KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        assert_eq!(format_leader_key(&key), "a");
+    }
+
+    #[test]
+    fn format_leader_key_uppercase() {
+        let key = crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Char('A'),
+            modifiers: crossterm::event::KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        assert_eq!(format_leader_key(&key), "A");
+    }
+
+    #[test]
+    fn format_leader_key_with_shift() {
+        let key = crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Char('b'),
+            modifiers: crossterm::event::KeyModifiers::SHIFT,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        assert_eq!(format_leader_key(&key), "b");
+    }
+
+    #[test]
+    fn format_leader_key_non_char() {
+        let key = crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Enter,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        assert_eq!(format_leader_key(&key), "?");
+    }
+
+    #[test]
+    fn format_leader_key_special_char() {
+        let key = crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Char('/'),
+            modifiers: crossterm::event::KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        assert_eq!(format_leader_key(&key), "/");
+    }
+
+    #[test]
+    fn format_leader_key_esc() {
+        let key = crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Esc,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        assert_eq!(format_leader_key(&key), "?");
+    }
+
+    #[test]
+    fn format_leader_key_tab() {
+        let key = crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Tab,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        assert_eq!(format_leader_key(&key), "?");
+    }
+
+    #[test]
+    fn format_leader_key_digit() {
+        let key = crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Char('5'),
+            modifiers: crossterm::event::KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        assert_eq!(format_leader_key(&key), "5");
+    }
 }
 
 fn build_client_vars(client: &Client) -> HashMap<String, String> {

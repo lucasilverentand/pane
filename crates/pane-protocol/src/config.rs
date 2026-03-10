@@ -58,6 +58,7 @@ pub enum Action {
     ToggleFold,
     NewPane,
     ClientPicker,
+    ResizeMode,
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +229,7 @@ impl Default for StatusBarConfig {
             show_disk: false,
             update_interval_secs: 3,
             left: "".to_string(),
-            right: "#{cpu} #{mem} #{load}  ⎵ leader ".to_string(),
+            right: "#{cpu} #{mem} #{load}  ^⎵ normal  ⎵ leader ".to_string(),
         }
     }
 }
@@ -459,23 +460,8 @@ fn default_leader_tree() -> LeaderNode {
         );
     }
 
-    // \r → +Resize
-    {
-        let mut children = HashMap::new();
-        insert_leaf(&mut children, "h", Action::ResizeShrinkH, "Shrink H");
-        insert_leaf(&mut children, "l", Action::ResizeGrowH, "Grow H");
-        insert_leaf(&mut children, "j", Action::ResizeGrowV, "Grow V");
-        insert_leaf(&mut children, "k", Action::ResizeShrinkV, "Shrink V");
-        insert_leaf(&mut children, "=", Action::Equalize, "Equalize");
-        let key = parse_key("r").unwrap();
-        root.insert(
-            key,
-            LeaderNode::Group {
-                label: "Resize".into(),
-                children,
-            },
-        );
-    }
+    // \r → Resize mode
+    insert_leaf(&mut root, "r", Action::ResizeMode, "Resize");
 
     // Quick splits at root level (2-keystroke access)
     insert_leaf(&mut root, "d", Action::SplitHorizontal, "Split H");
@@ -488,9 +474,15 @@ fn default_leader_tree() -> LeaderNode {
     // \q → Quit
     insert_leaf(&mut root, "q", Action::Quit, "Quit");
 
-    // space space → PassThrough (literal space to PTY)
+    // space space → Command palette
     let space_key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
-    root.insert(space_key, LeaderNode::PassThrough);
+    root.insert(
+        space_key,
+        LeaderNode::Leaf {
+            action: Action::CommandPalette,
+            label: "Command Palette".into(),
+        },
+    );
 
     LeaderNode::Group {
         label: "Leader".into(),
@@ -1415,7 +1407,7 @@ min_pane_width = 80
     }
 
     #[test]
-    fn test_default_leader_tree_has_resize_group() {
+    fn test_default_leader_tree_has_resize_mode() {
         let tree = default_leader_tree();
         let children = match &tree {
             LeaderNode::Group { children, .. } => children,
@@ -1423,8 +1415,8 @@ min_pane_width = 80
         };
         let r_key = parse_key("r").unwrap();
         match children.get(&r_key) {
-            Some(LeaderNode::Group { label, .. }) => assert_eq!(label, "Resize"),
-            _ => panic!("expected Resize group at 'r'"),
+            Some(LeaderNode::Leaf { action, .. }) => assert_eq!(*action, Action::ResizeMode),
+            _ => panic!("expected ResizeMode leaf at 'r'"),
         }
     }
 
@@ -1448,7 +1440,7 @@ min_pane_width = 80
     }
 
     #[test]
-    fn test_default_leader_tree_has_passthrough() {
+    fn test_default_leader_tree_has_command_palette() {
         let tree = default_leader_tree();
         let children = match &tree {
             LeaderNode::Group { children, .. } => children,
@@ -1456,8 +1448,10 @@ min_pane_width = 80
         };
         let space_key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
         match children.get(&space_key) {
-            Some(LeaderNode::PassThrough) => {}
-            _ => panic!("expected PassThrough at space"),
+            Some(LeaderNode::Leaf { action, .. }) => {
+                assert_eq!(*action, Action::CommandPalette)
+            }
+            _ => panic!("expected CommandPalette leaf at space"),
         }
     }
 

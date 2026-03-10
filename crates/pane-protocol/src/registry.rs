@@ -271,6 +271,14 @@ pub fn action_registry() -> &'static [ActionMeta] {
             palette_visible: true,
             action: Equalize,
         },
+        ActionMeta {
+            name: "resize_mode",
+            display_name: "Resize Mode",
+            description: "Enter interactive resize mode to select and move borders",
+            category: Resize,
+            palette_visible: true,
+            action: ResizeMode,
+        },
         // ── Layout ──────────────────────────────────────────────────────
         ActionMeta {
             name: "maximize_focused",
@@ -542,6 +550,319 @@ mod tests {
                 "duplicate registry name: {}",
                 meta.name
             );
+        }
+    }
+
+    // --- Every action has a non-empty display_name ---
+
+    #[test]
+    fn every_action_has_display_name() {
+        for meta in action_registry() {
+            assert!(
+                !meta.display_name.is_empty(),
+                "Action '{}' has empty display_name",
+                meta.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_action_has_description() {
+        for meta in action_registry() {
+            assert!(
+                !meta.description.is_empty(),
+                "Action '{}' has empty description",
+                meta.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_action_has_non_empty_name() {
+        for meta in action_registry() {
+            assert!(!meta.name.is_empty(), "Found action with empty name");
+        }
+    }
+
+    // --- Category assignment for specific actions ---
+
+    #[test]
+    fn split_actions_in_splits_category() {
+        let split_h = action_by_name("split_horizontal").unwrap();
+        assert_eq!(split_h.category, ActionCategory::Splits);
+
+        let split_v = action_by_name("split_vertical").unwrap();
+        assert_eq!(split_v.category, ActionCategory::Splits);
+    }
+
+    #[test]
+    fn navigation_actions_in_navigation_category() {
+        for name in ["focus_left", "focus_down", "focus_up", "focus_right"] {
+            let meta = action_by_name(name).unwrap();
+            assert_eq!(
+                meta.category,
+                ActionCategory::Navigation,
+                "{} should be in Navigation category",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn tab_actions_in_tabs_category() {
+        for name in [
+            "new_tab",
+            "next_tab",
+            "prev_tab",
+            "close_tab",
+            "move_tab_left",
+            "move_tab_down",
+            "move_tab_up",
+            "move_tab_right",
+        ] {
+            let meta = action_by_name(name).unwrap();
+            assert_eq!(
+                meta.category,
+                ActionCategory::Tabs,
+                "{} should be in Tabs category",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn resize_actions_in_resize_category() {
+        for name in [
+            "resize_shrink_h",
+            "resize_grow_h",
+            "resize_grow_v",
+            "resize_shrink_v",
+            "equalize",
+            "resize_mode",
+        ] {
+            let meta = action_by_name(name).unwrap();
+            assert_eq!(
+                meta.category,
+                ActionCategory::Resize,
+                "{} should be in Resize category",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn layout_actions_in_layout_category() {
+        for name in [
+            "maximize_focused",
+            "toggle_zoom",
+            "toggle_float",
+            "new_float",
+            "toggle_fold",
+        ] {
+            let meta = action_by_name(name).unwrap();
+            assert_eq!(
+                meta.category,
+                ActionCategory::Layout,
+                "{} should be in Layout category",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_actions_in_workspaces_category() {
+        for name in ["new_workspace", "close_workspace", "rename_workspace"] {
+            let meta = action_by_name(name).unwrap();
+            assert_eq!(
+                meta.category,
+                ActionCategory::Workspaces,
+                "{} should be in Workspaces category",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn session_actions_in_session_category() {
+        for name in ["session_picker", "client_picker", "detach", "quit"] {
+            let meta = action_by_name(name).unwrap();
+            assert_eq!(
+                meta.category,
+                ActionCategory::Session,
+                "{} should be in Session category",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn tools_actions_in_tools_category() {
+        for name in [
+            "command_palette",
+            "help",
+            "scroll_mode",
+            "copy_mode",
+            "paste_clipboard",
+            "toggle_sync_panes",
+            "rename_window",
+            "rename_pane",
+        ] {
+            let meta = action_by_name(name).unwrap();
+            assert_eq!(
+                meta.category,
+                ActionCategory::Tools,
+                "{} should be in Tools category",
+                name
+            );
+        }
+    }
+
+    // --- Parameterized actions excluded from registry ---
+
+    #[test]
+    fn parameterized_actions_not_in_registry() {
+        // FocusGroupN, SwitchWorkspace, SelectLayout are parameterized
+        // and should NOT appear in the registry
+        let registry = action_registry();
+        for meta in registry {
+            assert!(
+                !matches!(meta.action, Action::FocusGroupN(_)),
+                "FocusGroupN should not be in registry"
+            );
+            assert!(
+                !matches!(meta.action, Action::SwitchWorkspace(_)),
+                "SwitchWorkspace should not be in registry"
+            );
+            assert!(
+                !matches!(meta.action, Action::SelectLayout(_)),
+                "SelectLayout should not be in registry"
+            );
+        }
+    }
+
+    // --- display_name_for coverage ---
+
+    #[test]
+    fn display_name_for_select_layout() {
+        assert_eq!(
+            display_name_for(&Action::SelectLayout("grid".to_string())),
+            "Select Layout"
+        );
+    }
+
+    #[test]
+    fn display_name_for_all_registry_actions() {
+        for meta in action_registry() {
+            let name = display_name_for(&meta.action);
+            assert_eq!(
+                name, meta.display_name,
+                "display_name_for mismatch for {}",
+                meta.name
+            );
+        }
+    }
+
+    // --- action_by_name returns None for unknown ---
+
+    #[test]
+    fn action_by_name_unknown_returns_none() {
+        assert!(action_by_name("nonexistent_action").is_none());
+        assert!(action_by_name("").is_none());
+    }
+
+    // --- ActionCategory ---
+
+    #[test]
+    fn action_category_labels_are_non_empty() {
+        let categories = [
+            ActionCategory::Mode,
+            ActionCategory::Navigation,
+            ActionCategory::Tabs,
+            ActionCategory::Splits,
+            ActionCategory::Resize,
+            ActionCategory::Layout,
+            ActionCategory::Workspaces,
+            ActionCategory::Session,
+            ActionCategory::Tools,
+        ];
+        for cat in categories {
+            assert!(!cat.label().is_empty(), "{:?} has empty label", cat);
+        }
+    }
+
+    #[test]
+    fn action_category_sort_keys_are_unique() {
+        let categories = [
+            ActionCategory::Mode,
+            ActionCategory::Navigation,
+            ActionCategory::Tabs,
+            ActionCategory::Splits,
+            ActionCategory::Resize,
+            ActionCategory::Layout,
+            ActionCategory::Workspaces,
+            ActionCategory::Session,
+            ActionCategory::Tools,
+        ];
+        let mut keys: Vec<u8> = categories.iter().map(|c| c.sort_key()).collect();
+        let len_before = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(
+            keys.len(),
+            len_before,
+            "Sort keys should be unique across categories"
+        );
+    }
+
+    #[test]
+    fn actions_by_category_groups_are_ordered() {
+        let groups = actions_by_category();
+        // Check that Mode comes before Navigation, etc.
+        let category_order: Vec<ActionCategory> = groups.iter().map(|(cat, _)| *cat).collect();
+        for i in 0..category_order.len() - 1 {
+            assert!(
+                category_order[i].sort_key() < category_order[i + 1].sort_key(),
+                "{:?} should come before {:?}",
+                category_order[i],
+                category_order[i + 1]
+            );
+        }
+    }
+
+    #[test]
+    fn mode_actions_in_mode_category() {
+        for name in ["enter_interact", "enter_normal"] {
+            let meta = action_by_name(name).unwrap();
+            assert_eq!(
+                meta.category,
+                ActionCategory::Mode,
+                "{} should be in Mode category",
+                name
+            );
+        }
+    }
+
+    // --- Palette visibility ---
+
+    #[test]
+    fn all_current_actions_are_palette_visible() {
+        // The existing test checks count, let's also verify the flag directly
+        for meta in action_registry() {
+            assert!(
+                meta.palette_visible,
+                "Action '{}' should be palette-visible",
+                meta.name
+            );
+        }
+    }
+
+    #[test]
+    fn palette_actions_returns_same_as_registry_when_all_visible() {
+        let palette: Vec<&ActionMeta> = palette_actions().collect();
+        let registry = action_registry();
+        assert_eq!(palette.len(), registry.len());
+        for (p, r) in palette.iter().zip(registry.iter()) {
+            assert_eq!(p.name, r.name);
         }
     }
 }

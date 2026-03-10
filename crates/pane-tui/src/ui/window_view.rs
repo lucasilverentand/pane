@@ -102,6 +102,13 @@ pub fn render_group_from_snapshot(
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ));
+    } else if is_active && matches!(mode, Mode::Resize) {
+        block = block.title_bottom(Line::styled(
+            " RESIZE ",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
     }
 
     let inner = block.inner(area);
@@ -143,7 +150,7 @@ fn render_tab_separator(theme: &Theme, frame: &mut Frame, area: Rect) {
     let buf = frame.buffer_mut();
     for x in area.x..area.x + area.width {
         if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y: area.y }) {
-            cell.set_symbol("\u{2500}");
+            cell.set_symbol("─");
             cell.set_style(style);
         }
     }
@@ -228,7 +235,7 @@ pub fn render_folded(
             let y_end = area.y + area.height - 1;
             for y in y_start..y_end {
                 if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
-                    cell.set_symbol("\u{2502}");
+                    cell.set_symbol("│");
                     cell.set_style(style);
                 }
             }
@@ -243,7 +250,7 @@ pub fn render_folded(
             let x_end = area.x + area.width - 1;
             for x in x_start..x_end {
                 if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
-                    cell.set_symbol("\u{2500}");
+                    cell.set_symbol("─");
                     cell.set_style(style);
                 }
             }

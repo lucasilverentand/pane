@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn test_selected_command_shell() {
         let state = TabPickerState::new(&[]);
-        // Shell entry has no command -> returns just base
+        // Shell entry has no command → returns just base
         let cmd = state.selected_command().unwrap();
         assert_eq!(cmd, "new-window");
     }

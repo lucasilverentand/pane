@@ -309,4 +309,182 @@ mod tests {
         let lines = render_screen(parser.screen(), area);
         assert!(lines.is_empty());
     }
+
+    // ---- inverse/strikethrough/blink styles ----
+
+    #[test]
+    fn test_render_inverse_text() {
+        // ESC[7m = inverse
+        let parser = make_screen(3, 20, b"\x1b[7minverted\x1b[0m");
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let span = &lines[0].spans[0];
+        assert!(span.content.starts_with("inverted"));
+        assert!(span.style.add_modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn test_render_strikethrough_text() {
+        // ESC[9m = strikethrough
+        let parser = make_screen(3, 20, b"\x1b[9mstruck\x1b[0m");
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let span = &lines[0].spans[0];
+        assert!(span.content.starts_with("struck"));
+        assert!(span.style.add_modifier.contains(Modifier::CROSSED_OUT));
+    }
+
+    #[test]
+    fn test_render_blink_text() {
+        // ESC[5m = blink
+        let parser = make_screen(3, 20, b"\x1b[5mblinky\x1b[0m");
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let span = &lines[0].spans[0];
+        assert!(span.content.starts_with("blinky"));
+        assert!(span.style.add_modifier.contains(Modifier::SLOW_BLINK));
+    }
+
+    #[test]
+    fn test_render_combined_modifiers() {
+        // ESC[1;3;4m = bold + italic + underline
+        let parser = make_screen(3, 30, b"\x1b[1;3;4mcombined\x1b[0m");
+        let area = Rect::new(0, 0, 30, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let span = &lines[0].spans[0];
+        assert!(span.content.starts_with("combined"));
+        assert!(span.style.add_modifier.contains(Modifier::BOLD));
+        assert!(span.style.add_modifier.contains(Modifier::ITALIC));
+        assert!(span.style.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    // ---- screen larger than area ----
+
+    #[test]
+    fn test_render_area_smaller_rows_than_screen() {
+        let parser = make_screen(20, 40, b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
+        // Only render 3 rows
+        let area = Rect::new(0, 0, 40, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        assert_eq!(lines.len(), 3);
+        assert!(line_text(&lines[0]).starts_with("line1"));
+        assert!(line_text(&lines[1]).starts_with("line2"));
+        assert!(line_text(&lines[2]).starts_with("line3"));
+    }
+
+    #[test]
+    fn test_render_area_smaller_cols_than_screen() {
+        let parser = make_screen(5, 40, b"abcdefghijklmnopqrstuvwxyz");
+        // Only render 10 cols
+        let area = Rect::new(0, 0, 10, 5);
+        let lines = render_screen(parser.screen(), area);
+
+        assert_eq!(lines.len(), 5);
+        let text = line_text(&lines[0]);
+        assert_eq!(line_display_width(&lines[0]), 10);
+        assert!(text.starts_with("abcdefghij"));
+    }
+
+    #[test]
+    fn test_render_area_1x1() {
+        let parser = make_screen(5, 10, b"X");
+        let area = Rect::new(0, 0, 1, 1);
+        let lines = render_screen(parser.screen(), area);
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(line_display_width(&lines[0]), 1);
+        assert_eq!(line_text(&lines[0]), "X");
+    }
+
+    // ---- mixed wide and narrow chars on same line ----
+
+    #[test]
+    fn test_render_mixed_wide_narrow_chars() {
+        // "A中B文C" - narrow, wide, narrow, wide, narrow
+        let parser = make_screen(3, 20, "A中B文C".as_bytes());
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let text = line_text(&lines[0]);
+        assert!(text.starts_with("A中B文C"));
+        assert_eq!(line_display_width(&lines[0]), 20);
+    }
+
+    #[test]
+    fn test_render_wide_char_at_boundary() {
+        // Fill a narrow area so a wide char might not fit at the edge
+        // Area is 5 cols wide, fill with 4 narrow chars + 1 wide (needs 2 cols = overflow)
+        let parser = make_screen(2, 10, "abcd中".as_bytes());
+        let area = Rect::new(0, 0, 5, 2);
+        let lines = render_screen(parser.screen(), area);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(line_display_width(&lines[0]), 5);
+    }
+
+    #[test]
+    fn test_render_all_wide_chars() {
+        // All CJK characters
+        let parser = make_screen(3, 20, "中文測試".as_bytes());
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let text = line_text(&lines[0]);
+        assert!(text.starts_with("中文測試"));
+        assert_eq!(line_display_width(&lines[0]), 20);
+    }
+
+    #[test]
+    fn test_render_dim_text() {
+        // ESC[2m = dim
+        let parser = make_screen(3, 20, b"\x1b[2mdimmed\x1b[0m");
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let span = &lines[0].spans[0];
+        assert!(span.content.starts_with("dimmed"));
+        assert!(span.style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn test_render_background_color() {
+        // ESC[42m = green background
+        let parser = make_screen(3, 20, b"\x1b[42mgreen bg\x1b[0m");
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let span = &lines[0].spans[0];
+        assert!(span.content.starts_with("green bg"));
+        assert_eq!(span.style.bg, Some(Color::Indexed(2)));
+    }
+
+    #[test]
+    fn test_render_rgb_background() {
+        // ESC[48;2;100;150;200m = RGB background
+        let parser = make_screen(3, 30, b"\x1b[48;2;100;150;200mrgb bg\x1b[0m");
+        let area = Rect::new(0, 0, 30, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let span = &lines[0].spans[0];
+        assert!(span.content.starts_with("rgb bg"));
+        assert_eq!(span.style.bg, Some(Color::Rgb(100, 150, 200)));
+    }
+
+    #[test]
+    fn test_render_style_changes_mid_line() {
+        // "normal" then bold "bold" then reset "normal"
+        let parser = make_screen(3, 40, b"normal\x1b[1mbold\x1b[0mnormal");
+        let area = Rect::new(0, 0, 40, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        // Should produce multiple spans with different styles
+        assert!(lines[0].spans.len() >= 2, "should have multiple spans for style changes");
+        // First span should not be bold
+        assert!(!lines[0].spans[0].style.add_modifier.contains(Modifier::BOLD));
+    }
 }

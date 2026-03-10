@@ -25,6 +25,7 @@ pub fn parse(input: &str) -> Result<Command> {
         "kill-server" => Ok(Command::KillServer),
         "new-session" | "new" | "new-workspace" => parse_new_workspace(args),
         "rename-session" | "rename-workspace" => parse_rename_workspace(args),
+        "set-workspace-dir" | "workspace-dir" | "cd" => parse_set_workspace_dir(args),
         "new-window" | "neww" => parse_new_window(args),
         "kill-window" | "killw" => parse_kill_window(args),
         "select-window" | "selectw" => parse_select_window(args),
@@ -167,8 +168,18 @@ fn parse_rename_workspace(args: &[String]) -> Result<Command> {
     })
 }
 
+fn parse_set_workspace_dir(args: &[String]) -> Result<Command> {
+    if args.is_empty() {
+        bail!("set-workspace-dir requires a path");
+    }
+    Ok(Command::SetWorkspaceDir {
+        path: args[0].clone(),
+    })
+}
+
 fn parse_new_workspace(args: &[String]) -> Result<Command> {
     let mut window_name = None;
+    let mut cwd = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -178,6 +189,10 @@ fn parse_new_workspace(args: &[String]) -> Result<Command> {
             }
             "-n" if i + 1 < args.len() => {
                 window_name = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "-c" if i + 1 < args.len() => {
+                cwd = Some(args[i + 1].clone());
                 i += 2;
             }
             "-d" | "-P" => {
@@ -194,7 +209,7 @@ fn parse_new_workspace(args: &[String]) -> Result<Command> {
             }
         }
     }
-    Ok(Command::NewWorkspace { window_name })
+    Ok(Command::NewWorkspace { window_name, cwd })
 }
 
 fn parse_new_window(args: &[String]) -> Result<Command> {
@@ -263,6 +278,7 @@ fn parse_split_window(args: &[String]) -> Result<Command> {
     let mut target = None;
     let mut horizontal = false;
     let mut size = None;
+    let mut command = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -276,6 +292,10 @@ fn parse_split_window(args: &[String]) -> Result<Command> {
             }
             "-t" if i + 1 < args.len() => {
                 target = Some(parse_target_pane(&args[i + 1])?);
+                i += 2;
+            }
+            "-c" if i + 1 < args.len() => {
+                command = Some(args[i + 1].clone());
                 i += 2;
             }
             "-l" if i + 1 < args.len() => {
@@ -303,6 +323,7 @@ fn parse_split_window(args: &[String]) -> Result<Command> {
         horizontal,
         target,
         size,
+        command,
     })
 }
 
@@ -605,7 +626,8 @@ mod tests {
             Command::SplitWindow {
                 horizontal: true,
                 target: None,
-                size: None
+                size: None,
+                command: None,
             }
         );
     }
@@ -618,7 +640,8 @@ mod tests {
             Command::SplitWindow {
                 horizontal: false,
                 target: None,
-                size: None
+                size: None,
+                command: None,
             }
         );
     }
@@ -631,7 +654,8 @@ mod tests {
             Command::SplitWindow {
                 horizontal: true,
                 target: Some(TargetPane::Id(3)),
-                size: None
+                size: None,
+                command: None,
             }
         );
     }
@@ -644,7 +668,8 @@ mod tests {
             Command::SplitWindow {
                 horizontal: true,
                 target: None,
-                size: Some(SplitSize::Percent(70))
+                size: Some(SplitSize::Percent(70)),
+                command: None,
             }
         );
     }
@@ -1025,6 +1050,7 @@ mod tests {
                 horizontal: true,
                 target: None,
                 size: Some(SplitSize::Percent(50)),
+                command: None,
             }
         );
     }
@@ -1039,6 +1065,7 @@ mod tests {
                 horizontal: true,
                 target: None,
                 size: None,
+                command: None,
             }
         );
     }
@@ -1052,6 +1079,7 @@ mod tests {
                 horizontal: false,
                 target: None,
                 size: Some(SplitSize::Percent(0)),
+                command: None,
             }
         );
     }
@@ -1066,6 +1094,7 @@ mod tests {
                 horizontal: false,
                 target: None,
                 size: Some(SplitSize::Percent(255)),
+                command: None,
             }
         );
     }
@@ -1079,6 +1108,7 @@ mod tests {
                 horizontal: false,
                 target: None,
                 size: Some(SplitSize::Cells(20)),
+                command: None,
             }
         );
     }
@@ -1109,6 +1139,7 @@ mod tests {
                 horizontal: false,
                 target: None,
                 size: None,
+                command: None,
             }
         );
     }
@@ -1122,6 +1153,7 @@ mod tests {
                 horizontal: true,
                 target: None,
                 size: None,
+                command: None,
             }
         );
     }
@@ -1350,7 +1382,8 @@ mod tests {
             Command::SplitWindow {
                 horizontal: false,
                 target: None,
-                size: None
+                size: None,
+                command: None,
             }
         );
         assert_eq!(parse("killp").unwrap(), Command::KillPane { target: None });
@@ -1440,6 +1473,7 @@ mod tests {
             cmd,
             Command::NewWorkspace {
                 window_name: None,
+                cwd: None,
             }
         );
     }
@@ -1451,6 +1485,19 @@ mod tests {
             cmd,
             Command::NewWorkspace {
                 window_name: Some("mywindow".to_string()),
+                cwd: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_new_workspace_with_cwd() {
+        let cmd = parse("new-workspace -c /tmp/project").unwrap();
+        assert_eq!(
+            cmd,
+            Command::NewWorkspace {
+                window_name: None,
+                cwd: Some("/tmp/project".to_string()),
             }
         );
     }
@@ -1463,6 +1510,7 @@ mod tests {
             cmd,
             Command::NewWorkspace {
                 window_name: None,
+                cwd: None,
             }
         );
     }

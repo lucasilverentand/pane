@@ -974,4 +974,443 @@ mod tests {
             _ => panic!("Expected YankSelection"),
         }
     }
+
+    // --- Cursor movement boundary tests ---
+
+    #[test]
+    fn test_move_right_stops_at_line_end() {
+        let parser = make_screen(5, 20, "abc");
+        let mut state = CopyModeState::new(5, 20, 0, 0);
+        // Move right many times — should stop at end of "abc" (col 2)
+        for _ in 0..50 {
+            state.handle_key(
+                make_key(KeyCode::Char('l'), KeyModifiers::NONE),
+                parser.screen(),
+            );
+        }
+        assert_eq!(state.cursor_col, 2);
+    }
+
+    #[test]
+    fn test_move_down_stops_at_last_row() {
+        let parser = make_screen(5, 20, "a\r\nb\r\nc");
+        let mut state = CopyModeState::new(5, 20, 0, 0);
+        // Move down many times — should stop at row 4 (5 rows, 0-indexed)
+        for _ in 0..20 {
+            state.handle_key(
+                make_key(KeyCode::Char('j'), KeyModifiers::NONE),
+                parser.screen(),
+            );
+        }
+        assert_eq!(state.cursor_row, 4);
+    }
+
+    #[test]
+    fn test_move_left_with_arrow_key() {
+        let parser = make_screen(5, 20, "hello");
+        let mut state = CopyModeState::new(5, 20, 0, 3);
+        state.handle_key(
+            make_key(KeyCode::Left, KeyModifiers::NONE),
+            parser.screen(),
+        );
+        assert_eq!(state.cursor_col, 2);
+    }
+
+    #[test]
+    fn test_move_right_with_arrow_key() {
+        let parser = make_screen(5, 20, "hello");
+        let mut state = CopyModeState::new(5, 20, 0, 0);
+        state.handle_key(
+            make_key(KeyCode::Right, KeyModifiers::NONE),
+            parser.screen(),
+        );
+        assert_eq!(state.cursor_col, 1);
+    }
+
+    #[test]
+    fn test_move_up_with_arrow_key() {
+        let parser = make_screen(5, 20, "a\r\nb");
+        let mut state = CopyModeState::new(5, 20, 1, 0);
+        state.handle_key(
+            make_key(KeyCode::Up, KeyModifiers::NONE),
+            parser.screen(),
+        );
+        assert_eq!(state.cursor_row, 0);
+    }
+
+    #[test]
+    fn test_move_down_with_arrow_key() {
+        let parser = make_screen(5, 20, "a\r\nb");
+        let mut state = CopyModeState::new(5, 20, 0, 0);
+        state.handle_key(
+            make_key(KeyCode::Down, KeyModifiers::NONE),
+            parser.screen(),
+        );
+        assert_eq!(state.cursor_row, 1);
+    }
+
+    #[test]
+    fn test_half_page_up_clamps_at_zero() {
+        let parser = make_screen(10, 20, "");
+        let mut state = CopyModeState::new(10, 20, 2, 0);
+        state.handle_key(
+            make_key(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            parser.screen(),
+        );
+        // 2 - 5 = saturates to 0
+        assert_eq!(state.cursor_row, 0);
+    }
+
+    #[test]
+    fn test_half_page_down_clamps_at_max() {
+        let parser = make_screen(10, 20, "");
+        let mut state = CopyModeState::new(10, 20, 8, 0);
+        state.handle_key(
+            make_key(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            parser.screen(),
+        );
+        // 8 + 5 = 13, clamped to max_row = 9
+        assert_eq!(state.cursor_row, 9);
+    }
+
+    #[test]
+    fn test_move_to_line_end_empty_line() {
+        let parser = make_screen(5, 20, "");
+        let mut state = CopyModeState::new(5, 20, 0, 0);
+        state.handle_key(
+            make_key(KeyCode::Char('$'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        // Empty line → line_end_col returns 0
+        assert_eq!(state.cursor_col, 0);
+    }
+
+    // --- Selection across multiple lines ---
+
+    #[test]
+    fn test_char_selection_across_three_lines() {
+        let parser = make_screen(5, 20, "aaa\r\nbbb\r\nccc");
+        let mut state = CopyModeState::new(5, 20, 0, 1);
+        // Start char selection
+        state.handle_key(
+            make_key(KeyCode::Char('v'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        // Move down 2 lines, then right to col 2
+        state.handle_key(
+            make_key(KeyCode::Char('j'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        state.handle_key(
+            make_key(KeyCode::Char('j'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        state.handle_key(
+            make_key(KeyCode::Char('l'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        let action = state.handle_key(
+            make_key(KeyCode::Char('y'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        match action {
+            CopyModeAction::YankSelection(text) => {
+                // From (0,1) to (2,2): "aa\nbbb...\ncc"
+                // The lines include trailing spaces from the terminal
+                assert!(text.contains('\n'), "should span multiple lines");
+                let lines: Vec<&str> = text.lines().collect();
+                assert_eq!(lines.len(), 3);
+            }
+            _ => panic!("Expected YankSelection"),
+        }
+    }
+
+    #[test]
+    fn test_line_selection_reversed() {
+        // Start from line 2 and move up to line 0
+        let parser = make_screen(5, 20, "aaa\r\nbbb\r\nccc");
+        let mut state = CopyModeState::new(5, 20, 2, 0);
+        state.handle_key(
+            make_key(KeyCode::Char('V'), KeyModifiers::SHIFT),
+            parser.screen(),
+        );
+        // Move up two lines
+        state.handle_key(
+            make_key(KeyCode::Char('k'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        state.handle_key(
+            make_key(KeyCode::Char('k'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        let action = state.handle_key(
+            make_key(KeyCode::Char('y'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        match action {
+            CopyModeAction::YankSelection(text) => {
+                let lines: Vec<&str> = text.lines().collect();
+                assert_eq!(lines.len(), 3);
+                assert!(lines[0].starts_with("aaa"));
+                assert!(lines[1].starts_with("bbb"));
+                assert!(lines[2].starts_with("ccc"));
+            }
+            _ => panic!("Expected YankSelection"),
+        }
+    }
+
+    #[test]
+    fn test_is_selected_char_multiline() {
+        let mut state = CopyModeState::new(10, 20, 3, 5);
+        state.selection_start = Some((1, 3));
+        state.selection_mode = SelectionMode::Char;
+
+        // Row 0: before selection
+        assert!(!state.is_selected(0, 5));
+        // Row 1, before start col
+        assert!(!state.is_selected(1, 2));
+        // Row 1, at start col
+        assert!(state.is_selected(1, 3));
+        // Row 1, after start col
+        assert!(state.is_selected(1, 10));
+        // Row 2: entirely within selection
+        assert!(state.is_selected(2, 0));
+        assert!(state.is_selected(2, 19));
+        // Row 3, before end col
+        assert!(state.is_selected(3, 0));
+        // Row 3, at end col
+        assert!(state.is_selected(3, 5));
+        // Row 3, after end col
+        assert!(!state.is_selected(3, 6));
+        // Row 4: after selection
+        assert!(!state.is_selected(4, 0));
+    }
+
+    // --- Search with no matches ---
+
+    #[test]
+    fn test_search_no_matches() {
+        let parser = make_screen(5, 20, "hello world");
+        let mut state = CopyModeState::new(5, 20, 0, 0);
+        state.search_query = "zzzzz".to_string();
+        state.perform_search(parser.screen());
+        assert!(state.search_matches.is_empty());
+    }
+
+    #[test]
+    fn test_search_no_matches_next_does_nothing() {
+        let parser = make_screen(5, 20, "hello world");
+        let mut state = CopyModeState::new(5, 20, 0, 5);
+        state.search_query = "zzzzz".to_string();
+        state.perform_search(parser.screen());
+        let orig_row = state.cursor_row;
+        let orig_col = state.cursor_col;
+        state.next_match();
+        assert_eq!(state.cursor_row, orig_row);
+        assert_eq!(state.cursor_col, orig_col);
+    }
+
+    #[test]
+    fn test_search_no_matches_prev_does_nothing() {
+        let parser = make_screen(5, 20, "hello world");
+        let mut state = CopyModeState::new(5, 20, 0, 5);
+        state.search_query = "zzzzz".to_string();
+        state.perform_search(parser.screen());
+        let orig_row = state.cursor_row;
+        let orig_col = state.cursor_col;
+        state.prev_match();
+        assert_eq!(state.cursor_row, orig_row);
+        assert_eq!(state.cursor_col, orig_col);
+    }
+
+    #[test]
+    fn test_search_empty_query() {
+        let parser = make_screen(5, 20, "hello world");
+        let mut state = CopyModeState::new(5, 20, 0, 0);
+        state.search_query.clear();
+        state.perform_search(parser.screen());
+        assert!(state.search_matches.is_empty());
+    }
+
+    // --- Search wrapping ---
+
+    #[test]
+    fn test_search_next_wraps_around() {
+        let parser = make_screen(5, 30, "abc abc abc");
+        let mut state = CopyModeState::new(5, 30, 0, 0);
+        state.search_query = "abc".to_string();
+        state.perform_search(parser.screen());
+        assert_eq!(state.search_matches.len(), 3);
+
+        // Start at first match
+        state.cursor_row = 0;
+        state.cursor_col = 0;
+        // next should go to second
+        state.next_match();
+        assert_eq!(state.cursor_col, 4);
+        // next should go to third
+        state.next_match();
+        assert_eq!(state.cursor_col, 8);
+        // next should wrap to first
+        state.next_match();
+        assert_eq!(state.cursor_col, 0);
+    }
+
+    #[test]
+    fn test_search_prev_wraps_around() {
+        let parser = make_screen(5, 30, "abc abc abc");
+        let mut state = CopyModeState::new(5, 30, 0, 0);
+        state.search_query = "abc".to_string();
+        state.perform_search(parser.screen());
+
+        // Start at first match
+        state.cursor_row = 0;
+        state.cursor_col = 0;
+        // prev should wrap to last
+        state.prev_match();
+        assert_eq!(state.cursor_col, 8);
+        // prev should go to second
+        state.prev_match();
+        assert_eq!(state.cursor_col, 4);
+        // prev should go to first
+        state.prev_match();
+        assert_eq!(state.cursor_col, 0);
+    }
+
+    #[test]
+    fn test_search_multiline() {
+        let parser = make_screen(5, 20, "foo bar\r\nfoo baz");
+        let mut state = CopyModeState::new(5, 20, 0, 0);
+        state.search_query = "foo".to_string();
+        state.perform_search(parser.screen());
+        assert_eq!(state.search_matches.len(), 2);
+        // First match on row 0
+        assert_eq!(state.search_matches[0].0, 0);
+        assert_eq!(state.search_matches[0].1, 0);
+        // Second match on row 1
+        assert_eq!(state.search_matches[1].0, 1);
+        assert_eq!(state.search_matches[1].1, 0);
+    }
+
+    #[test]
+    fn test_search_single_match_wraps_to_self() {
+        let parser = make_screen(5, 20, "xyzxyz");
+        let mut state = CopyModeState::new(5, 20, 0, 0);
+        state.search_query = "xyzxyz".to_string();
+        state.perform_search(parser.screen());
+        assert_eq!(state.search_matches.len(), 1);
+
+        // At the match position, next wraps to the same match
+        state.cursor_col = 0;
+        state.next_match();
+        assert_eq!(state.cursor_col, 0);
+    }
+
+    // --- Word movement edge cases ---
+
+    #[test]
+    fn test_word_forward_at_end_of_line() {
+        let parser = make_screen(5, 20, "hello\r\nworld");
+        let mut state = CopyModeState::new(5, 20, 0, 3);
+        // "hello" ends at col 4, then spaces. Word forward should go to next word on same
+        // line (trailing spaces) or next line.
+        state.handle_key(
+            make_key(KeyCode::Char('w'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        // After "hello" there are spaces — word forward skips them
+        // If all spaces until end of row, it moves to next row
+        // Just verify the cursor moved from its original position
+        let moved = state.cursor_row > 0 || state.cursor_col != 3;
+        assert!(moved, "cursor should have moved forward");
+    }
+
+    #[test]
+    fn test_word_backward_at_start_goes_to_prev_line() {
+        let parser = make_screen(5, 20, "hello\r\nworld");
+        let mut state = CopyModeState::new(5, 20, 1, 0);
+        state.handle_key(
+            make_key(KeyCode::Char('b'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        // Should move to previous line
+        assert_eq!(state.cursor_row, 0);
+    }
+
+    // --- Yank with no selection does nothing ---
+
+    #[test]
+    fn test_yank_without_selection() {
+        let parser = make_screen(5, 20, "hello");
+        let mut state = CopyModeState::new(5, 20, 0, 0);
+        let action = state.handle_key(
+            make_key(KeyCode::Char('y'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        assert!(matches!(action, CopyModeAction::None));
+    }
+
+    // --- Switch between selection modes ---
+
+    #[test]
+    fn test_switch_char_to_line_selection() {
+        let parser = make_screen(5, 20, "hello");
+        let mut state = CopyModeState::new(5, 20, 0, 0);
+        // Start char selection
+        state.handle_key(
+            make_key(KeyCode::Char('v'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        assert_eq!(state.selection_mode, SelectionMode::Char);
+        // Switch to line selection
+        state.handle_key(
+            make_key(KeyCode::Char('V'), KeyModifiers::SHIFT),
+            parser.screen(),
+        );
+        assert_eq!(state.selection_mode, SelectionMode::Line);
+    }
+
+    // --- Search mode key handling ---
+
+    #[test]
+    fn test_search_backspace() {
+        let parser = make_screen(5, 20, "hello");
+        let mut state = CopyModeState::new(5, 20, 0, 0);
+        state.handle_key(
+            make_key(KeyCode::Char('/'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        state.handle_key(
+            make_key(KeyCode::Char('a'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        state.handle_key(
+            make_key(KeyCode::Char('b'), KeyModifiers::NONE),
+            parser.screen(),
+        );
+        assert_eq!(state.search_query, "ab");
+        state.handle_key(
+            make_key(KeyCode::Backspace, KeyModifiers::NONE),
+            parser.screen(),
+        );
+        assert_eq!(state.search_query, "a");
+    }
+
+    #[test]
+    fn test_search_esc_clears_matches() {
+        let parser = make_screen(5, 20, "hello");
+        let mut state = CopyModeState::new(5, 20, 0, 0);
+        state.search_query = "hello".to_string();
+        state.perform_search(parser.screen());
+        assert!(!state.search_matches.is_empty());
+
+        state.search_active = true;
+        state.handle_key(
+            make_key(KeyCode::Esc, KeyModifiers::NONE),
+            parser.screen(),
+        );
+        assert!(!state.search_active);
+        assert!(state.search_query.is_empty());
+        assert!(state.search_matches.is_empty());
+    }
 }

@@ -9,12 +9,13 @@ use crate::config::Action;
 // Global keys — active in ALL modes (Normal, Interact)
 //
 // These bindings work even in Interact mode where keys are forwarded to the
-// PTY. Use modifier combos (ctrl, alt) to avoid conflicts with programs
-// running inside panes.
+// PTY. Ctrl+Space exits to Normal mode. Use modifier combos (ctrl, alt) to
+// avoid conflicts with programs running inside panes.
 // ---------------------------------------------------------------------------
 
 pub fn global_defaults() -> Vec<(&'static str, Action)> {
     vec![
+        ("ctrl+space", Action::EnterNormal),  // Exit interact mode → normal mode
         ("shift+pageup", Action::ScrollMode), // Enter scroll mode to browse output history
     ]
 }
@@ -73,8 +74,7 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         // ── Tools ───────────────────────────────────────────────────────
         ("c", Action::CopyMode),         // Enter copy mode to select and copy text
         ("p", Action::PasteClipboard),   // Paste from system clipboard
-        ("/", Action::CommandPalette),   // Open the command palette
-        ("?", Action::CommandPalette),   // Open the command palette (alias)
+        (":", Action::CommandPalette),   // Open the command palette
     ]
 }
 

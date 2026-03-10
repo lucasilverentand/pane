@@ -521,4 +521,265 @@ mod tests {
         assert_eq!(pane.scroll_offset, 0);
         assert!(!pane.is_scrolled());
     }
+
+    // ---- clean_tab_title tests ----
+
+    #[test]
+    fn test_clean_tab_title_full_path_zsh() {
+        assert_eq!(clean_tab_title("/bin/zsh"), "zsh");
+    }
+
+    #[test]
+    fn test_clean_tab_title_full_path_fish() {
+        assert_eq!(clean_tab_title("/usr/bin/fish"), "fish");
+    }
+
+    #[test]
+    fn test_clean_tab_title_full_path_node() {
+        assert_eq!(clean_tab_title("/usr/local/bin/node"), "node");
+    }
+
+    #[test]
+    fn test_clean_tab_title_bare_name() {
+        assert_eq!(clean_tab_title("vim"), "vim");
+    }
+
+    #[test]
+    fn test_clean_tab_title_bare_name_nvim() {
+        assert_eq!(clean_tab_title("nvim"), "nvim");
+    }
+
+    #[test]
+    fn test_clean_tab_title_empty_string() {
+        assert_eq!(clean_tab_title(""), "");
+    }
+
+    #[test]
+    fn test_clean_tab_title_trailing_slash() {
+        // Path like "/" should return "/" (basename is empty, falls through)
+        assert_eq!(clean_tab_title("/"), "/");
+    }
+
+    #[test]
+    fn test_clean_tab_title_with_args() {
+        // Not a path, should remain unchanged
+        assert_eq!(clean_tab_title("vim file.rs"), "vim file.rs");
+    }
+
+    #[test]
+    fn test_clean_tab_title_deep_path() {
+        assert_eq!(clean_tab_title("/a/b/c/d/e/python3"), "python3");
+    }
+
+    // ---- tab cycling (next_tab, prev_tab, wrap around) ----
+
+    #[test]
+    fn test_next_tab_single_tab() {
+        let gid = WindowId::new_v4();
+        let p1 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t1");
+        let mut group = Window::new(gid, p1);
+        assert_eq!(group.active_tab, 0);
+        group.next_tab();
+        assert_eq!(group.active_tab, 0); // wraps around to 0
+    }
+
+    #[test]
+    fn test_next_tab_two_tabs() {
+        let gid = WindowId::new_v4();
+        let p1 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t1");
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t2");
+        let mut group = Window::new(gid, p1);
+        group.add_tab(p2);
+        group.active_tab = 0;
+        group.next_tab();
+        assert_eq!(group.active_tab, 1);
+        group.next_tab();
+        assert_eq!(group.active_tab, 0); // wraps
+    }
+
+    #[test]
+    fn test_prev_tab_single_tab() {
+        let gid = WindowId::new_v4();
+        let p1 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t1");
+        let mut group = Window::new(gid, p1);
+        group.prev_tab();
+        assert_eq!(group.active_tab, 0); // wraps to last (which is 0)
+    }
+
+    #[test]
+    fn test_prev_tab_two_tabs_wraps() {
+        let gid = WindowId::new_v4();
+        let p1 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t1");
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t2");
+        let mut group = Window::new(gid, p1);
+        group.add_tab(p2);
+        group.active_tab = 0;
+        group.prev_tab();
+        assert_eq!(group.active_tab, 1); // wraps to last
+    }
+
+    #[test]
+    fn test_next_prev_cycle_three_tabs() {
+        let gid = WindowId::new_v4();
+        let p1 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t1");
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t2");
+        let p3 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t3");
+        let mut group = Window::new(gid, p1);
+        group.add_tab(p2);
+        group.add_tab(p3);
+        group.active_tab = 0;
+
+        // Forward through all tabs
+        group.next_tab();
+        assert_eq!(group.active_tab, 1);
+        group.next_tab();
+        assert_eq!(group.active_tab, 2);
+        group.next_tab();
+        assert_eq!(group.active_tab, 0); // wrap
+
+        // Backward through all tabs
+        group.prev_tab();
+        assert_eq!(group.active_tab, 2); // wrap backward
+        group.prev_tab();
+        assert_eq!(group.active_tab, 1);
+        group.prev_tab();
+        assert_eq!(group.active_tab, 0);
+    }
+
+    // ---- Window with multiple tabs ----
+
+    #[test]
+    fn test_window_add_tab_sets_active_to_last() {
+        let gid = WindowId::new_v4();
+        let p1_id = TabId::new_v4();
+        let p1 = Tab::spawn_error(p1_id, TabKind::Shell, "t1");
+        let mut group = Window::new(gid, p1);
+        assert_eq!(group.active_tab, 0);
+
+        let p2 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t2");
+        group.add_tab(p2);
+        assert_eq!(group.active_tab, 1);
+
+        let p3 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t3");
+        group.add_tab(p3);
+        assert_eq!(group.active_tab, 2);
+    }
+
+    #[test]
+    fn test_window_close_last_tab_returns_false() {
+        let gid = WindowId::new_v4();
+        let p1 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t1");
+        let mut group = Window::new(gid, p1);
+        assert!(!group.close_tab(0));
+        assert_eq!(group.tab_count(), 1);
+    }
+
+    #[test]
+    fn test_window_close_tab_adjusts_active() {
+        let gid = WindowId::new_v4();
+        let p1 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t1");
+        let p2_id = TabId::new_v4();
+        let p2 = Tab::spawn_error(p2_id, TabKind::Shell, "t2");
+        let p3 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t3");
+        let mut group = Window::new(gid, p1);
+        group.add_tab(p2);
+        group.add_tab(p3);
+        // active is 2 (last added)
+        assert_eq!(group.active_tab, 2);
+        // Close tab 2 (active)
+        assert!(group.close_tab(2));
+        assert_eq!(group.tab_count(), 2);
+        // active should clamp to 1
+        assert_eq!(group.active_tab, 1);
+        assert_eq!(group.active_tab().id, p2_id);
+    }
+
+    #[test]
+    fn test_window_remove_tab_returns_none_when_single() {
+        let gid = WindowId::new_v4();
+        let p1 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t1");
+        let mut group = Window::new(gid, p1);
+        assert!(group.remove_tab(0).is_none());
+    }
+
+    #[test]
+    fn test_window_remove_tab_returns_removed() {
+        let gid = WindowId::new_v4();
+        let p1 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t1");
+        let p2_id = TabId::new_v4();
+        let p2 = Tab::spawn_error(p2_id, TabKind::Shell, "t2");
+        let mut group = Window::new(gid, p1);
+        group.add_tab(p2);
+        let removed = group.remove_tab(1);
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().id, p2_id);
+        assert_eq!(group.tab_count(), 1);
+    }
+
+    #[test]
+    fn test_window_tab_count() {
+        let gid = WindowId::new_v4();
+        let p1 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t1");
+        let mut group = Window::new(gid, p1);
+        assert_eq!(group.tab_count(), 1);
+        group.add_tab(Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t2"));
+        assert_eq!(group.tab_count(), 2);
+        group.add_tab(Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t3"));
+        assert_eq!(group.tab_count(), 3);
+    }
+
+    #[test]
+    fn test_window_active_tab_and_active_tab_mut() {
+        let gid = WindowId::new_v4();
+        let p1_id = TabId::new_v4();
+        let p1 = Tab::spawn_error(p1_id, TabKind::Shell, "t1");
+        let mut group = Window::new(gid, p1);
+        assert_eq!(group.active_tab().id, p1_id);
+
+        // Mutate via active_tab_mut
+        group.active_tab_mut().title = "modified".to_string();
+        assert_eq!(group.active_tab().title, "modified");
+    }
+
+    #[test]
+    fn test_window_name_default_none() {
+        let gid = WindowId::new_v4();
+        let p1 = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "t1");
+        let group = Window::new(gid, p1);
+        assert!(group.name.is_none());
+    }
+
+    #[test]
+    fn test_scroll_down_below_zero() {
+        let mut pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "");
+        pane.vt = vt100::Parser::new(3, 80, 1000);
+        // Scroll down without any scroll offset should stay at 0
+        pane.scroll_down(5);
+        assert_eq!(pane.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_scroll_up_then_down() {
+        let mut pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "");
+        pane.vt = vt100::Parser::new(3, 80, 1000);
+        for i in 0..20 {
+            pane.vt.process(format!("line {}\r\n", i).as_bytes());
+        }
+        pane.scroll_up(10);
+        let offset_after_up = pane.scroll_offset;
+        assert!(offset_after_up > 0);
+
+        pane.scroll_down(3);
+        assert!(pane.scroll_offset < offset_after_up);
+    }
+
+    #[test]
+    fn test_resize_pty_clamps_zero_dimensions() {
+        let mut pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "");
+        pane.resize_pty(0, 0);
+        let (rows, cols) = pane.screen().size();
+        // Should clamp to 1x1
+        assert_eq!(rows, 1);
+        assert_eq!(cols, 1);
+    }
 }

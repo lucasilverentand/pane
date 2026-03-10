@@ -158,7 +158,6 @@ fn convert_color(color: vt100::Color) -> Color {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,5 +288,224 @@ mod tests {
         let area = Rect::new(0, 0, 0, 0);
         let lines = render_screen(parser.screen(), area);
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_render_inverse_style() {
+        // ESC[7m = inverse
+        let parser = make_screen(3, 20, b"\x1b[7minverted\x1b[0m normal");
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let inv_span = &lines[0].spans[0];
+        assert!(inv_span.content.starts_with("inverted"));
+        assert!(inv_span.style.add_modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn test_render_strikethrough_style() {
+        // ESC[9m = strikethrough
+        let parser = make_screen(3, 20, b"\x1b[9mstruck\x1b[0m rest");
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let struck_span = &lines[0].spans[0];
+        assert!(struck_span.content.starts_with("struck"));
+        assert!(
+            struck_span
+                .style
+                .add_modifier
+                .contains(Modifier::CROSSED_OUT)
+        );
+    }
+
+    #[test]
+    fn test_render_dim_style() {
+        // ESC[2m = dim
+        let parser = make_screen(3, 20, b"\x1b[2mdimmed\x1b[0m bright");
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let dim_span = &lines[0].spans[0];
+        assert!(dim_span.content.starts_with("dimmed"));
+        assert!(dim_span.style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn test_render_blink_style() {
+        // ESC[5m = blink
+        let parser = make_screen(3, 20, b"\x1b[5mblink\x1b[0m");
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let blink_span = &lines[0].spans[0];
+        assert!(blink_span.content.starts_with("blink"));
+        assert!(
+            blink_span
+                .style
+                .add_modifier
+                .contains(Modifier::SLOW_BLINK)
+        );
+    }
+
+    #[test]
+    fn test_render_combined_styles() {
+        // ESC[1;3;4m = bold + italic + underline
+        let parser = make_screen(3, 30, b"\x1b[1;3;4mcombined\x1b[0m");
+        let area = Rect::new(0, 0, 30, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let span = &lines[0].spans[0];
+        assert!(span.content.starts_with("combined"));
+        assert!(span.style.add_modifier.contains(Modifier::BOLD));
+        assert!(span.style.add_modifier.contains(Modifier::ITALIC));
+        assert!(span.style.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn test_render_cursor_at_position() {
+        // Move cursor to row 2, col 5: ESC[3;6H (1-based)
+        let parser = make_screen(5, 20, b"\x1b[3;6HX");
+        let area = Rect::new(0, 0, 20, 5);
+        let lines = render_screen(parser.screen(), area);
+
+        // Row 2 (0-indexed) should have 'X' at col 5
+        let row2: String = lines[2].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(row2.chars().nth(5), Some('X'));
+    }
+
+    #[test]
+    fn test_render_cursor_at_origin() {
+        let parser = make_screen(3, 10, b"A");
+        let area = Rect::new(0, 0, 10, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let row0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(row0.chars().nth(0), Some('A'));
+    }
+
+    #[test]
+    fn test_render_cursor_at_last_col() {
+        // Write text that fills to the last column
+        let parser = make_screen(3, 5, b"ABCDE");
+        let area = Rect::new(0, 0, 5, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let row0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(row0, "ABCDE");
+    }
+
+    #[test]
+    fn test_render_with_scrollback() {
+        // Create a parser with scrollback, overflow to create scrollback
+        let mut parser = vt100::Parser::new(3, 10, 10);
+        parser.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
+        let area = Rect::new(0, 0, 10, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        // Should render only visible rows (last 3 lines)
+        assert_eq!(lines.len(), 3);
+        let row0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let row1: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        let row2: String = lines[2].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(row0.starts_with("line3"));
+        assert!(row1.starts_with("line4"));
+        assert!(row2.starts_with("line5"));
+    }
+
+    #[test]
+    fn test_all_cells_have_correct_display_width() {
+        // Test with a mix of ASCII, wide chars, and empty cells
+        let parser = make_screen(3, 20, "AB中CD".as_bytes());
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        for line in &lines {
+            let total_width: usize = line
+                .spans
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            assert_eq!(
+                total_width, 20,
+                "each rendered line should have display width equal to area width"
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_cells_display_width_plain_text() {
+        let parser = make_screen(2, 15, b"hello world");
+        let area = Rect::new(0, 0, 15, 2);
+        let lines = render_screen(parser.screen(), area);
+
+        for line in &lines {
+            let total_width: usize = line
+                .spans
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            assert_eq!(total_width, 15);
+        }
+    }
+
+    #[test]
+    fn test_all_cells_display_width_colored() {
+        // Bold red text followed by normal: both spans should sum to area width
+        let parser = make_screen(2, 20, b"\x1b[1;31mred\x1b[0m normal");
+        let area = Rect::new(0, 0, 20, 2);
+        let lines = render_screen(parser.screen(), area);
+
+        for line in &lines {
+            let total_width: usize = line
+                .spans
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            assert_eq!(total_width, 20);
+        }
+    }
+
+    #[test]
+    fn test_render_background_color() {
+        // ESC[41m = red background
+        let parser = make_screen(3, 20, b"\x1b[41mhi\x1b[0m");
+        let area = Rect::new(0, 0, 20, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let span = &lines[0].spans[0];
+        assert!(span.content.starts_with("hi"));
+        assert_eq!(span.style.bg, Some(Color::Indexed(1)));
+    }
+
+    #[test]
+    fn test_render_area_wider_than_screen() {
+        // Area is wider than the screen — cells beyond screen should be spaces
+        let parser = make_screen(3, 5, b"AB");
+        let area = Rect::new(0, 0, 10, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let row0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        // First 5 cols come from screen, remaining 5 are None → spaces
+        assert_eq!(row0.len(), 10);
+        assert!(row0.starts_with("AB"));
+    }
+
+    #[test]
+    fn test_wide_char_at_end_of_line() {
+        // Place a wide char at the second-to-last column
+        // Screen width = 5, write "abc" then a wide char
+        let parser = make_screen(3, 5, "abc中".as_bytes());
+        let area = Rect::new(0, 0, 5, 3);
+        let lines = render_screen(parser.screen(), area);
+
+        let row0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let total_width: usize = lines[0]
+            .spans
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+            .sum();
+        assert_eq!(total_width, 5, "wide char at end should still fill width exactly");
+        assert!(row0.contains("中") || row0.len() == 5);
     }
 }

@@ -347,7 +347,16 @@ async fn process_events(
             AppEvent::PtyExited { pane_id } => {
                 let should_quit = {
                     let mut state = state.lock().await;
-                    state.handle_pty_exited(pane_id)
+                    let quit = state.handle_pty_exited(pane_id);
+                    if !quit {
+                        let (w, h) = state.last_size;
+                        state.resize_all_tabs(w, h);
+                        let render_state = render_state_from_server(&state);
+                        let _ = broadcast_tx.send(ServerResponse::LayoutChanged {
+                            render_state,
+                        });
+                    }
+                    quit
                 };
                 let _ = broadcast_tx.send(ServerResponse::PaneExited { pane_id });
                 if should_quit {
@@ -372,7 +381,7 @@ async fn process_events(
             | AppEvent::MouseRightDown { .. }
             | AppEvent::MouseDrag { .. }
             | AppEvent::MouseMove { .. }
-            | AppEvent::MouseUp
+            | AppEvent::MouseUp { .. }
             | AppEvent::MouseScroll { .. }
             | AppEvent::Resize(_, _) => {}
         }
@@ -626,12 +635,20 @@ async fn handle_client(
                     let cws = state.active_workspace;
                     let render_state = render_state_for_client(&state, cws);
                     let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
+                } else {
+                    // Forward drag to PTY if the process wants button-motion events
+                    forward_mouse_to_pty(&mut state, 32, x, y, true);
                 }
             }
-            ClientRequest::MouseMove { .. } => {
-                // Mouse move is client-side only (hover effects)
+            ClientRequest::MouseMove { x, y } => {
+                // Forward motion to PTY if the process wants any-motion events
+                let mut state = state.lock().await;
+                if let Some(cws) = clients.get_active_workspace(client_id).await {
+                    state.active_workspace = cws;
+                }
+                forward_mouse_to_pty(&mut state, 35, x, y, true);
             }
-            ClientRequest::MouseUp => {
+            ClientRequest::MouseUp { x, y } => {
                 let had_drag = state.lock().await.drag_state.is_some();
                 if had_drag {
                     let mut state = state.lock().await;
@@ -645,6 +662,13 @@ async fn handle_client(
                     let cws = state.active_workspace;
                     let render_state = render_state_for_client(&state, cws);
                     let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
+                } else {
+                    // Forward mouse release to PTY if the process wants mouse events
+                    let mut state = state.lock().await;
+                    if let Some(cws) = clients.get_active_workspace(client_id).await {
+                        state.active_workspace = cws;
+                    }
+                    forward_mouse_to_pty(&mut state, 0, x, y, false);
                 }
             }
             ClientRequest::MouseScroll { up } => {
@@ -652,10 +676,29 @@ async fn handle_client(
                 if let Some(cws) = clients.get_active_workspace(client_id).await {
                     state.active_workspace = cws;
                 }
-                if up {
-                    state.scroll_active_tab(|p| p.scroll_up(3));
+                // Forward scroll to PTY if the process wants mouse events
+                let mouse_mode = state
+                    .active_workspace()
+                    .groups
+                    .get(&state.active_workspace().active_group)
+                    .map(|g| g.active_tab().screen().mouse_protocol_mode())
+                    .unwrap_or(vt100::MouseProtocolMode::None);
+                if mouse_mode != vt100::MouseProtocolMode::None {
+                    let encoding = state
+                        .active_workspace()
+                        .groups
+                        .get(&state.active_workspace().active_group)
+                        .map(|g| g.active_tab().screen().mouse_protocol_encoding())
+                        .unwrap_or(vt100::MouseProtocolEncoding::Default);
+                    let button = if up { 64u8 } else { 65u8 };
+                    let bytes = encode_mouse_sgr(button, 0, 0, true, encoding);
+                    state.active_workspace_mut().active_group_mut().active_tab_mut().write_input(&bytes);
                 } else {
-                    state.scroll_active_tab(|p| p.scroll_down(3));
+                    if up {
+                        state.scroll_active_tab(|p| p.scroll_up(3));
+                    } else {
+                        state.scroll_active_tab(|p| p.scroll_down(3));
+                    }
                 }
             }
             ClientRequest::Command(cmd) => {
@@ -759,7 +802,7 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
                                 }
                                 crate::tab_bar::TabBarClick::NewTab => {
                                     let cols = w.saturating_sub(4);
-                                    let rows = h.saturating_sub(2 + bar_h + 1);
+                                    let rows = h.saturating_sub(1 + bar_h + 2 + 2);
                                     let _ = state.add_tab_to_active_group(
                                         crate::window::TabKind::Shell,
                                         None,
@@ -772,9 +815,106 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
                         }
                     }
                 }
-                state.active_workspace_mut().active_group = *group_id;
+                let group_id = *group_id;
+                state.active_workspace_mut().active_group = group_id;
+
+                // Forward mouse press to PTY if the process wants mouse events
+                if let Some(content_rect) = window_content_rect(*rect) {
+                    if let Some(group) = state.active_workspace().groups.get(&group_id) {
+                        let tab = group.active_tab();
+                        let mode = tab.screen().mouse_protocol_mode();
+                        if mode != vt100::MouseProtocolMode::None {
+                            let encoding = tab.screen().mouse_protocol_encoding();
+                            let local_x = x.saturating_sub(content_rect.x);
+                            let local_y = y.saturating_sub(content_rect.y);
+                            let bytes = encode_mouse_sgr(0, local_x, local_y, true, encoding);
+                            state.active_workspace_mut().active_group_mut().active_tab_mut().write_input(&bytes);
+                        }
+                    }
+                }
+
                 return;
             }
+        }
+    }
+}
+
+/// Forward a mouse event to the active tab's PTY, translating coordinates to the content area.
+/// `button`: SGR button code (0=left, 1=mid, 2=right, 32=motion+left, 35=motion, 64/65=scroll)
+fn forward_mouse_to_pty(state: &mut ServerState, button: u8, x: u16, y: u16, pressed: bool) {
+    let bar_h = state.workspace_bar_height();
+    let (w, h) = state.last_size;
+    let body_height = h.saturating_sub(1 + bar_h);
+    let body = ratatui::layout::Rect::new(0, bar_h, w, body_height);
+
+    let active_group_id = state.active_workspace().active_group;
+    let ws = state.active_workspace();
+    let resolved = ws.layout.resolve_with_folds(body, &ws.folded_windows);
+    for rp in &resolved {
+        if let pane_protocol::layout::ResolvedPane::Visible { id, rect, .. } = rp {
+            if *id == active_group_id {
+                if let Some(content_rect) = window_content_rect(*rect) {
+                    if let Some(group) = state.active_workspace().groups.get(id) {
+                        let tab = group.active_tab();
+                        let mode = tab.screen().mouse_protocol_mode();
+                        if mode == vt100::MouseProtocolMode::None {
+                            return;
+                        }
+                        let encoding = tab.screen().mouse_protocol_encoding();
+                        let local_x = x.saturating_sub(content_rect.x);
+                        let local_y = y.saturating_sub(content_rect.y);
+                        let bytes = encode_mouse_sgr(button, local_x, local_y, pressed, encoding);
+                        state.active_workspace_mut().active_group_mut().active_tab_mut().write_input(&bytes);
+                    }
+                }
+                return;
+            }
+        }
+    }
+}
+
+/// Compute the content area (where terminal output is rendered) within a window rect.
+/// This accounts for the border, padding, tab bar, and separator.
+fn window_content_rect(rect: ratatui::layout::Rect) -> Option<ratatui::layout::Rect> {
+    use ratatui::widgets::{Block, Borders, BorderType};
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(rect);
+    if inner.width <= 2 || inner.height <= 2 {
+        return None;
+    }
+    // Padded area: 1 char padding on each side, then tab bar (1 row) + separator (1 row)
+    Some(ratatui::layout::Rect::new(
+        inner.x + 1,
+        inner.y + 2,
+        inner.width - 2,
+        inner.height.saturating_sub(2),
+    ))
+}
+
+/// Encode a mouse event for forwarding to the PTY.
+/// `button`: 0=left, 1=middle, 2=right, 64=scroll-up, 65=scroll-down
+/// `pressed`: true for press, false for release
+fn encode_mouse_sgr(
+    button: u8,
+    x: u16,
+    y: u16,
+    pressed: bool,
+    encoding: vt100::MouseProtocolEncoding,
+) -> Vec<u8> {
+    match encoding {
+        vt100::MouseProtocolEncoding::Sgr => {
+            // SGR format: \x1b[<Btn;X;YM (press) or \x1b[<Btn;X;Ym (release)
+            let suffix = if pressed { 'M' } else { 'm' };
+            format!("\x1b[<{};{};{}{}", button, x + 1, y + 1, suffix).into_bytes()
+        }
+        _ => {
+            // Default/UTF-8 encoding: \x1b[M CbCxCy (all +32, release=3)
+            let cb = if pressed { button + 32 } else { 3 + 32 };
+            let cx = (x as u8).saturating_add(33).min(255);
+            let cy = (y as u8).saturating_add(33).min(255);
+            vec![0x1b, b'[', b'M', cb, cx, cy]
         }
     }
 }
@@ -925,15 +1065,30 @@ pub fn start_daemon() -> Result<()> {
     let exe = std::env::current_exe()?;
     let sock = socket_path();
 
-    // If socket already exists and daemon is alive, check version
+    // If socket already exists and daemon is alive, check if restart is needed
     if sock.exists() && std::os::unix::net::UnixStream::connect(&sock).is_ok() {
-        let needs_restart = match std::fs::read_to_string(version_path()) {
+        let version_mismatch = match std::fs::read_to_string(version_path()) {
             Ok(v) => v.trim() != env!("CARGO_PKG_VERSION"),
             Err(_) => true,
         };
 
-        if needs_restart {
-            eprintln!("pane: restarting daemon (version mismatch)");
+        // In debug builds, also restart if the binary is newer than the daemon
+        let binary_changed = cfg!(debug_assertions) && {
+            let pid_file = pid_path();
+            match (exe.metadata(), pid_file.metadata()) {
+                (Ok(exe_meta), Ok(pid_meta)) => {
+                    match (exe_meta.modified(), pid_meta.modified()) {
+                        (Ok(exe_time), Ok(pid_time)) => exe_time > pid_time,
+                        _ => false,
+                    }
+                }
+                _ => false,
+            }
+        };
+
+        if version_mismatch || binary_changed {
+            let reason = if version_mismatch { "version mismatch" } else { "binary changed" };
+            eprintln!("pane: restarting daemon ({})", reason);
             kill_daemon();
         } else {
             return Ok(());

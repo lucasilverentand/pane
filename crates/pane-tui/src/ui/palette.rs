@@ -630,7 +630,7 @@ mod tests {
     fn test_compact_hints_from_leader_root() {
         let lc = LeaderConfig::default();
         if let LeaderNode::Group { children, .. } = &lc.root {
-            let state = UnifiedPaletteState::new_compact_hints(children, "\u{23B5}".into());
+            let state = UnifiedPaletteState::new_compact_hints(children, "⎵".into());
             assert_eq!(state.view, PaletteView::CompactHints);
             assert!(state.leader_group.as_ref().unwrap().len() > 0);
         }
@@ -640,7 +640,7 @@ mod tests {
     fn test_transition_to_full_search() {
         let (km, lc) = defaults();
         let mut state = if let LeaderNode::Group { children, .. } = &lc.root {
-            UnifiedPaletteState::new_compact_hints(children, "\u{23B5}".into())
+            UnifiedPaletteState::new_compact_hints(children, "⎵".into())
         } else {
             panic!("expected group root");
         };
