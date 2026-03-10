@@ -683,6 +683,7 @@ pub fn execute(
                 state.event_tx.clone(),
                 None,
                 Some(tmux_env),
+                None,
             ) {
                 Ok(p) => p,
                 Err(e) => crate::window::Tab::spawn_error(

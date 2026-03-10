@@ -1,4 +1,5 @@
 pub mod context_menu;
+pub mod dialog;
 pub mod format;
 pub mod layout_render;
 pub mod palette;
@@ -7,7 +8,7 @@ pub mod tab_picker;
 pub mod window_view;
 pub mod workspace_bar;
 
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::Frame;
 
 use pane_protocol::app::Mode;
@@ -87,7 +88,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                             if !screen.hide_cursor() {
                                 let (vt_row, vt_col) = screen.cursor_position();
                                 let cursor_x = body.x + 2 + vt_col;
-                                let cursor_y = body.y + 2 + vt_row;
+                                let cursor_y = body.y + 3 + vt_row;
                                 if cursor_x < body.x + body.width && cursor_y < body.y + body.height
                                 {
                                     frame.set_cursor_position(ratatui::layout::Position {
@@ -153,7 +154,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                                         if *id == ws.active_group {
                                             let (vt_row, vt_col) = screen.cursor_position();
                                             let cursor_x = rect.x + 2 + vt_col;
-                                            let cursor_y = rect.y + 2 + vt_row;
+                                            let cursor_y = rect.y + 3 + vt_row;
                                             if cursor_x < rect.x + rect.width
                                                 && cursor_y < rect.y + rect.height
                                             {
@@ -209,14 +210,28 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
             render_confirm_dialog(client, theme, frame, frame.area());
         }
         Mode::Leader => {
-            // Leader mode uses the palette in compact hints mode when popup is visible
             if let Some(ref ls) = client.leader_state {
                 if ls.popup_visible {
                     if let pane_protocol::config::LeaderNode::Group { ref children, .. } =
                         ls.current_node
                     {
+                        // Build display path: "\u{2389}" for root, "\u{2389} w" for leader->w, etc.
+                        let mut path_parts = vec!["\u{2389}".to_string()];
+                        for k in &ls.path {
+                            path_parts.push(palette::key_event_to_string(k));
+                        }
+                        // If in a subgroup, show the group label
+                        let path = if let pane_protocol::config::LeaderNode::Group { ref label, .. } = ls.current_node {
+                            if ls.path.is_empty() {
+                                "\u{2389}".to_string()
+                            } else {
+                                format!("{} \u{2192} {}", path_parts.join(" "), label)
+                            }
+                        } else {
+                            path_parts.join(" ")
+                        };
                         let compact =
-                            palette::UnifiedPaletteState::new_compact_hints(children);
+                            palette::UnifiedPaletteState::new_compact_hints(children, path);
                         palette::render(&compact, theme, frame, frame.area());
                     }
                 }
@@ -224,7 +239,10 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
         }
         Mode::TabPicker => {
             if let Some(ref tp_state) = client.tab_picker_state {
-                tab_picker::render(tp_state, theme, frame, frame.area());
+                // Render inside the active window's rect
+                let picker_area = active_window_rect(client, body)
+                    .unwrap_or(frame.area());
+                tab_picker::render(tp_state, theme, frame, picker_area);
             }
         }
         Mode::ContextMenu => {
@@ -236,6 +254,26 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
     }
 }
 
+/// Find the active window's rect from the current render state.
+fn active_window_rect(client: &Client, body: Rect) -> Option<Rect> {
+    let ws = client.active_workspace()?;
+    // Check floating windows first
+    for fw in &ws.floating_windows {
+        if fw.id == ws.active_group {
+            return Some(Rect::new(fw.x, fw.y, fw.width, fw.height));
+        }
+    }
+    let resolved = ws.layout.resolve_with_folds(body, &ws.folded_windows);
+    for rp in &resolved {
+        if let pane_protocol::layout::ResolvedPane::Visible { id, rect } = rp {
+            if *id == ws.active_group {
+                return Some(*rect);
+            }
+        }
+    }
+    None
+}
+
 fn render_confirm_dialog(
     client: &Client,
     theme: &pane_protocol::config::Theme,
@@ -245,7 +283,7 @@ fn render_confirm_dialog(
     use ratatui::{
         style::{Color, Modifier, Style},
         text::{Line, Span},
-        widgets::{Block, BorderType, Borders, Clear, Paragraph},
+        widgets::Paragraph,
     };
 
     let message = client
@@ -253,17 +291,12 @@ fn render_confirm_dialog(
         .as_deref()
         .unwrap_or("Are you sure?");
 
-    let popup_area = centered_rect(40, 15, area);
-    frame.render_widget(Clear, popup_area);
-
-    let block = Block::default()
-        .title(" confirm ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.accent));
-
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::Percent { width: 40, height: 15 },
+        dialog::PopupAnchor::Center,
+        area,
+    );
+    let inner = dialog::render_popup(frame, popup_area, "confirm", theme);
 
     let lines = vec![
         Line::raw(""),
@@ -306,7 +339,11 @@ pub fn confirm_dialog_hit_test(
 ) -> Option<ConfirmDialogClick> {
     use ratatui::widgets::{Block, BorderType, Borders};
 
-    let popup_area = centered_rect(40, 15, area);
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::Percent { width: 40, height: 15 },
+        dialog::PopupAnchor::Center,
+        area,
+    );
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded);
@@ -330,71 +367,5 @@ pub fn confirm_dialog_hit_test(
         Some(ConfirmDialogClick::Confirm)
     } else {
         None
-    }
-}
-
-fn centered_rect(
-    percent_x: u16,
-    percent_y: u16,
-    area: ratatui::layout::Rect,
-) -> ratatui::layout::Rect {
-    let vertical = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .split(area);
-
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .split(vertical[1])[1]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ratatui::layout::Rect;
-
-    #[test]
-    fn test_centered_rect_is_within_area() {
-        let area = Rect::new(0, 0, 100, 50);
-        let result = centered_rect(50, 50, area);
-        assert!(result.x >= area.x);
-        assert!(result.y >= area.y);
-        assert!(result.x + result.width <= area.x + area.width);
-        assert!(result.y + result.height <= area.y + area.height);
-    }
-
-    #[test]
-    fn test_centered_rect_is_roughly_centered() {
-        let area = Rect::new(0, 0, 100, 100);
-        let result = centered_rect(50, 50, area);
-        let result_center_x = result.x + result.width / 2;
-        let result_center_y = result.y + result.height / 2;
-        let area_center_x = area.width / 2;
-        let area_center_y = area.height / 2;
-        assert!((result_center_x as i16 - area_center_x as i16).unsigned_abs() <= 2);
-        assert!((result_center_y as i16 - area_center_y as i16).unsigned_abs() <= 2);
-    }
-
-    #[test]
-    fn test_centered_rect_respects_percentages() {
-        let area = Rect::new(0, 0, 200, 100);
-        let result = centered_rect(50, 60, area);
-        assert!(result.width >= 95 && result.width <= 105);
-        assert!(result.height >= 55 && result.height <= 65);
-    }
-
-    #[test]
-    fn test_centered_rect_with_offset_area() {
-        let area = Rect::new(10, 5, 100, 50);
-        let result = centered_rect(50, 50, area);
-        assert!(result.x >= area.x);
-        assert!(result.y >= area.y);
-        assert!(result.x + result.width <= area.x + area.width);
-        assert!(result.y + result.height <= area.y + area.height);
     }
 }

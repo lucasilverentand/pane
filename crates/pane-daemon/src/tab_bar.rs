@@ -66,11 +66,10 @@ pub fn tab_bar_layout(group: &Window, theme: &Theme, area: Rect) -> TabBarLayout
         tab_ranges.push((tab_start, cursor_x));
     }
 
-    let plus_range = if cursor_x + sep_width + plus_reserve <= max_x {
-        cursor_x += sep_width;
-        let start = cursor_x;
-        cursor_x += plus_reserve;
-        Some((start, cursor_x))
+    // The + button is right-aligned in the render, so match that here.
+    let plus_range = if plus_reserve <= max_x.saturating_sub(area.x) {
+        let plus_start = max_x - plus_reserve;
+        Some((plus_start, max_x))
     } else {
         None
     };

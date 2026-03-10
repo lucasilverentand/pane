@@ -1,12 +1,14 @@
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
 use pane_protocol::config::{Action, Theme};
+
+use super::dialog;
 
 /// A single item in the context menu.
 #[derive(Clone, Debug)]
@@ -128,36 +130,19 @@ pub fn pane_body_menu(x: u16, y: u16) -> ContextMenuState {
 
 /// Render the context menu popup.
 pub fn render(state: &ContextMenuState, theme: &Theme, frame: &mut Frame, area: Rect) {
-    let item_count = state.items.len() as u16;
-    // Menu width: widest label + padding + border
-    let max_label = state
-        .items
-        .iter()
-        .map(|i| i.label.len())
-        .max()
-        .unwrap_or(10) as u16;
-    let menu_w = (max_label + 4).min(area.width); // 2 border + 2 padding
-    let menu_h = (item_count + 2).min(area.height); // +2 for border
+    let (menu_w, menu_h) = menu_dimensions(state, area);
 
-    // Position: try to place below-right of anchor, clamp to screen
-    let x = state.anchor_x.min(area.x + area.width.saturating_sub(menu_w));
-    let y = if state.anchor_y + menu_h <= area.y + area.height {
-        state.anchor_y
-    } else {
-        // Place above the anchor if no room below
-        state.anchor_y.saturating_sub(menu_h)
-    };
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::Fixed { width: menu_w, height: menu_h },
+        dialog::PopupAnchor::Position {
+            x: state.anchor_x,
+            y: state.anchor_y,
+        },
+        area,
+    );
 
-    let popup = Rect::new(x, y, menu_w, menu_h);
-    frame.render_widget(Clear, popup);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.accent));
-
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    // No title for context menus
+    let inner = dialog::render_popup(frame, popup_area, "", theme);
 
     for (i, item) in state.items.iter().enumerate() {
         if i as u16 >= inner.height {
@@ -166,8 +151,7 @@ pub fn render(state: &ContextMenuState, theme: &Theme, frame: &mut Frame, area: 
         let is_selected = i == state.selected;
         let style = if is_selected {
             Style::default()
-                .fg(Color::White)
-                .bg(theme.accent)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.fg)
@@ -179,8 +163,8 @@ pub fn render(state: &ContextMenuState, theme: &Theme, frame: &mut Frame, area: 
     }
 }
 
-/// Hit-test the context menu. Returns the index of the clicked item, if any.
-pub fn hit_test(state: &ContextMenuState, area: Rect, x: u16, y: u16) -> Option<usize> {
+/// Calculate menu dimensions (shared between render and hit_test).
+fn menu_dimensions(state: &ContextMenuState, area: Rect) -> (u16, u16) {
     let item_count = state.items.len() as u16;
     let max_label = state
         .items
@@ -190,17 +174,22 @@ pub fn hit_test(state: &ContextMenuState, area: Rect, x: u16, y: u16) -> Option<
         .unwrap_or(10) as u16;
     let menu_w = (max_label + 4).min(area.width);
     let menu_h = (item_count + 2).min(area.height);
+    (menu_w, menu_h)
+}
 
-    let menu_x = state.anchor_x.min(area.x + area.width.saturating_sub(menu_w));
-    let menu_y = if state.anchor_y + menu_h <= area.y + area.height {
-        state.anchor_y
-    } else {
-        state.anchor_y.saturating_sub(menu_h)
-    };
+/// Hit-test the context menu. Returns the index of the clicked item, if any.
+pub fn hit_test(state: &ContextMenuState, area: Rect, x: u16, y: u16) -> Option<usize> {
+    let (menu_w, menu_h) = menu_dimensions(state, area);
 
-    let popup = Rect::new(menu_x, menu_y, menu_w, menu_h);
+    let popup = dialog::popup_rect(
+        dialog::PopupSize::Fixed { width: menu_w, height: menu_h },
+        dialog::PopupAnchor::Position {
+            x: state.anchor_x,
+            y: state.anchor_y,
+        },
+        area,
+    );
 
-    // Inner area (inside border)
     if popup.width <= 2 || popup.height <= 2 {
         return None;
     }
@@ -288,7 +277,7 @@ mod tests {
     #[test]
     fn menu_clamped_to_screen() {
         let area = Rect::new(0, 0, 20, 10);
-        // Anchor at far right — should clamp
+        // Anchor at far right -- should clamp
         let menu = pane_body_menu(18, 8);
         // Just verify render doesn't panic
         let result = hit_test(&menu, area, 0, 0);

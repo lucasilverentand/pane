@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
@@ -11,6 +11,8 @@ use std::collections::HashMap;
 
 use pane_protocol::config::{Action, KeyMap, LeaderConfig, LeaderNode, Theme};
 use pane_protocol::registry;
+
+use super::dialog;
 
 // ---------------------------------------------------------------------------
 // PaletteView — the two display modes
@@ -49,6 +51,8 @@ pub struct UnifiedPaletteState {
     pub filtered: Vec<usize>,
     /// Current leader group children for compact hints view
     pub leader_group: Option<Vec<(KeyEvent, String, bool)>>, // (key, label, is_group)
+    /// Display path for which-key header (e.g. "⎵ w" for leader → window)
+    pub leader_path: Option<String>,
     /// Pre-selected action from a leader key match (highlighted in palette)
     pub highlighted_action: Option<Action>,
 }
@@ -65,20 +69,22 @@ impl UnifiedPaletteState {
             all_entries,
             filtered,
             leader_group: None,
+            leader_path: None,
             highlighted_action: None,
         }
     }
 
     /// Create a compact-hints palette showing a leader group's children.
-    pub fn new_compact_hints(children: &HashMap<KeyEvent, LeaderNode>) -> Self {
+    pub fn new_compact_hints(children: &HashMap<KeyEvent, LeaderNode>, path: String) -> Self {
         let entries: Vec<(KeyEvent, String, bool)> = {
             let mut v: Vec<_> = children
                 .iter()
+                .filter(|(_, node)| !matches!(node, LeaderNode::PassThrough))
                 .map(|(key, node)| {
                     let (label, is_group) = match node {
                         LeaderNode::Leaf { label, .. } => (label.clone(), false),
                         LeaderNode::Group { label, .. } => (format!("+{}", label), true),
-                        LeaderNode::PassThrough => ("passthrough".into(), false),
+                        LeaderNode::PassThrough => unreachable!(),
                     };
                     (*key, label, is_group)
                 })
@@ -93,6 +99,7 @@ impl UnifiedPaletteState {
             all_entries: Vec::new(),
             filtered: Vec::new(),
             leader_group: Some(entries),
+            leader_path: Some(path),
             highlighted_action: None,
         }
     }
@@ -340,30 +347,25 @@ pub fn render(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Frame, are
 }
 
 fn render_full_search(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Frame, area: Rect) {
-    let popup_area = centered_rect(60, 50, area);
-    frame.render_widget(Clear, popup_area);
-
-    let block = Block::default()
-        .title(" palette ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.accent));
-
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::Percent { width: 60, height: 50 },
+        dialog::PopupAnchor::Center,
+        area,
+    );
+    let inner = dialog::render_popup(frame, popup_area, "command", theme);
 
     if inner.height < 3 {
         return;
     }
 
-    let [input_area, _, list_area] = Layout::vertical([
+    let [input_area, sep_area, list_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Fill(1),
     ])
     .areas(inner);
 
-    // Render input line
+    // Render filter input (palette uses slightly wider prefix)
     let input_line = Line::from(vec![
         Span::styled("  > ", Style::default().fg(theme.accent)),
         Span::styled(
@@ -372,6 +374,9 @@ fn render_full_search(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Fr
         ),
     ]);
     frame.render_widget(Paragraph::new(input_line), input_area);
+
+    // Separator
+    dialog::render_separator(frame, sep_area);
 
     // Render filtered entries grouped by category
     let visible_count = list_area.height as usize;
@@ -422,26 +427,36 @@ fn render_full_search(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Fr
             Style::default().fg(Color::White)
         };
 
-        let hint_text = entry
-            .keybind
-            .as_ref()
-            .map(|h| format!("  {}", h))
-            .unwrap_or_default();
+        let indicator = if is_selected { "  > " } else { "    " };
 
-        let desc_text = if is_selected && !entry.description.is_empty() {
-            format!("  {}", entry.description)
+        let desc_text = if !entry.description.is_empty() {
+            format!(" \u{2014} {}", entry.description)
         } else {
             String::new()
         };
 
-        let indicator = if is_selected { "  > " } else { "    " };
+        let hint_text = entry.keybind.as_deref().unwrap_or("");
 
-        lines.push(Line::from(vec![
+        // Left side: indicator + name + description
+        let left_len = indicator.len() + entry.name.len() + desc_text.len();
+        // Right side: keybind + trailing space
+        let right_len = if hint_text.is_empty() { 0 } else { hint_text.len() + 1 };
+        let available = list_area.width as usize;
+        let gap = available.saturating_sub(left_len + right_len);
+
+        let mut spans = vec![
             Span::styled(indicator, name_style),
             Span::styled(entry.name.clone(), name_style),
-            Span::styled(hint_text, Style::default().fg(theme.dim)),
             Span::styled(desc_text, Style::default().fg(theme.dim)),
-        ]));
+        ];
+
+        if !hint_text.is_empty() {
+            spans.push(Span::raw(" ".repeat(gap)));
+            spans.push(Span::styled(hint_text.to_string(), Style::default().fg(theme.dim)));
+            spans.push(Span::raw(" "));
+        }
+
+        lines.push(Line::from(spans));
     }
 
     let visible_lines: Vec<Line> = lines
@@ -469,6 +484,10 @@ fn render_compact_hints(
         return;
     }
 
+    // Separate groups and leaves for display
+    let groups: Vec<_> = entries.iter().filter(|(_, _, is_group)| *is_group).collect();
+    let leaves: Vec<_> = entries.iter().filter(|(_, _, is_group)| !*is_group).collect();
+
     let max_key_len = entries
         .iter()
         .map(|(k, _, _)| format_key_short(k).len())
@@ -479,68 +498,72 @@ fn render_compact_hints(
         .map(|(_, l, _)| l.len())
         .max()
         .unwrap_or(1);
-    let content_width = (max_key_len + 2 + max_label_len).min(38) as u16;
-    let popup_width = content_width + 4;
-    let popup_height = (entries.len() as u16 + 2).min(area.height.saturating_sub(2));
 
-    let x = area.width.saturating_sub(popup_width);
-    let y = area.height.saturating_sub(popup_height + 1);
-    let popup_area = Rect::new(x, y, popup_width, popup_height);
+    // Multi-column layout: fit entries in columns
+    let item_width = (max_key_len + 2 + max_label_len + 2) as u16;
+    let max_popup_width = (area.width * 60 / 100).max(30);
+    let cols = ((max_popup_width - 2) / item_width).max(1).min(4) as usize;
+    let total_items = entries.len();
+    let rows = (total_items + cols - 1) / cols;
 
-    frame.render_widget(Clear, popup_area);
+    let popup_width = ((item_width * cols as u16) + 4).min(max_popup_width);
+    let popup_height = (rows as u16 + 4).min(area.height.saturating_sub(4));
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.dim));
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::Fixed { width: popup_width, height: popup_height },
+        dialog::PopupAnchor::BottomCenter,
+        area,
+    );
 
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
+    let title = match &state.leader_path {
+        Some(path) if !path.is_empty() => path.clone(),
+        _ => "which key".to_string(),
+    };
 
-    let max_visible = inner.height as usize;
-    let lines: Vec<Line> = entries
-        .iter()
-        .take(max_visible)
-        .map(|(key, label, is_group)| {
-            let key_str = format_key_short(key);
-            let key_style = Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD);
-            let label_style = if *is_group {
-                Style::default().fg(theme.accent)
-            } else {
-                Style::default().fg(theme.fg)
-            };
-            let pad = " ".repeat(max_key_len.saturating_sub(key_str.len()));
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(key_str, key_style),
-                Span::raw(pad),
-                Span::raw("  "),
-                Span::styled(label.clone(), label_style),
-            ])
-        })
-        .collect();
+    let inner = dialog::render_popup(frame, popup_area, &title, theme);
 
-    let paragraph = Paragraph::new(lines);
-    frame.render_widget(paragraph, inner);
+    if inner.height == 0 || inner.width < 4 {
+        return;
+    }
+
+    let max_visible_rows = inner.height as usize;
+    let col_width = inner.width / cols as u16;
+
+    // Render entries in column-major order (groups first, then leaves)
+    let all_items: Vec<&(KeyEvent, String, bool)> = groups.into_iter().chain(leaves).collect();
+    for (idx, (key, label, is_group)) in all_items.iter().enumerate() {
+        let row = idx % rows;
+        let col = idx / rows;
+        if row >= max_visible_rows || col >= cols {
+            continue;
+        }
+
+        let cell_x = inner.x + (col as u16 * col_width);
+        let cell_y = inner.y + row as u16;
+        let cell_width = col_width.min(inner.x + inner.width - cell_x);
+
+        let key_str = format_key_short(key);
+        let key_style = Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD);
+        let label_style = if *is_group {
+            Style::default().fg(theme.accent)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let pad = " ".repeat(max_key_len.saturating_sub(key_str.len()));
+        let line = Line::from(vec![
+            Span::raw(" "),
+            Span::styled(key_str, key_style),
+            Span::raw(pad),
+            Span::raw(" "),
+            Span::styled(label.clone(), label_style),
+        ]);
+        let cell_area = Rect::new(cell_x, cell_y, cell_width, 1);
+        frame.render_widget(Paragraph::new(line), cell_area);
+    }
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .split(area);
-
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .split(vertical[1])[1]
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -607,7 +630,7 @@ mod tests {
     fn test_compact_hints_from_leader_root() {
         let lc = LeaderConfig::default();
         if let LeaderNode::Group { children, .. } = &lc.root {
-            let state = UnifiedPaletteState::new_compact_hints(children);
+            let state = UnifiedPaletteState::new_compact_hints(children, "\u{23B5}".into());
             assert_eq!(state.view, PaletteView::CompactHints);
             assert!(state.leader_group.as_ref().unwrap().len() > 0);
         }
@@ -617,7 +640,7 @@ mod tests {
     fn test_transition_to_full_search() {
         let (km, lc) = defaults();
         let mut state = if let LeaderNode::Group { children, .. } = &lc.root {
-            UnifiedPaletteState::new_compact_hints(children)
+            UnifiedPaletteState::new_compact_hints(children, "\u{23B5}".into())
         } else {
             panic!("expected group root");
         };

@@ -14,8 +14,8 @@ pub struct TmuxEnv {
 
 pub struct PtyHandle {
     pub writer: Box<dyn Write + Send>,
-    pub child: Box<dyn portable_pty::Child + Send + Sync>,
     pub master: Box<dyn portable_pty::MasterPty + Send>,
+    pub shell_pid: Option<u32>,
 }
 
 pub fn spawn_pty(
@@ -45,7 +45,8 @@ pub fn spawn_pty(
         cmd_builder.env("TMUX_PANE", &env.tmux_pane);
     }
 
-    let child = pair.slave.spawn_command(cmd_builder)?;
+    let mut child = pair.slave.spawn_command(cmd_builder)?;
+    let shell_pid = child.process_id();
     drop(pair.slave);
 
     let writer = pair.master.take_writer()?;
@@ -83,9 +84,18 @@ pub fn spawn_pty(
         }
     });
 
+    // Spawn child process watcher as backup — on macOS the PTY reader may not
+    // get EOF when the shell exits if child processes inherited the slave fd.
+    let tx_child = event_tx.clone();
+    let pid_child = pane_id;
+    tokio::task::spawn_blocking(move || {
+        let _ = child.wait();
+        let _ = tx_child.send(AppEvent::PtyExited { pane_id: pid_child });
+    });
+
     Ok(PtyHandle {
         writer,
-        child,
         master,
+        shell_pid,
     })
 }

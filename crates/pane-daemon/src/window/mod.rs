@@ -124,8 +124,6 @@ pub struct Tab {
     pub foreground_process: Option<String>,
     shell_pid: Option<u32>,
     pty_writer: Option<Box<dyn Write + Send>>,
-    #[allow(dead_code)] // kept alive to prevent child process kill on drop
-    pty_child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
 }
 
@@ -138,6 +136,7 @@ impl Tab {
         event_tx: mpsc::UnboundedSender<AppEvent>,
         command: Option<String>,
         tmux_env: Option<pty::TmuxEnv>,
+        cwd: Option<&std::path::Path>,
     ) -> anyhow::Result<Self> {
         // vt100 panics on zero dimensions
         let cols = cols.max(1);
@@ -145,9 +144,19 @@ impl Tab {
 
         let (cmd, args): (&str, Vec<&str>) = match &kind {
             TabKind::Shell => {
-                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-                let shell: &'static str = Box::leak(shell.into_boxed_str());
-                (shell, vec![])
+                if let Some(ref cmd_str) = command {
+                    let leaked: &'static str = Box::leak(cmd_str.clone().into_boxed_str());
+                    let parts: Vec<&'static str> = leaked.split_whitespace().collect();
+                    if parts.len() > 1 {
+                        (parts[0], parts[1..].to_vec())
+                    } else {
+                        (leaked, vec![])
+                    }
+                } else {
+                    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+                    let shell: &'static str = Box::leak(shell.into_boxed_str());
+                    (shell, vec![])
+                }
             }
             TabKind::Nvim => ("nvim", vec![]),
             TabKind::Agent => ("claude", vec![]),
@@ -160,8 +169,13 @@ impl Tab {
             }
         };
 
-        let title = kind.label().to_string();
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        let title = match &command {
+            Some(c) => clean_tab_title(c),
+            None => kind.label().to_string(),
+        };
+        let cwd = cwd
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
 
         let size = PtySize {
             rows,
@@ -171,7 +185,7 @@ impl Tab {
         };
 
         let pty_handle = pty::spawn_pty(cmd, &args, size, event_tx, id, Some(&cwd), tmux_env)?;
-        let shell_pid = pty_handle.child.process_id();
+        let shell_pid = pty_handle.shell_pid;
         let vt = vt100::Parser::new(rows, cols, 1000);
 
         Ok(Self {
@@ -186,7 +200,6 @@ impl Tab {
             foreground_process: None,
             shell_pid,
             pty_writer: Some(pty_handle.writer),
-            pty_child: Some(pty_handle.child),
             pty_master: Some(pty_handle.master),
         })
     }
@@ -194,11 +207,11 @@ impl Tab {
     /// Create a pane that shows an error message instead of a PTY.
     pub fn spawn_error(id: TabId, kind: TabKind, error_msg: &str) -> Self {
         let mut vt = vt100::Parser::new(24, 80, 0);
-        vt.process(format!("[error: {}]\r\n", error_msg).as_bytes());
+        vt.process(format!("error: {}\r\n", error_msg).as_bytes());
         Self {
             id,
             kind: kind.clone(),
-            title: format!("{} (error)", kind.label()),
+            title: format!("{}: {}", kind.label(), error_msg),
             vt,
             exited: true,
             command: None,
@@ -207,7 +220,6 @@ impl Tab {
             foreground_process: None,
             shell_pid: None,
             pty_writer: None,
-            pty_child: None,
             pty_master: None,
         }
     }
@@ -277,7 +289,7 @@ impl Tab {
         }
         let osc_title = self.vt.screen().title();
         if !osc_title.is_empty() {
-            self.title = osc_title.to_string();
+            self.title = clean_tab_title(osc_title);
         }
         self.update_foreground_process();
     }
@@ -304,6 +316,19 @@ impl Tab {
     }
 }
 
+/// Clean up an OSC title for display in the tab bar.
+/// Strips full paths like "/bin/zsh" to just "zsh".
+fn clean_tab_title(title: &str) -> String {
+    if title.starts_with('/') {
+        if let Some(basename) = title.rsplit('/').next() {
+            if !basename.is_empty() {
+                return basename.to_string();
+            }
+        }
+    }
+    title.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,7 +336,7 @@ mod tests {
     #[test]
     fn test_spawn_error_sets_title() {
         let pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "bad thing");
-        assert_eq!(pane.title, "shell (error)");
+        assert_eq!(pane.title, "shell: bad thing");
     }
 
     #[test]
@@ -324,7 +349,6 @@ mod tests {
     fn test_spawn_error_has_no_pty() {
         let pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "err");
         assert!(pane.pty_writer.is_none());
-        assert!(pane.pty_child.is_none());
         assert!(pane.pty_master.is_none());
     }
 
@@ -332,21 +356,21 @@ mod tests {
     fn test_spawn_error_writes_message_to_screen() {
         let pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "something broke");
         let content = pane.screen().contents();
-        assert!(content.contains("[error: something broke]"));
+        assert!(content.contains("error: something broke"));
     }
 
     #[test]
     fn test_spawn_error_empty_message() {
         let pane = Tab::spawn_error(TabId::new_v4(), TabKind::Shell, "");
         let content = pane.screen().contents();
-        assert!(content.contains("[error: ]"));
+        assert!(content.contains("error: "));
     }
 
     #[test]
     fn test_spawn_error_preserves_kind() {
         let pane = Tab::spawn_error(TabId::new_v4(), TabKind::DevServer, "fail");
         assert_eq!(pane.kind, TabKind::DevServer);
-        assert_eq!(pane.title, "server (error)");
+        assert_eq!(pane.title, "server: fail");
     }
 
     #[test]

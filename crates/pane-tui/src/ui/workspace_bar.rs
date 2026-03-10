@@ -23,12 +23,14 @@ struct TabLayout {
     plus_range: Option<(u16, u16)>,
 }
 
-fn tab_line_area(area: Rect) -> Rect {
+/// Compute the inner content area for the workspace bar, inset by 1 extra
+/// cell on each side for visual padding (on top of any border inset).
+fn padded_tab_area(area: Rect) -> Rect {
     if area.width == 0 || area.height == 0 {
         return area;
     }
 
-    // For bordered bars (HEIGHT=3), render/hit-test on the inner text row.
+    // For bordered bars (HEIGHT=3), start from the inner text row.
     let has_border = area.width > 2 && area.height > 2;
     let x = if has_border { area.x + 1 } else { area.x };
     let width = if has_border {
@@ -42,7 +44,8 @@ fn tab_line_area(area: Rect) -> Rect {
         area.y
     };
 
-    Rect::new(x, y, width, 1)
+    // Extra 1-cell padding on each side
+    Rect::new(x + 1, y, width.saturating_sub(2), 1)
 }
 
 fn truncate_name(name: &str, max: usize) -> String {
@@ -112,7 +115,7 @@ pub fn render(
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color));
-    let tab_area = tab_line_area(area);
+    let tab_area = padded_tab_area(area);
     let layout = compute_layout(workspace_names, active_idx, tab_area);
     let sep = " \u{B7} "; // " · "
 
@@ -139,12 +142,7 @@ pub fn render(
         let display_name = truncate_name(name, 20);
         let label = format!(" {} ", display_name);
 
-        let style = if is_active && focused {
-            Style::default()
-                .fg(ratatui::style::Color::White)
-                .bg(theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else if is_active {
+        let style = if is_active {
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
@@ -179,7 +177,7 @@ pub fn hit_test(
     x: u16,
     y: u16,
 ) -> Option<WorkspaceBarClick> {
-    let tab_area = tab_line_area(area);
+    let tab_area = padded_tab_area(area);
 
     if y < tab_area.y || y >= tab_area.y + tab_area.height {
         return None;
@@ -214,12 +212,16 @@ pub fn hit_test(
 mod tests {
     use super::*;
 
+    // Note: padded_tab_area insets by 1 on each side, so for a non-bordered
+    // area Rect(0,0,80,1) the effective area is Rect(1,0,78,1).
+    // Tabs start at x=1, + button ends at x=79 (i.e. 1+78).
+
     #[test]
     fn test_hit_test_tab_click() {
         let ws: Vec<&str> = vec!["alpha", "beta"];
         let area = Rect::new(0, 0, 80, 1);
-        // First tab: " alpha " starts at x=0, 7 chars wide → [0, 7)
-        let click = hit_test(&ws, 0, area, 1, 0);
+        // First tab " alpha " starts at x=1 (after padding)
+        let click = hit_test(&ws, 0, area, 2, 0);
         assert_eq!(click, Some(WorkspaceBarClick::Tab(0)));
     }
 
@@ -227,8 +229,8 @@ mod tests {
     fn test_hit_test_plus_button() {
         let ws: Vec<&str> = vec!["a"];
         let area = Rect::new(0, 0, 80, 1);
-        // " + " is right-aligned, starts at x=77 (80-3)
-        let click = hit_test(&ws, 0, area, 77, 0);
+        // Padded area is [1, 79), + button at end: starts at 79-3=76
+        let click = hit_test(&ws, 0, area, 76, 0);
         assert_eq!(click, Some(WorkspaceBarClick::NewWorkspace));
     }
 
@@ -265,7 +267,8 @@ mod tests {
     fn test_plus_button_present() {
         let ws = vec!["a"];
         let area = Rect::new(0, 0, 80, 1);
-        let layout = compute_layout(&ws, 0, area);
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&ws, 0, padded);
         assert!(layout.plus_range.is_some());
     }
 
@@ -275,8 +278,8 @@ mod tests {
     fn test_hit_test_at_tab_start() {
         let ws = vec!["alpha"];
         let area = Rect::new(0, 0, 80, 1);
-        // " alpha " starts at x=0
-        let click = hit_test(&ws, 0, area, 0, 0);
+        // " alpha " starts at x=1 (padded area starts at 1)
+        let click = hit_test(&ws, 0, area, 1, 0);
         assert_eq!(click, Some(WorkspaceBarClick::Tab(0)));
     }
 
@@ -284,12 +287,13 @@ mod tests {
     fn test_hit_test_at_tab_end_exclusive() {
         let ws = vec!["alpha"];
         let area = Rect::new(0, 0, 80, 1);
-        // " alpha " is 7 chars wide → range [0, 7), so x=7 is outside
-        let layout = compute_layout(&ws, 0, area);
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&ws, 0, padded);
         let (_, end) = layout.tab_ranges[0];
-        assert_eq!(end, 7);
-        let click = hit_test(&ws, 0, area, 7, 0);
-        // x=7 is in the separator or gap, not the tab
+        // " alpha " = 7 chars, starts at 1, so end = 8
+        assert_eq!(end, 8);
+        let click = hit_test(&ws, 0, area, 8, 0);
+        // x=8 is outside the tab
         assert_ne!(click, Some(WorkspaceBarClick::Tab(0)));
     }
 
@@ -297,8 +301,8 @@ mod tests {
     fn test_hit_test_at_last_pixel_of_tab() {
         let ws = vec!["alpha"];
         let area = Rect::new(0, 0, 80, 1);
-        // range is [0, 7), x=6 is the last pixel inside the tab
-        let click = hit_test(&ws, 0, area, 6, 0);
+        // " alpha " = 7 chars starting at x=1, last pixel is x=7
+        let click = hit_test(&ws, 0, area, 7, 0);
         assert_eq!(click, Some(WorkspaceBarClick::Tab(0)));
     }
 
@@ -306,24 +310,25 @@ mod tests {
     fn test_hit_test_second_tab_boundary() {
         let ws = vec!["ab", "cd"];
         let area = Rect::new(0, 0, 80, 1);
-        let layout = compute_layout(&ws, 0, area);
-        // " ab " = 4 chars [0, 4), then " · " (3 chars), then " cd " starts at 7
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&ws, 0, padded);
+        // " ab " = 4 chars [1, 5), then " · " (3 chars), then " cd " starts at 8
         let (start, end) = layout.tab_ranges[1];
-        assert_eq!(start, 7);
-        assert_eq!(end, 11);
+        assert_eq!(start, 8);
+        assert_eq!(end, 12);
         // Click at start of second tab
         assert_eq!(
-            hit_test(&ws, 0, area, 7, 0),
+            hit_test(&ws, 0, area, 8, 0),
             Some(WorkspaceBarClick::Tab(1))
         );
         // Click at end-1 of second tab
         assert_eq!(
-            hit_test(&ws, 0, area, 10, 0),
+            hit_test(&ws, 0, area, 11, 0),
             Some(WorkspaceBarClick::Tab(1))
         );
         // Click at end is outside
         assert_ne!(
-            hit_test(&ws, 0, area, 11, 0),
+            hit_test(&ws, 0, area, 12, 0),
             Some(WorkspaceBarClick::Tab(1))
         );
     }
@@ -332,7 +337,6 @@ mod tests {
 
     #[test]
     fn test_many_workspaces_overflow() {
-        // Create many workspaces that don't all fit in 40 cols
         let ws = vec![
             "workspace_one",
             "workspace_two",
@@ -341,8 +345,8 @@ mod tests {
             "workspace_five",
         ];
         let area = Rect::new(0, 0, 40, 1);
-        let layout = compute_layout(&ws, 0, area);
-        // Some tabs should be skipped (0,0 ranges)
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&ws, 0, padded);
         let skipped = layout
             .tab_ranges
             .iter()
@@ -356,7 +360,6 @@ mod tests {
 
     #[test]
     fn test_active_workspace_always_visible() {
-        // Active tab should always appear even if space is tight
         let ws = vec![
             "workspace_one",
             "workspace_two",
@@ -364,8 +367,8 @@ mod tests {
             "workspace_four",
         ];
         let area = Rect::new(0, 0, 40, 1);
-        let layout = compute_layout(&ws, 2, area);
-        // The active tab (index 2) should not be skipped
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&ws, 2, padded);
         let (start, end) = layout.tab_ranges[2];
         assert!(start != 0 || end != 0, "active tab should be visible");
     }
@@ -374,7 +377,6 @@ mod tests {
 
     #[test]
     fn test_truncate_name_exact_max() {
-        // Exactly at max length — no truncation
         let name = "12345678901234567890"; // 20 chars
         assert_eq!(truncate_name(name, 20), name);
     }
@@ -406,11 +408,11 @@ mod tests {
     fn test_compute_layout_empty_name() {
         let ws = vec![""];
         let area = Rect::new(0, 0, 80, 1);
-        let layout = compute_layout(&ws, 0, area);
-        // " " (empty name with padding) = 2 chars
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&ws, 0, padded);
         let (start, end) = layout.tab_ranges[0];
-        assert_eq!(start, 0);
-        assert_eq!(end, 2); // " " + "" + " " = 2 chars
+        assert_eq!(start, 1);
+        assert_eq!(end, 3); // " " + "" + " " = 2 chars, starting at 1
         assert!(layout.plus_range.is_some());
     }
 
@@ -418,8 +420,8 @@ mod tests {
     fn test_compute_layout_all_empty_names() {
         let ws = vec!["", "", ""];
         let area = Rect::new(0, 0, 80, 1);
-        let layout = compute_layout(&ws, 0, area);
-        // All tabs should be visible since they're tiny
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&ws, 0, padded);
         for (start, end) in &layout.tab_ranges {
             assert!(*start != 0 || *end != 0, "all tiny tabs should fit");
         }
@@ -429,7 +431,8 @@ mod tests {
     fn test_compute_layout_no_workspaces() {
         let ws: Vec<&str> = vec![];
         let area = Rect::new(0, 0, 80, 1);
-        let layout = compute_layout(&ws, 0, area);
+        let padded = padded_tab_area(area);
+        let layout = compute_layout(&ws, 0, padded);
         assert!(layout.tab_ranges.is_empty());
         assert!(layout.plus_range.is_some());
     }
@@ -439,31 +442,32 @@ mod tests {
         // Area starts at x=10, y=5
         let ws = vec!["ab"];
         let area = Rect::new(10, 5, 80, 1);
-        // " ab " = 4 chars, tab at [10, 14)
+        // Padded area starts at x=11. " ab " = 4 chars -> [11, 15)
         assert_eq!(
-            hit_test(&ws, 0, area, 10, 5),
+            hit_test(&ws, 0, area, 11, 5),
             Some(WorkspaceBarClick::Tab(0))
         );
         assert_eq!(
-            hit_test(&ws, 0, area, 13, 5),
+            hit_test(&ws, 0, area, 14, 5),
             Some(WorkspaceBarClick::Tab(0))
         );
         // Outside area y
-        assert_eq!(hit_test(&ws, 0, area, 10, 4), None);
-        assert_eq!(hit_test(&ws, 0, area, 10, 6), None);
-        // Before area x — should be None
-        assert_eq!(hit_test(&ws, 0, area, 9, 5), None);
+        assert_eq!(hit_test(&ws, 0, area, 11, 4), None);
+        assert_eq!(hit_test(&ws, 0, area, 11, 6), None);
+        // Before padded area x -- should be None
+        assert_eq!(hit_test(&ws, 0, area, 10, 5), None);
     }
 
     #[test]
     fn test_hit_test_bordered_bar_uses_inner_row() {
         let ws = vec!["alpha"];
         let area = Rect::new(0, 0, 80, HEIGHT);
+        // Bordered: inner starts at x=1, then +1 padding = x=2. Inner row y=1.
         assert_eq!(
-            hit_test(&ws, 0, area, 1, 1),
+            hit_test(&ws, 0, area, 2, 1),
             Some(WorkspaceBarClick::Tab(0))
         );
-        assert_eq!(hit_test(&ws, 0, area, 1, 0), None);
-        assert_eq!(hit_test(&ws, 0, area, 1, 2), None);
+        assert_eq!(hit_test(&ws, 0, area, 2, 0), None);
+        assert_eq!(hit_test(&ws, 0, area, 2, 2), None);
     }
 }

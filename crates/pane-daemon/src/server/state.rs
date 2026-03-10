@@ -125,6 +125,7 @@ impl ServerState {
             event_tx.clone(),
             None,
             Some(tmux_env),
+            None,
         ) {
             Ok(p) => p,
             Err(e) => Tab::spawn_error(pane_id, TabKind::Shell, &e.to_string()),
@@ -243,6 +244,7 @@ impl ServerState {
             self.event_tx.clone(),
             command,
             Some(tmux_env),
+            None,
         ) {
             Ok(p) => p,
             Err(e) => Tab::spawn_error(pane_id, kind, &e.to_string()),
@@ -278,6 +280,7 @@ impl ServerState {
             self.event_tx.clone(),
             None,
             Some(tmux_env),
+            None,
         ) {
             Ok(p) => p,
             Err(e) => Tab::spawn_error(pane_id, kind, &e.to_string()),
@@ -308,6 +311,7 @@ impl ServerState {
             self.event_tx.clone(),
             None,
             Some(tmux_env),
+            None,
         ) {
             Ok(p) => p,
             Err(e) => Tab::spawn_error(pane_id, TabKind::Shell, &e.to_string()),
@@ -366,6 +370,7 @@ impl ServerState {
             self.event_tx.clone(),
             command,
             Some(tmux_env),
+            None,
         ) {
             Ok(p) => p,
             Err(e) => Tab::spawn_error(id, kind, &e.to_string()),

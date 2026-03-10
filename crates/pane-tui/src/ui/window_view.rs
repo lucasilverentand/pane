@@ -18,12 +18,23 @@ fn render_content(
     frame: &mut Frame,
     area: Rect,
 ) {
+    // Clamp render area to the VT screen dimensions so the process content
+    // renders at its actual size. When a smaller client is connected the PTY
+    // is sized to the minimum, and larger clients show only that region
+    // instead of stretching the content to fill.
+    let (vt_rows, vt_cols) = screen.size();
+    let render_area = Rect::new(
+        area.x,
+        area.y,
+        area.width.min(vt_cols),
+        area.height.min(vt_rows),
+    );
     let lines: Vec<Line<'static>> = match cms {
-        Some(cms) => render_screen_copy_mode(screen, area, cms),
-        None => render_screen(screen, area),
+        Some(cms) => render_screen_copy_mode(screen, render_area, cms),
+        None => render_screen(screen, render_area),
     };
     let paragraph = Paragraph::new(lines);
-    frame.render_widget(paragraph, area);
+    frame.render_widget(paragraph, render_area);
 }
 
 fn render_search_bar(cms: &CopyModeState, theme: &Theme, frame: &mut Frame, area: Rect) {
@@ -104,15 +115,16 @@ pub fn render_group_from_snapshot(
 
     let cms = if is_active { copy_mode_state } else { None };
     let show_search = cms.map_or(false, |c| c.search_active);
-    let mut constraints = vec![Constraint::Length(1), Constraint::Fill(1)];
+    let mut constraints = vec![Constraint::Length(1), Constraint::Length(1), Constraint::Fill(1)];
     if show_search {
         constraints.push(Constraint::Length(1));
     }
     let areas = Layout::vertical(constraints).split(padded);
 
     render_tab_bar_from_snapshot(group, theme, frame, areas[0]);
-    let content_area = areas[1];
-    let search_area = areas.get(2).copied();
+    render_tab_separator(theme, frame, areas[1]);
+    let content_area = areas[2];
+    let search_area = areas.get(3).copied();
 
     // Content
     if let Some(screen) = screen {
@@ -122,6 +134,17 @@ pub fn render_group_from_snapshot(
     if show_search {
         if let Some(search_area) = search_area {
             render_search_bar(cms.unwrap(), theme, frame, search_area);
+        }
+    }
+}
+
+fn render_tab_separator(theme: &Theme, frame: &mut Frame, area: Rect) {
+    let style = Style::default().fg(theme.dim);
+    let buf = frame.buffer_mut();
+    for x in area.x..area.x + area.width {
+        if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y: area.y }) {
+            cell.set_symbol("\u{2500}");
+            cell.set_style(style);
         }
     }
 }
@@ -174,7 +197,7 @@ fn render_tab_bar_from_snapshot(
         if gap > 0 {
             spans.push(Span::raw(" ".repeat(gap as usize)));
         }
-        spans.push(Span::styled(PLUS_TEXT, Style::default().fg(theme.accent)));
+        spans.push(Span::styled(PLUS_TEXT, Style::default().fg(theme.dim)));
     }
 
     let line = Line::from(spans);
@@ -205,7 +228,7 @@ pub fn render_folded(
             let y_end = area.y + area.height - 1;
             for y in y_start..y_end {
                 if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
-                    cell.set_symbol("│");
+                    cell.set_symbol("\u{2502}");
                     cell.set_style(style);
                 }
             }
@@ -220,7 +243,7 @@ pub fn render_folded(
             let x_end = area.x + area.width - 1;
             for x in x_start..x_end {
                 if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
-                    cell.set_symbol("─");
+                    cell.set_symbol("\u{2500}");
                     cell.set_style(style);
                 }
             }

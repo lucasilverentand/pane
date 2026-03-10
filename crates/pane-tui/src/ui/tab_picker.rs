@@ -1,18 +1,23 @@
-use ratatui::{
-    layout::Rect,
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
-    Frame,
-};
+use ratatui::{layout::Rect, Frame};
 
 use pane_protocol::config::{TabPickerEntryConfig, Theme};
+
+use super::dialog;
+
+/// What the tab picker is being opened for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabPickerMode {
+    NewTab,
+    SplitHorizontal,
+    SplitVertical,
+}
 
 /// State for the fuzzy tab picker overlay.
 pub struct TabPickerState {
     pub input: String,
     pub selected: usize,
     pub entries: Vec<TabPickerEntry>,
+    pub mode: TabPickerMode,
     filtered: Vec<usize>,
 }
 
@@ -45,12 +50,17 @@ pub struct TabPickerEntry {
 
 impl TabPickerState {
     pub fn new(custom_entries: &[TabPickerEntryConfig]) -> Self {
+        Self::with_mode(custom_entries, TabPickerMode::NewTab)
+    }
+
+    pub fn with_mode(custom_entries: &[TabPickerEntryConfig], mode: TabPickerMode) -> Self {
         let entries = build_entries(custom_entries);
         let filtered: Vec<usize> = (0..entries.len()).collect();
         Self {
             input: String::new(),
             selected: 0,
             entries,
+            mode,
             filtered,
         }
     }
@@ -104,9 +114,14 @@ impl TabPickerState {
     pub fn selected_command(&self) -> Option<String> {
         self.filtered.get(self.selected).map(|&i| {
             let entry = &self.entries[i];
+            let base = match self.mode {
+                TabPickerMode::NewTab => "new-window",
+                TabPickerMode::SplitHorizontal => "split-window -h",
+                TabPickerMode::SplitVertical => "split-window -v",
+            };
             match &entry.command {
-                Some(cmd) => format!("new-window -c {}", cmd),
-                None => "new-window".to_string(),
+                Some(cmd) => format!("{} -c {}", base, cmd),
+                None => base.to_string(),
             }
         })
     }
@@ -248,107 +263,357 @@ fn read_recent_commands(count: usize) -> Option<Vec<String>> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_custom_entries() -> Vec<TabPickerEntryConfig> {
+        vec![
+            TabPickerEntryConfig {
+                name: "My Tool".into(),
+                command: "mytool".into(),
+                description: Some("A custom tool".into()),
+            },
+            TabPickerEntryConfig {
+                name: "Editor".into(),
+                command: "vim".into(),
+                description: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn test_new_creates_state_with_entries() {
+        let state = TabPickerState::new(&[]);
+        assert_eq!(state.mode, TabPickerMode::NewTab);
+        assert!(state.input.is_empty());
+        assert_eq!(state.selected, 0);
+        // Should always have at least "Shell" entry
+        assert!(
+            state.entries.iter().any(|e| e.name == "Shell"),
+            "should contain the default Shell entry"
+        );
+    }
+
+    #[test]
+    fn test_with_mode_split_horizontal() {
+        let state = TabPickerState::with_mode(&[], TabPickerMode::SplitHorizontal);
+        assert_eq!(state.mode, TabPickerMode::SplitHorizontal);
+    }
+
+    #[test]
+    fn test_with_mode_split_vertical() {
+        let state = TabPickerState::with_mode(&[], TabPickerMode::SplitVertical);
+        assert_eq!(state.mode, TabPickerMode::SplitVertical);
+    }
+
+    #[test]
+    fn test_custom_entries_included() {
+        let custom = make_custom_entries();
+        let state = TabPickerState::new(&custom);
+        assert!(
+            state.entries.iter().any(|e| e.name == "My Tool"),
+            "custom entries should be included"
+        );
+        assert!(
+            state.entries.iter().any(|e| e.name == "Editor"),
+            "custom entries should be included"
+        );
+    }
+
+    #[test]
+    fn test_custom_entries_in_custom_section() {
+        let custom = make_custom_entries();
+        let state = TabPickerState::new(&custom);
+        let my_tool = state.entries.iter().find(|e| e.name == "My Tool").unwrap();
+        assert_eq!(my_tool.section, TabPickerSection::Custom);
+        assert_eq!(my_tool.description, "A custom tool");
+        assert_eq!(my_tool.command, Some("mytool".into()));
+    }
+
+    #[test]
+    fn test_custom_entry_empty_description() {
+        let custom = make_custom_entries();
+        let state = TabPickerState::new(&custom);
+        let editor = state.entries.iter().find(|e| e.name == "Editor").unwrap();
+        assert_eq!(editor.description, "");
+    }
+
+    #[test]
+    fn test_filtered_entries_all_initially() {
+        let state = TabPickerState::new(&[]);
+        let filtered = state.filtered_entries();
+        assert_eq!(filtered.len(), state.entries.len());
+    }
+
+    #[test]
+    fn test_move_down_increments() {
+        let state_entries = make_custom_entries();
+        let mut state = TabPickerState::new(&state_entries);
+        assert_eq!(state.selected, 0);
+        state.move_down();
+        assert_eq!(state.selected, 1);
+        state.move_down();
+        assert_eq!(state.selected, 2);
+    }
+
+    #[test]
+    fn test_move_down_clamps_at_end() {
+        let mut state = TabPickerState::new(&[]);
+        let max = state.filtered_entries().len() - 1;
+        // Move past the end
+        for _ in 0..max + 5 {
+            state.move_down();
+        }
+        assert_eq!(state.selected, max);
+    }
+
+    #[test]
+    fn test_move_up_decrements() {
+        let mut state = TabPickerState::new(&[]);
+        state.selected = 2;
+        state.move_up();
+        assert_eq!(state.selected, 1);
+        state.move_up();
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn test_move_up_clamps_at_zero() {
+        let mut state = TabPickerState::new(&[]);
+        state.selected = 0;
+        state.move_up();
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn test_filter_narrows_results() {
+        let custom = vec![TabPickerEntryConfig {
+            name: "UniqueXYZ".into(),
+            command: "xyz_cmd".into(),
+            description: Some("special tool".into()),
+        }];
+        let mut state = TabPickerState::new(&custom);
+        state.input = "UniqueXYZ".to_string();
+        state.update_filter();
+        let filtered = state.filtered_entries();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].1.name, "UniqueXYZ");
+    }
+
+    #[test]
+    fn test_filter_case_insensitive() {
+        let custom = vec![TabPickerEntryConfig {
+            name: "MySpecialTool".into(),
+            command: "mst".into(),
+            description: None,
+        }];
+        let mut state = TabPickerState::new(&custom);
+        state.input = "myspecialtool".to_string();
+        state.update_filter();
+        let filtered = state.filtered_entries();
+        assert!(
+            filtered.iter().any(|(_, e)| e.name == "MySpecialTool"),
+            "filter should be case-insensitive"
+        );
+    }
+
+    #[test]
+    fn test_filter_matches_description() {
+        let custom = vec![TabPickerEntryConfig {
+            name: "Foo".into(),
+            command: "foo".into(),
+            description: Some("Unique Description Here".into()),
+        }];
+        let mut state = TabPickerState::new(&custom);
+        state.input = "unique description".to_string();
+        state.update_filter();
+        let filtered = state.filtered_entries();
+        assert!(
+            filtered.iter().any(|(_, e)| e.name == "Foo"),
+            "should match on description"
+        );
+    }
+
+    #[test]
+    fn test_filter_matches_command() {
+        let custom = vec![TabPickerEntryConfig {
+            name: "Foo".into(),
+            command: "my_unique_command_xyz".into(),
+            description: None,
+        }];
+        let mut state = TabPickerState::new(&custom);
+        state.input = "unique_command".to_string();
+        state.update_filter();
+        let filtered = state.filtered_entries();
+        assert!(
+            filtered.iter().any(|(_, e)| e.name == "Foo"),
+            "should match on command"
+        );
+    }
+
+    #[test]
+    fn test_filter_no_match() {
+        let mut state = TabPickerState::new(&[]);
+        state.input = "zzzzz_no_match_ever".to_string();
+        state.update_filter();
+        let filtered = state.filtered_entries();
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_filter_clears_restores_all() {
+        let mut state = TabPickerState::new(&[]);
+        let total = state.entries.len();
+        state.input = "zzzzz".to_string();
+        state.update_filter();
+        assert_eq!(state.filtered_entries().len(), 0);
+        state.input.clear();
+        state.update_filter();
+        assert_eq!(state.filtered_entries().len(), total);
+    }
+
+    #[test]
+    fn test_filter_resets_selection_when_out_of_bounds() {
+        let custom = vec![
+            TabPickerEntryConfig { name: "A".into(), command: "a".into(), description: None },
+            TabPickerEntryConfig { name: "B".into(), command: "b".into(), description: None },
+        ];
+        let mut state = TabPickerState::new(&custom);
+        // Move to a high index
+        for _ in 0..state.entries.len() {
+            state.move_down();
+        }
+        let prev_selected = state.selected;
+        // Now filter to only 1 result
+        state.input = "zzzzz_no_match".to_string();
+        state.update_filter();
+        // Selected should be clamped
+        assert_eq!(state.selected, 0);
+        assert!(prev_selected > 0, "test setup: should have moved down");
+    }
+
+    #[test]
+    fn test_selected_command_shell() {
+        let state = TabPickerState::new(&[]);
+        // Shell entry has no command -> returns just base
+        let cmd = state.selected_command().unwrap();
+        assert_eq!(cmd, "new-window");
+    }
+
+    #[test]
+    fn test_selected_command_split_horizontal() {
+        let custom = vec![TabPickerEntryConfig {
+            name: "Vim".into(),
+            command: "vim".into(),
+            description: None,
+        }];
+        let mut state = TabPickerState::with_mode(&custom, TabPickerMode::SplitHorizontal);
+        // Select the custom entry
+        for (i, entry) in state.entries.iter().enumerate() {
+            if entry.name == "Vim" {
+                state.selected = state.filtered.iter().position(|&idx| idx == i).unwrap();
+                break;
+            }
+        }
+        let cmd = state.selected_command().unwrap();
+        assert_eq!(cmd, "split-window -h -c vim");
+    }
+
+    #[test]
+    fn test_selected_command_split_vertical() {
+        let custom = vec![TabPickerEntryConfig {
+            name: "Vim".into(),
+            command: "vim".into(),
+            description: None,
+        }];
+        let mut state = TabPickerState::with_mode(&custom, TabPickerMode::SplitVertical);
+        for (i, entry) in state.entries.iter().enumerate() {
+            if entry.name == "Vim" {
+                state.selected = state.filtered.iter().position(|&idx| idx == i).unwrap();
+                break;
+            }
+        }
+        let cmd = state.selected_command().unwrap();
+        assert_eq!(cmd, "split-window -v -c vim");
+    }
+
+    #[test]
+    fn test_section_labels() {
+        assert_eq!(TabPickerSection::Shells.label(), "Shells");
+        assert_eq!(TabPickerSection::Custom.label(), "Custom");
+        assert_eq!(TabPickerSection::Tools.label(), "Tools");
+        assert_eq!(TabPickerSection::Recent.label(), "Recent");
+    }
+}
+
 pub fn render(state: &TabPickerState, theme: &Theme, frame: &mut Frame, area: Rect) {
-    let popup_w = 55u16.min(area.width.saturating_sub(4));
-    let popup_h = 20u16.min(area.height.saturating_sub(4));
-    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-    let popup = Rect::new(x, y, popup_w, popup_h);
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::FixedClamped { width: 55, height: 20, pad: 4 },
+        dialog::PopupAnchor::Center,
+        area,
+    );
 
-    frame.render_widget(Clear, popup);
+    let title = match state.mode {
+        TabPickerMode::NewTab => "New Tab",
+        TabPickerMode::SplitHorizontal => "Split Right",
+        TabPickerMode::SplitVertical => "Split Down",
+    };
 
-    let block = Block::default()
-        .title(" New Tab ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.accent));
-
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let inner = dialog::render_popup(frame, popup_area, title, theme);
 
     if inner.height < 3 || inner.width < 10 {
         return;
     }
 
-    // Input line
-    let input_line = Line::from(vec![
-        Span::styled("> ", Style::default().fg(theme.accent)),
-        Span::raw(&state.input),
-        Span::styled("_", Style::default().fg(Color::DarkGray)),
-    ]);
+    // Filter input
     let input_area = Rect::new(inner.x, inner.y, inner.width, 1);
-    frame.render_widget(Paragraph::new(input_line), input_area);
+    dialog::render_filter_input_placeholder(frame, input_area, &state.input, Some("command"), theme);
 
     // Separator
     let sep_area = Rect::new(inner.x, inner.y + 1, inner.width, 1);
-    let sep = Line::from("\u{2500}".repeat(inner.width as usize));
-    frame.render_widget(
-        Paragraph::new(sep).style(Style::default().fg(Color::DarkGray)),
-        sep_area,
-    );
+    dialog::render_separator(frame, sep_area);
 
-    // Entries with section headers
+    // Build list items with section info
+    let filtered = state.filtered_entries();
+    let show_sections = state.input.is_empty();
+    let has_input = !state.input.trim().is_empty();
+    let no_matches = filtered.is_empty();
+
+    // Custom command label shown when input doesn't match or as first option
+    let run_label = format!("Run '{}'", state.input.trim());
+    let run_desc = "Custom command".to_string();
+
+    let mut items: Vec<dialog::ListItem> = Vec::new();
+
+    // Show "Run '<input>'" at the top when there are no matches
+    if has_input && no_matches {
+        items.push(dialog::ListItem {
+            label: &run_label,
+            description: &run_desc,
+            section: None,
+            hint: None,
+        });
+    }
+
+    for (_, entry) in &filtered {
+        items.push(dialog::ListItem {
+            label: &entry.name,
+            description: &entry.description,
+            section: if show_sections {
+                Some(entry.section.label())
+            } else {
+                None
+            },
+            hint: None,
+        });
+    }
+
     let list_area = Rect::new(
         inner.x,
         inner.y + 2,
         inner.width,
         inner.height.saturating_sub(2),
     );
-    let filtered = state.filtered_entries();
-
-    let mut row_y = 0u16;
-    let mut last_section: Option<&TabPickerSection> = None;
-    let is_filtered = !state.input.is_empty();
-
-    for (i, (_idx, entry)) in filtered.iter().enumerate() {
-        // Section header (only when not filtering)
-        if !is_filtered {
-            let show_header = match last_section {
-                None => true,
-                Some(prev) => *prev != entry.section,
-            };
-            if show_header {
-                if row_y >= list_area.height {
-                    break;
-                }
-                let header_line = Line::from(Span::styled(
-                    format!(" {} ", entry.section.label()),
-                    Style::default()
-                        .fg(theme.dim)
-                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-                ));
-                let row = Rect::new(list_area.x, list_area.y + row_y, list_area.width, 1);
-                frame.render_widget(Paragraph::new(header_line), row);
-                row_y += 1;
-                last_section = Some(&entry.section);
-            }
-        }
-
-        if row_y >= list_area.height {
-            break;
-        }
-
-        let is_selected = i == state.selected;
-        let style = if is_selected {
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.fg)
-        };
-
-        let prefix = if is_selected { "\u{25B8} " } else { "  " };
-        let line = Line::from(vec![
-            Span::styled(prefix, style),
-            Span::styled(&entry.name, style),
-            Span::styled(
-                format!("  {}", &entry.description),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]);
-
-        let row = Rect::new(list_area.x, list_area.y + row_y, list_area.width, 1);
-        frame.render_widget(Paragraph::new(line), row);
-        row_y += 1;
-    }
+    dialog::render_select_list(frame, list_area, &items, state.selected, show_sections, theme);
 }

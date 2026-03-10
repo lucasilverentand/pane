@@ -30,8 +30,8 @@ fn render_screen_inner(
     let mut lines = Vec::with_capacity(rows);
 
     for row in 0..rows {
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        let mut current_text = String::new();
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(4);
+        let mut current_text = String::with_capacity(cols);
         let mut current_style = Style::default();
         let mut rendered_cols = 0usize;
 
@@ -51,13 +51,10 @@ fn render_screen_inner(
             // Apply copy mode overlays
             if let Some(cms) = cms {
                 if row == cms.cursor_row && col == cms.cursor_col {
-                    // Copy mode cursor: reversed
                     style = style.add_modifier(Modifier::REVERSED);
                 } else if cms.is_selected(row, col) {
-                    // Selection: reversed fg/bg
                     style = style.add_modifier(Modifier::REVERSED);
                 } else if cms.is_search_match(row, col) {
-                    // Search match: yellow background
                     style = style.bg(Color::Yellow).fg(Color::Black);
                 }
             }
@@ -67,42 +64,49 @@ fn render_screen_inner(
                     std::mem::take(&mut current_text),
                     current_style,
                 ));
+                current_text = String::with_capacity(cols - rendered_cols);
             }
             current_style = style;
-
-            let mut text = match cell {
-                Some(cell) => {
-                    let ch = cell.contents();
-                    if ch.is_empty() {
-                        " ".to_string()
-                    } else {
-                        ch.to_string()
-                    }
-                }
-                None => " ".to_string(),
-            };
-
-            let mut width = UnicodeWidthStr::width(text.as_str());
-            if width == 0 {
-                text = " ".to_string();
-                width = 1;
-            }
 
             let remaining = cols.saturating_sub(rendered_cols);
             if remaining == 0 {
                 break;
             }
-            if width > remaining {
-                text = " ".repeat(remaining);
-                width = remaining;
-            }
 
-            current_text.push_str(&text);
-            rendered_cols += width;
+            match cell {
+                Some(cell) => {
+                    let ch = cell.contents();
+                    if ch.is_empty() {
+                        current_text.push(' ');
+                        rendered_cols += 1;
+                    } else {
+                        let w = UnicodeWidthStr::width(ch);
+                        if w == 0 {
+                            current_text.push(' ');
+                            rendered_cols += 1;
+                        } else if w > remaining {
+                            for _ in 0..remaining {
+                                current_text.push(' ');
+                            }
+                            rendered_cols += remaining;
+                        } else {
+                            current_text.push_str(ch);
+                            rendered_cols += w;
+                        }
+                    }
+                }
+                None => {
+                    current_text.push(' ');
+                    rendered_cols += 1;
+                }
+            }
         }
 
         if rendered_cols < cols {
-            current_text.push_str(&" ".repeat(cols - rendered_cols));
+            let pad = cols - rendered_cols;
+            for _ in 0..pad {
+                current_text.push(' ');
+            }
         }
 
         if !current_text.is_empty() {
@@ -153,6 +157,7 @@ fn convert_color(color: vt100::Color) -> Color {
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
 }
+
 
 #[cfg(test)]
 mod tests {
