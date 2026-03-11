@@ -9,6 +9,7 @@
       "Bash(PATH=\"$HOME/.cargo/bin:$PATH\" cargo test:*)"
     ]
   },
+  "outputStyle": "default",
   "sandbox": {
     "enabled": false,
     "autoAllowBashIfSandboxed": false
