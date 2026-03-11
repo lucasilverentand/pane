@@ -103,6 +103,7 @@ pub fn render(
     active_idx: usize,
     theme: &Theme,
     focused: bool,
+    hover: Option<(u16, u16)>,
     frame: &mut Frame,
     area: Rect,
 ) {
@@ -118,6 +119,9 @@ pub fn render(
     let tab_area = padded_tab_area(area);
     let layout = compute_layout(workspace_names, active_idx, tab_area);
     let sep = " \u{B7} "; // " · "
+
+    // Determine which element is hovered
+    let hovered = hover.and_then(|(hx, hy)| hit_test(workspace_names, active_idx, area, hx, hy));
 
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut first = true;
@@ -139,6 +143,7 @@ pub fn render(
         first = false;
 
         let is_active = i == active_idx;
+        let is_hovered = matches!(hovered, Some(WorkspaceBarClick::Tab(t)) if t == i);
         let display_name = truncate_name(name, 20);
         let label = format!(" {} ", display_name);
 
@@ -146,6 +151,8 @@ pub fn render(
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
+        } else if is_hovered {
+            Style::default().fg(theme.fg)
         } else {
             Style::default().fg(theme.dim)
         };
@@ -160,7 +167,13 @@ pub fn render(
         if gap > 0 {
             spans.push(Span::raw(" ".repeat(gap as usize)));
         }
-        spans.push(Span::styled(" + ", Style::default().fg(theme.accent)));
+        let plus_hovered = matches!(hovered, Some(WorkspaceBarClick::NewWorkspace));
+        let plus_style = if plus_hovered {
+            Style::default().fg(theme.fg)
+        } else {
+            Style::default().fg(theme.accent)
+        };
+        spans.push(Span::styled(" + ", plus_style));
     }
 
     let line = Line::from(spans);

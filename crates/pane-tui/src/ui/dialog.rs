@@ -241,6 +241,7 @@ pub fn render_select_list(
     items: &[ListItem],
     selected: usize,
     show_sections: bool,
+    hover: Option<(u16, u16)>,
     theme: &Theme,
 ) -> u16 {
     if area.height == 0 || items.is_empty() {
@@ -298,10 +299,16 @@ pub fn render_select_list(
         }
 
         let is_selected = i == selected;
+        let actual_y = area.y + row_y;
+        let is_hovered = hover.map_or(false, |(hx, hy)| {
+            hy == actual_y && hx >= area.x && hx < area.x + area.width
+        });
         let style = if is_selected {
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
+        } else if is_hovered {
+            Style::default().fg(theme.accent)
         } else {
             Style::default().fg(theme.fg)
         };

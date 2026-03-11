@@ -47,6 +47,7 @@ pub struct Client {
     pub confirm_message: Option<String>,
     pub resize_state: Option<ResizeState>,
     pub workspace_bar_focused: bool,
+    pub hover: Option<(u16, u16)>,
     pub should_quit: bool,
     pub needs_redraw: bool,
     pub rename_input: String,
@@ -358,6 +359,7 @@ impl Client {
             confirm_message: None,
             resize_state: None,
             workspace_bar_focused: false,
+            hover: None,
             should_quit: false,
             needs_redraw: true,
             rename_input: String::new(),
@@ -778,6 +780,7 @@ impl Client {
                 }
             }
             AppEvent::MouseMove { x, y } => {
+                self.hover = Some((x, y));
                 let mut w = writer.lock().await;
                 let _ = send_request(&mut *w, &ClientRequest::MouseMove { x, y }).await;
             }

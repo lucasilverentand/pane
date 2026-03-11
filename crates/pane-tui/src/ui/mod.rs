@@ -47,6 +47,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
             client.render_state.active_workspace,
             theme,
             client.workspace_bar_focused,
+            client.hover,
             frame,
             header,
         );
@@ -77,6 +78,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                     &client.mode,
                     copy_mode_state,
                     &client.config,
+                    client.hover,
                     frame,
                     body,
                 );
@@ -120,6 +122,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                             &client.mode,
                             copy_mode_state,
                             &client.config,
+                            client.hover,
                             frame,
                             *rect,
                         );
@@ -192,6 +195,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                     &client.mode,
                     copy_mode_state,
                     &client.config,
+                    client.hover,
                     frame,
                     fw_rect,
                 );
@@ -242,12 +246,12 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                 // Render inside the active window's rect
                 let picker_area = active_window_rect(client, body)
                     .unwrap_or(frame.area());
-                tab_picker::render(tp_state, theme, frame, picker_area);
+                tab_picker::render(tp_state, theme, client.hover, frame, picker_area);
             }
         }
         Mode::ContextMenu => {
             if let Some(ref cm_state) = client.context_menu_state {
-                context_menu::render(cm_state, theme, frame, frame.area());
+                context_menu::render(cm_state, theme, client.hover, frame, frame.area());
             }
         }
         Mode::Rename => {
@@ -327,6 +331,21 @@ fn render_confirm_dialog(
     );
     let inner = dialog::render_popup(frame, popup_area, "confirm", theme);
 
+    let hovered = client.hover.and_then(|(hx, hy)| {
+        confirm_dialog_hit_test(area, hx, hy)
+    });
+
+    let cancel_bg = if matches!(hovered, Some(ConfirmDialogClick::Cancel)) {
+        theme.fg
+    } else {
+        theme.dim
+    };
+    let confirm_bg = if matches!(hovered, Some(ConfirmDialogClick::Confirm)) {
+        theme.fg
+    } else {
+        theme.accent
+    };
+
     let lines = vec![
         Line::raw(""),
         Line::styled(format!("  {}", message), Style::default().fg(Color::White)),
@@ -337,7 +356,7 @@ fn render_confirm_dialog(
                 " Cancel ",
                 Style::default()
                     .fg(Color::White)
-                    .bg(theme.dim)
+                    .bg(cancel_bg)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
@@ -345,7 +364,7 @@ fn render_confirm_dialog(
                 " Confirm ",
                 Style::default()
                     .fg(Color::White)
-                    .bg(theme.accent)
+                    .bg(confirm_bg)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),

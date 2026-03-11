@@ -1326,7 +1326,7 @@ min_pane_width = 80
         let config = Config::from_raw(raw);
         assert_eq!(config.theme.accent, Color::Green);
         // Unchanged defaults
-        assert_eq!(config.theme.border_active, Color::Cyan);
+        assert_eq!(config.theme.border_active, Color::DarkGray);
         assert_eq!(config.behavior.fold_bar_size, 1);
     }
 

@@ -129,7 +129,13 @@ pub fn pane_body_menu(x: u16, y: u16) -> ContextMenuState {
 }
 
 /// Render the context menu popup.
-pub fn render(state: &ContextMenuState, theme: &Theme, frame: &mut Frame, area: Rect) {
+pub fn render(
+    state: &ContextMenuState,
+    theme: &Theme,
+    hover: Option<(u16, u16)>,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let (menu_w, menu_h) = menu_dimensions(state, area);
 
     let popup_area = dialog::popup_rect(
@@ -147,15 +153,20 @@ pub fn render(state: &ContextMenuState, theme: &Theme, frame: &mut Frame, area: 
     // No title for context menus
     let inner = dialog::render_popup(frame, popup_area, "", theme);
 
+    let hovered_item = hover.and_then(|(hx, hy)| hit_test(state, area, hx, hy));
+
     for (i, item) in state.items.iter().enumerate() {
         if i as u16 >= inner.height {
             break;
         }
         let is_selected = i == state.selected;
+        let is_hovered = hovered_item == Some(i);
         let style = if is_selected {
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
+        } else if is_hovered {
+            Style::default().fg(theme.accent)
         } else {
             Style::default().fg(theme.fg)
         };

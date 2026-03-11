@@ -793,7 +793,7 @@ mod tests {
     }
 }
 
-pub fn render(state: &TabPickerState, theme: &Theme, frame: &mut Frame, area: Rect) {
+pub fn render(state: &TabPickerState, theme: &Theme, hover: Option<(u16, u16)>, frame: &mut Frame, area: Rect) {
     let popup_area = compute_popup_area(area);
 
     let title = match state.mode {
@@ -877,5 +877,5 @@ pub fn render(state: &TabPickerState, theme: &Theme, frame: &mut Frame, area: Re
         inner.width,
         inner.height.saturating_sub(2),
     );
-    dialog::render_select_list(frame, list_area, &items, state.selected, show_sections, theme);
+    dialog::render_select_list(frame, list_area, &items, state.selected, show_sections, hover, theme);
 }

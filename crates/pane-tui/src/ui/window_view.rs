@@ -63,6 +63,7 @@ pub fn render_group_from_snapshot(
     mode: &Mode,
     copy_mode_state: Option<&CopyModeState>,
     config: &Config,
+    hover: Option<(u16, u16)>,
     frame: &mut Frame,
     area: Rect,
 ) {
@@ -128,7 +129,7 @@ pub fn render_group_from_snapshot(
     }
     let areas = Layout::vertical(constraints).split(padded);
 
-    render_tab_bar_from_snapshot(group, theme, frame, areas[0]);
+    render_tab_bar_from_snapshot(group, theme, hover, frame, areas[0]);
     render_tab_separator(theme, frame, areas[1]);
     let content_area = areas[2];
     let search_area = areas.get(3).copied();
@@ -159,6 +160,7 @@ fn render_tab_separator(theme: &Theme, frame: &mut Frame, area: Rect) {
 fn render_tab_bar_from_snapshot(
     group: &pane_protocol::protocol::WindowSnapshot,
     theme: &Theme,
+    hover: Option<(u16, u16)>,
     frame: &mut Frame,
     area: Rect,
 ) {
@@ -167,9 +169,35 @@ fn render_tab_bar_from_snapshot(
     const PLUS_TEXT: &str = " + ";
     const PLUS_RESERVE: u16 = 3;
 
+    // Check if hover is on the tab bar row
+    let hover_x = hover.and_then(|(hx, hy)| if hy == area.y { Some(hx) } else { None });
+
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut cursor_x = area.x;
     let max_x = area.x + area.width;
+
+    // First pass: compute tab positions for hover detection
+    let mut tab_ranges: Vec<(u16, u16)> = Vec::new();
+    let mut pos = area.x;
+    for (i, tab) in group.tabs.iter().enumerate() {
+        let is_active_tab = i == group.active_tab;
+        let label_width = tab.title.len() as u16 + 2; // " title "
+        if pos + label_width + SEP_WIDTH + PLUS_RESERVE > max_x && !is_active_tab {
+            tab_ranges.push((0, 0));
+            continue;
+        }
+        if i > 0 {
+            pos += SEP_WIDTH;
+        }
+        let start = pos;
+        pos += label_width;
+        tab_ranges.push((start, pos));
+    }
+    let plus_start = if PLUS_RESERVE <= max_x.saturating_sub(area.x) {
+        Some(max_x - PLUS_RESERVE)
+    } else {
+        None
+    };
 
     for (i, tab) in group.tabs.iter().enumerate() {
         let is_active_tab = i == group.active_tab;
@@ -185,10 +213,15 @@ fn render_tab_bar_from_snapshot(
             cursor_x += SEP_WIDTH;
         }
 
+        let (tab_start, tab_end) = tab_ranges[i];
+        let is_hovered = hover_x.map_or(false, |hx| hx >= tab_start && hx < tab_end);
+
         let style = if is_active_tab {
             Style::default()
                 .fg(theme.tab_active)
                 .add_modifier(Modifier::BOLD)
+        } else if is_hovered {
+            Style::default().fg(theme.fg)
         } else {
             Style::default().fg(theme.tab_inactive)
         };
@@ -198,13 +231,18 @@ fn render_tab_bar_from_snapshot(
     }
 
     // Right-align the + button
-    if PLUS_RESERVE <= max_x.saturating_sub(area.x) {
-        let plus_start = max_x - PLUS_RESERVE;
-        let gap = plus_start.saturating_sub(cursor_x);
+    if let Some(ps) = plus_start {
+        let gap = ps.saturating_sub(cursor_x);
         if gap > 0 {
             spans.push(Span::raw(" ".repeat(gap as usize)));
         }
-        spans.push(Span::styled(PLUS_TEXT, Style::default().fg(theme.dim)));
+        let plus_hovered = hover_x.map_or(false, |hx| hx >= ps && hx < ps + PLUS_RESERVE);
+        let plus_style = if plus_hovered {
+            Style::default().fg(theme.fg)
+        } else {
+            Style::default().fg(theme.dim)
+        };
+        spans.push(Span::styled(PLUS_TEXT, plus_style));
     }
 
     let line = Line::from(spans);
