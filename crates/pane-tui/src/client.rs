@@ -703,6 +703,30 @@ impl Client {
                         self.tab_picker_state = None;
                         self.mode = Mode::Normal;
                     }
+                } else if self.mode == Mode::NewWorkspaceInput {
+                    let size = tui.size()?;
+                    let area = Rect::new(0, 0, size.width, size.height);
+                    if let Some(ref mut state) = self.new_workspace_input {
+                        match state.stage {
+                            NewWorkspaceStage::Directory => {
+                                if let Some(ui::DirPickerClick::Item(idx)) =
+                                    ui::dir_picker_hit_test(&state.browser, area, x, y)
+                                {
+                                    state.browser.selected = idx;
+                                    state.browser.clamp_scroll(14);
+                                } else if !ui::dir_picker_is_inside(area, x, y) {
+                                    self.new_workspace_input = None;
+                                    self.mode = Mode::Normal;
+                                }
+                            }
+                            NewWorkspaceStage::Name => {
+                                if !ui::name_picker_is_inside(area, x, y) {
+                                    self.new_workspace_input = None;
+                                    self.mode = Mode::Normal;
+                                }
+                            }
+                        }
+                    }
                 } else if self.mode == Mode::Normal
                     || self.mode == Mode::Interact
                 {
@@ -779,7 +803,13 @@ impl Client {
                 let _ = send_request(&mut *w, &ClientRequest::MouseUp { x, y }).await;
             }
             AppEvent::MouseScroll { up } => {
-                if self.mode == Mode::TabPicker {
+                if self.mode == Mode::NewWorkspaceInput {
+                    if let Some(ref mut state) = self.new_workspace_input {
+                        if matches!(state.stage, NewWorkspaceStage::Directory) {
+                            if up { state.browser.move_up(); } else { state.browser.move_down(); }
+                        }
+                    }
+                } else if self.mode == Mode::TabPicker {
                     if let Some(ref mut tp) = self.tab_picker_state {
                         if up { tp.move_up(); } else { tp.move_down(); }
                     }

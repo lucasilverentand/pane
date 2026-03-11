@@ -815,6 +815,96 @@ pub fn confirm_dialog_hit_test(
     }
 }
 
+/// Result of hit-testing the directory picker popup.
+pub enum DirPickerClick {
+    /// Clicked on a list item at the given index (relative to scroll).
+    Item(usize),
+}
+
+/// Hit-test the directory picker list. Returns which item was clicked, if any.
+/// The geometry must match `render_new_workspace_dir_stage`.
+pub fn dir_picker_hit_test(
+    browser: &crate::client::DirBrowser,
+    area: ratatui::layout::Rect,
+    x: u16,
+    y: u16,
+) -> Option<DirPickerClick> {
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::FixedClamped { width: 56, height: 22, pad: 4 },
+        dialog::PopupAnchor::Center,
+        area,
+    );
+    let inner = dialog::inner_rect(popup_area);
+    if inner.height < 5 || inner.width < 10 {
+        return None;
+    }
+
+    // List starts after path bar (1 row) + separator (1 row)
+    let list_y = inner.y + 2;
+    let hint_height = 2u16;
+    let list_height = (inner.y + inner.height).saturating_sub(list_y + hint_height) as usize;
+    if list_height == 0 {
+        return None;
+    }
+
+    // Must be within the list area
+    if x < inner.x || x >= inner.x + inner.width {
+        return None;
+    }
+    if y < list_y || y >= list_y + list_height as u16 {
+        return None;
+    }
+
+    let total_items = browser.total_count();
+    if total_items == 0 {
+        return None;
+    }
+
+    // Compute scroll offset (same logic as render)
+    let selected = browser.selected;
+    let mut scroll = browser.scroll_offset;
+    if selected >= scroll + list_height {
+        scroll = selected + 1 - list_height;
+    }
+    if selected < scroll {
+        scroll = selected;
+    }
+
+    let visual_idx = (y - list_y) as usize;
+    let item_idx = scroll + visual_idx;
+    if item_idx < total_items {
+        Some(DirPickerClick::Item(item_idx))
+    } else {
+        None
+    }
+}
+
+/// Check if a click is inside the directory picker popup area.
+pub fn dir_picker_is_inside(area: ratatui::layout::Rect, x: u16, y: u16) -> bool {
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::FixedClamped { width: 56, height: 22, pad: 4 },
+        dialog::PopupAnchor::Center,
+        area,
+    );
+    x >= popup_area.x
+        && x < popup_area.x + popup_area.width
+        && y >= popup_area.y
+        && y < popup_area.y + popup_area.height
+}
+
+/// Check if a click is inside the name stage popup area.
+pub fn name_picker_is_inside(area: ratatui::layout::Rect, x: u16, y: u16) -> bool {
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::Fixed { width: 44, height: 9 },
+        dialog::PopupAnchor::Center,
+        area,
+    );
+    x >= popup_area.x
+        && x < popup_area.x + popup_area.width
+        && y >= popup_area.y
+        && y < popup_area.y + popup_area.height
+}
+
 fn render_resize_borders(
     _layout: &pane_protocol::layout::LayoutNode,
     _active_group: pane_protocol::layout::TabId,
