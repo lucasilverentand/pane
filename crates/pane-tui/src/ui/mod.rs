@@ -287,6 +287,30 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
     }
 }
 
+/// Compute the body area (below workspace bar, above status bar).
+pub fn body_rect(client: &Client, full_area: Rect) -> Rect {
+    let show_workspace_bar = !client.render_state.workspaces.is_empty();
+    if show_workspace_bar {
+        let [_h, b, _f] = Layout::vertical([
+            Constraint::Length(workspace_bar::HEIGHT),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(full_area);
+        b
+    } else {
+        let [b, _f] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(full_area);
+        b
+    }
+}
+
+/// Compute the area used to anchor the tab picker popup (must match render logic).
+pub fn tab_picker_area(client: &Client, full_area: Rect) -> Rect {
+    let body = body_rect(client, full_area);
+    active_window_rect(client, body).unwrap_or(full_area)
+}
+
 /// Find the active window's rect from the current render state.
 fn active_window_rect(client: &Client, body: Rect) -> Option<Rect> {
     let ws = client.active_workspace()?;

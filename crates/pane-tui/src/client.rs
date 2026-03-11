@@ -671,7 +671,8 @@ impl Client {
                 } else if self.mode == Mode::TabPicker {
                     let picker_area = {
                         let size = tui.size()?;
-                        Rect::new(0, 0, size.width, size.height)
+                        let full_area = Rect::new(0, 0, size.width, size.height);
+                        ui::tab_picker_area(self, full_area)
                     };
                     if crate::ui::tab_picker::is_inside_popup(picker_area, x, y) {
                         // Check if we hit a list item
