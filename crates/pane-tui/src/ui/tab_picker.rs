@@ -145,10 +145,12 @@ fn build_command_string(mode: TabPickerMode, command: Option<&str>, shell: Optio
     };
     let mut parts = base.to_string();
     if let Some(cmd) = command {
-        parts.push_str(&format!(" -c \"{}\"", cmd));
+        let escaped = cmd.replace('\\', "\\\\").replace('"', "\\\"");
+        parts.push_str(&format!(" -c \"{}\"", escaped));
     }
     if let Some(sh) = shell {
-        parts.push_str(&format!(" -s \"{}\"", sh));
+        let escaped = sh.replace('\\', "\\\\").replace('"', "\\\"");
+        parts.push_str(&format!(" -s \"{}\"", escaped));
     }
     parts
 }
@@ -803,6 +805,29 @@ mod tests {
     fn test_build_command_string_no_command() {
         let cmd = build_command_string(TabPickerMode::NewTab, None, None);
         assert_eq!(cmd, "new-window");
+    }
+
+    #[test]
+    fn test_build_command_string_escapes_quotes() {
+        let cmd = build_command_string(
+            TabPickerMode::NewTab,
+            Some("git commit -m \"fix bug\""),
+            Some("/bin/zsh"),
+        );
+        assert_eq!(
+            cmd,
+            "new-window -c \"git commit -m \\\"fix bug\\\"\" -s \"/bin/zsh\""
+        );
+    }
+
+    #[test]
+    fn test_build_command_string_escapes_backslashes() {
+        let cmd = build_command_string(
+            TabPickerMode::NewTab,
+            Some("echo \\n"),
+            None,
+        );
+        assert_eq!(cmd, "new-window -c \"echo \\\\n\"");
     }
 
     #[test]

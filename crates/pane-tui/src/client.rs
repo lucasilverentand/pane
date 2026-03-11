@@ -1290,7 +1290,9 @@ impl Client {
                         crate::ui::tab_picker::TabPickerMode::SplitHorizontal => "split-window -h",
                         crate::ui::tab_picker::TabPickerMode::SplitVertical => "split-window -v",
                     };
-                    Some(format!("{} -c \"{}\" -s \"{}\"", base, state.input.trim(), user_shell))
+                    let escaped_input = state.input.trim().replace('\\', "\\\\").replace('"', "\\\"");
+                    let escaped_shell = user_shell.replace('\\', "\\\\").replace('"', "\\\"");
+                    Some(format!("{} -c \"{}\" -s \"{}\"", base, escaped_input, escaped_shell))
                 } else {
                     None
                 };
