@@ -486,7 +486,7 @@ fn render_new_workspace_dir_stage(
     );
     row += 1;
 
-    // ── Directory listing (filtered) ──
+    // ── Directory listing (filtered) + zoxide results ──
     let hint_height = 2u16;
     let list_height = (inner.y + inner.height)
         .saturating_sub(row + hint_height) as usize;
@@ -496,14 +496,31 @@ fn render_new_workspace_dir_stage(
 
     let entries = state.browser.visible_entries();
     let selected = state.browser.selected;
+    let dir_count = entries.len();
+    let zoxide_results = &state.browser.zoxide_results;
+    let has_zoxide = !zoxide_results.is_empty();
 
+    // Build a unified list of (label, is_header) items for rendering.
+    // We use the selected index spanning both lists:
+    //   0..dir_count = directory entries
+    //   dir_count..dir_count+zoxide_count = zoxide results
+    let total_items = state.browser.total_count();
+
+    // Also account for section headers in scroll calculation
+    let zoxide_header_offset = if has_zoxide && dir_count > 0 { 1 } else { 0 };
     let scroll = {
+        // Convert selected to visual row (accounting for zoxide header)
+        let visual_selected = if selected >= dir_count {
+            selected + zoxide_header_offset
+        } else {
+            selected
+        };
         let mut s = state.browser.scroll_offset;
-        if selected >= s + list_height {
-            s = selected + 1 - list_height;
+        if visual_selected >= s + list_height {
+            s = visual_selected + 1 - list_height;
         }
-        if selected < s {
-            s = selected;
+        if visual_selected < s {
+            s = visual_selected;
         }
         s
     };
@@ -512,8 +529,9 @@ fn render_new_workspace_dir_stage(
     let selected_style = Style::default()
         .fg(theme.accent)
         .add_modifier(Modifier::BOLD);
+    let home_dir = std::env::var("HOME").unwrap_or_default();
 
-    if entries.is_empty() {
+    if total_items == 0 {
         let msg = if state.browser.input.is_empty() {
             "  (empty)"
         } else {
@@ -528,27 +546,80 @@ fn render_new_workspace_dir_stage(
             ratatui::layout::Rect::new(inner.x, row, inner.width, 1),
         );
     } else {
-        for (i, entry) in entries.iter().enumerate().skip(scroll).take(list_height) {
-            let is_selected = i == selected;
-            let prefix = if is_selected { " > " } else { "   " };
-            let display = format!("{}{}/", prefix, entry.name);
-            let max_w = inner.width as usize;
-            let display = if display.len() > max_w {
-                format!("{}…", &display[..max_w - 1])
-            } else {
-                display
-            };
-            let style = if is_selected {
-                selected_style
-            } else {
-                dir_style
-            };
-            let line = Line::from(vec![Span::styled(display, style)]);
-            let line_y = row + (i - scroll) as u16;
-            frame.render_widget(
-                Paragraph::new(line),
-                ratatui::layout::Rect::new(inner.x, line_y, inner.width, 1),
-            );
+        let mut visual_row = 0usize;
+        let max_w = inner.width as usize;
+
+        // Render directory entries
+        for (i, entry) in entries.iter().enumerate() {
+            if visual_row >= scroll + list_height { break; }
+            if visual_row >= scroll {
+                let is_selected = i == selected;
+                let prefix = if is_selected { " > " } else { "   " };
+                let display = format!("{}{}/", prefix, entry.name);
+                let display = if display.len() > max_w {
+                    format!("{}…", &display[..max_w - 1])
+                } else {
+                    display
+                };
+                let style = if is_selected { selected_style } else { dir_style };
+                let line = Line::from(vec![Span::styled(display, style)]);
+                let line_y = row + (visual_row - scroll) as u16;
+                frame.render_widget(
+                    Paragraph::new(line),
+                    ratatui::layout::Rect::new(inner.x, line_y, inner.width, 1),
+                );
+            }
+            visual_row += 1;
+        }
+
+        // Zoxide section header + results
+        if has_zoxide {
+            if dir_count > 0 {
+                // Section header
+                if visual_row >= scroll && visual_row < scroll + list_height {
+                    let header = Line::from(Span::styled(
+                        " zoxide ",
+                        Style::default()
+                            .fg(theme.dim)
+                            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                    ));
+                    let line_y = row + (visual_row - scroll) as u16;
+                    frame.render_widget(
+                        Paragraph::new(header),
+                        ratatui::layout::Rect::new(inner.x, line_y, inner.width, 1),
+                    );
+                }
+                visual_row += 1;
+            }
+
+            for (zi, zpath) in zoxide_results.iter().enumerate() {
+                if visual_row >= scroll + list_height { break; }
+                if visual_row >= scroll {
+                    let item_idx = dir_count + zi;
+                    let is_selected = item_idx == selected;
+                    let prefix = if is_selected { " > " } else { "   " };
+                    // Show path with ~ substitution
+                    let display_path = if !home_dir.is_empty() && zpath.starts_with(&home_dir) {
+                        format!("~{}", &zpath[home_dir.len()..])
+                    } else {
+                        zpath.clone()
+                    };
+                    let display = format!("{}{}", prefix, display_path);
+                    let display = if display.len() > max_w {
+                        format!("{}…", &display[..max_w - 1])
+                    } else {
+                        display
+                    };
+                    let style = if is_selected { selected_style } else { dir_style };
+                    let line = Line::from(vec![Span::styled(display, style)]);
+                    let line_y = row + (visual_row - scroll) as u16;
+                    frame.render_widget(
+                        Paragraph::new(line),
+                        ratatui::layout::Rect::new(inner.x, line_y, inner.width, 1),
+                    );
+                }
+                visual_row += 1;
+            }
         }
     }
 

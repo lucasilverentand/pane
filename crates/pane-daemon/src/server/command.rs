@@ -29,6 +29,8 @@ pub enum Command {
         target_session: Option<String>,
         window_name: Option<String>,
         command: Option<String>,
+        /// Shell to wrap the command in (e.g. "/bin/zsh -c command").
+        shell: Option<String>,
     },
     KillWindow {
         target: Option<TargetWindow>,
@@ -50,6 +52,8 @@ pub enum Command {
         target: Option<TargetPane>,
         size: Option<SplitSize>,
         command: Option<String>,
+        /// Shell to wrap the command in.
+        shell: Option<String>,
     },
     KillPane {
         target: Option<TargetPane>,
@@ -237,11 +241,12 @@ pub fn execute(
         Command::NewWindow {
             window_name,
             command,
+            shell,
             ..
         } => {
             let (cols, rows) = state.active_window_pty_size();
             let pane_id =
-                state.add_tab_to_active_group(TabKind::Shell, command.clone(), cols, rows)?;
+                state.add_tab_to_active_group(TabKind::Shell, command.clone(), shell.clone(), cols, rows)?;
             if let Some(wname) = window_name {
                 let ws = state.active_workspace_mut();
                 if let Some(group) = ws.groups.get_mut(&ws.active_group) {
@@ -332,7 +337,7 @@ pub fn execute(
         }
 
         Command::SplitWindow {
-            horizontal, target, command, ..
+            horizontal, target, command, shell, ..
         } => {
             if let Some(target) = target {
                 let group_id = resolve_pane_to_group(target, state, id_map)?;
@@ -345,7 +350,7 @@ pub fn execute(
             };
             let (cols, rows) = state.active_window_pty_size();
             let (new_group_id, new_pane_id) =
-                state.split_active_group(direction, TabKind::Shell, command.clone(), cols, rows)?;
+                state.split_active_group(direction, TabKind::Shell, command.clone(), shell.clone(), cols, rows)?;
             let pane_n = id_map.register_pane(new_pane_id);
             let win_n = id_map.register_window(new_group_id);
             broadcast_layout(state, broadcast_tx);
@@ -721,6 +726,7 @@ pub fn execute(
                 cols,
                 rows,
                 state.event_tx.clone(),
+                None,
                 None,
                 Some(tmux_env),
                 Some(&ws_cwd),
@@ -1705,6 +1711,7 @@ mod tests {
             target: None,
             size: None,
             command: None,
+            shell: None,
         };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
@@ -1727,6 +1734,7 @@ mod tests {
             target: None,
             size: None,
             command: None,
+            shell: None,
         };
         execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert_eq!(state.active_workspace().groups.len(), 2);
@@ -1741,6 +1749,7 @@ mod tests {
             target_session: None,
             window_name: None,
             command: None,
+            shell: None,
         };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
@@ -1762,6 +1771,7 @@ mod tests {
             target_session: None,
             window_name: Some("my-named-window".to_string()),
             command: None,
+            shell: None,
         };
         execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         let ws = state.active_workspace();

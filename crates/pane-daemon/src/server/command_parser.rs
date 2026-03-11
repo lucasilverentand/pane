@@ -216,6 +216,7 @@ fn parse_new_window(args: &[String]) -> Result<Command> {
     let mut target_session = None;
     let mut window_name = None;
     let mut command = None;
+    let mut shell = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -229,6 +230,10 @@ fn parse_new_window(args: &[String]) -> Result<Command> {
             }
             "-c" if i + 1 < args.len() => {
                 command = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "-s" if i + 1 < args.len() => {
+                shell = Some(args[i + 1].clone());
                 i += 2;
             }
             "-P" | "-F" => {
@@ -246,6 +251,7 @@ fn parse_new_window(args: &[String]) -> Result<Command> {
         target_session,
         window_name,
         command,
+        shell,
     })
 }
 
@@ -279,6 +285,7 @@ fn parse_split_window(args: &[String]) -> Result<Command> {
     let mut horizontal = false;
     let mut size = None;
     let mut command = None;
+    let mut shell = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -296,6 +303,10 @@ fn parse_split_window(args: &[String]) -> Result<Command> {
             }
             "-c" if i + 1 < args.len() => {
                 command = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "-s" if i + 1 < args.len() => {
+                shell = Some(args[i + 1].clone());
                 i += 2;
             }
             "-l" if i + 1 < args.len() => {
@@ -324,6 +335,7 @@ fn parse_split_window(args: &[String]) -> Result<Command> {
         target,
         size,
         command,
+        shell,
     })
 }
 
@@ -613,7 +625,8 @@ mod tests {
             Command::NewWindow {
                 target_session: None,
                 window_name: None,
-                command: None
+                command: None,
+                shell: None,
             }
         );
     }
@@ -628,6 +641,7 @@ mod tests {
                 target: None,
                 size: None,
                 command: None,
+                shell: None,
             }
         );
     }
@@ -642,6 +656,7 @@ mod tests {
                 target: None,
                 size: None,
                 command: None,
+                shell: None,
             }
         );
     }
@@ -656,6 +671,7 @@ mod tests {
                 target: Some(TargetPane::Id(3)),
                 size: None,
                 command: None,
+                shell: None,
             }
         );
     }
@@ -670,6 +686,7 @@ mod tests {
                 target: None,
                 size: Some(SplitSize::Percent(70)),
                 command: None,
+                shell: None,
             }
         );
     }
@@ -1051,6 +1068,7 @@ mod tests {
                 target: None,
                 size: Some(SplitSize::Percent(50)),
                 command: None,
+                shell: None,
             }
         );
     }
@@ -1066,6 +1084,7 @@ mod tests {
                 target: None,
                 size: None,
                 command: None,
+                shell: None,
             }
         );
     }
@@ -1080,6 +1099,7 @@ mod tests {
                 target: None,
                 size: Some(SplitSize::Percent(0)),
                 command: None,
+                shell: None,
             }
         );
     }
@@ -1095,6 +1115,7 @@ mod tests {
                 target: None,
                 size: Some(SplitSize::Percent(255)),
                 command: None,
+                shell: None,
             }
         );
     }
@@ -1109,6 +1130,7 @@ mod tests {
                 target: None,
                 size: Some(SplitSize::Cells(20)),
                 command: None,
+                shell: None,
             }
         );
     }
@@ -1140,6 +1162,7 @@ mod tests {
                 target: None,
                 size: None,
                 command: None,
+                shell: None,
             }
         );
     }
@@ -1154,6 +1177,7 @@ mod tests {
                 target: None,
                 size: None,
                 command: None,
+                shell: None,
             }
         );
     }
@@ -1358,7 +1382,8 @@ mod tests {
             Command::NewWindow {
                 target_session: None,
                 window_name: None,
-                command: None
+                command: None,
+                shell: None,
             }
         );
         assert_eq!(
@@ -1384,6 +1409,7 @@ mod tests {
                 target: None,
                 size: None,
                 command: None,
+                shell: None,
             }
         );
         assert_eq!(parse("killp").unwrap(), Command::KillPane { target: None });
@@ -1524,6 +1550,7 @@ mod tests {
                 target_session: None,
                 window_name: Some("mywin".to_string()),
                 command: None,
+                shell: None,
             }
         );
     }
@@ -1537,6 +1564,7 @@ mod tests {
                 target_session: Some("mysession".to_string()),
                 window_name: Some("mywin".to_string()),
                 command: None,
+                shell: None,
             }
         );
     }

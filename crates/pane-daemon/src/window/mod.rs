@@ -135,6 +135,7 @@ impl Tab {
         rows: u16,
         event_tx: mpsc::UnboundedSender<AppEvent>,
         command: Option<String>,
+        shell: Option<String>,
         tmux_env: Option<pty::TmuxEnv>,
         cwd: Option<&std::path::Path>,
     ) -> anyhow::Result<Self> {
@@ -145,27 +146,45 @@ impl Tab {
         let (cmd, args): (&str, Vec<&str>) = match &kind {
             TabKind::Shell => {
                 if let Some(ref cmd_str) = command {
-                    let leaked: &'static str = Box::leak(cmd_str.clone().into_boxed_str());
-                    let parts: Vec<&'static str> = leaked.split_whitespace().collect();
-                    if parts.len() > 1 {
-                        (parts[0], parts[1..].to_vec())
+                    if let Some(ref shell_path) = shell {
+                        // Run command wrapped in the specified shell: shell -c "command"
+                        let shell_leaked: &'static str =
+                            Box::leak(shell_path.clone().into_boxed_str());
+                        let cmd_leaked: &'static str =
+                            Box::leak(cmd_str.clone().into_boxed_str());
+                        (shell_leaked, vec!["-c", cmd_leaked])
                     } else {
-                        (leaked, vec![])
+                        // Run command directly (split by whitespace)
+                        let leaked: &'static str = Box::leak(cmd_str.clone().into_boxed_str());
+                        let parts: Vec<&'static str> = leaked.split_whitespace().collect();
+                        if parts.len() > 1 {
+                            (parts[0], parts[1..].to_vec())
+                        } else {
+                            (leaked, vec![])
+                        }
                     }
+                } else if let Some(ref shell_path) = shell {
+                    // Shell specified but no command — just start that shell
+                    let shell_leaked: &'static str =
+                        Box::leak(shell_path.clone().into_boxed_str());
+                    (shell_leaked, vec![])
                 } else {
-                    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-                    let shell: &'static str = Box::leak(shell.into_boxed_str());
-                    (shell, vec![])
+                    let default_shell =
+                        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+                    let shell_leaked: &'static str = Box::leak(default_shell.into_boxed_str());
+                    (shell_leaked, vec![])
                 }
             }
             TabKind::Nvim => ("nvim", vec![]),
             TabKind::Agent => ("claude", vec![]),
             TabKind::DevServer => {
                 let cmd_str = command.as_deref().unwrap_or("echo 'no command'");
-                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-                let shell: &'static str = Box::leak(shell.into_boxed_str());
-                let cmd_str: &'static str = Box::leak(cmd_str.to_string().into_boxed_str());
-                (shell, vec!["-c", cmd_str])
+                let default_shell =
+                    std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+                let shell_leaked: &'static str = Box::leak(default_shell.into_boxed_str());
+                let cmd_leaked: &'static str =
+                    Box::leak(cmd_str.to_string().into_boxed_str());
+                (shell_leaked, vec!["-c", cmd_leaked])
             }
         };
 

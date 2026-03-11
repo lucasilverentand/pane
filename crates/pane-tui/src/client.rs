@@ -84,6 +84,10 @@ pub struct DirBrowser {
     pub input: String,
     pub selected: usize,
     pub scroll_offset: usize,
+    /// Whether zoxide is available on the system.
+    pub has_zoxide: bool,
+    /// Zoxide query results (absolute paths, ranked by frecency).
+    pub zoxide_results: Vec<String>,
 }
 
 pub struct DirEntry {
@@ -92,6 +96,11 @@ pub struct DirEntry {
 
 impl DirBrowser {
     pub fn new(path: std::path::PathBuf) -> Self {
+        let has_zoxide = std::process::Command::new("sh")
+            .args(["-c", "command -v zoxide >/dev/null 2>&1"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
         let mut browser = Self {
             current_dir: path,
             all_entries: Vec::new(),
@@ -99,6 +108,8 @@ impl DirBrowser {
             input: String::new(),
             selected: 0,
             scroll_offset: 0,
+            has_zoxide,
+            zoxide_results: Vec::new(),
         };
         browser.refresh();
         browser
@@ -131,6 +142,7 @@ impl DirBrowser {
     pub fn update_filter(&mut self) {
         if self.input.is_empty() {
             self.filtered = (0..self.all_entries.len()).collect();
+            self.zoxide_results.clear();
         } else {
             let query = self.input.to_lowercase();
             self.filtered = self
@@ -140,11 +152,37 @@ impl DirBrowser {
                 .filter(|(_, e)| e.name.to_lowercase().contains(&query))
                 .map(|(i, _)| i)
                 .collect();
+
+            // Query zoxide for frecency-ranked results
+            if self.has_zoxide {
+                self.zoxide_results = query_zoxide(&self.input);
+            }
         }
-        if self.selected >= self.filtered.len() {
-            self.selected = self.filtered.len().saturating_sub(1);
+        let total = self.total_count();
+        if self.selected >= total {
+            self.selected = total.saturating_sub(1);
         }
         self.scroll_offset = 0;
+    }
+
+    /// Total number of selectable items (dir entries + zoxide results).
+    pub fn total_count(&self) -> usize {
+        self.filtered.len() + self.zoxide_results.len()
+    }
+
+    /// Whether the current selection is a zoxide result.
+    pub fn selected_is_zoxide(&self) -> bool {
+        self.selected >= self.filtered.len()
+    }
+
+    /// Get the zoxide result path for the current selection (if applicable).
+    pub fn selected_zoxide_path(&self) -> Option<&str> {
+        if self.selected_is_zoxide() {
+            let zi = self.selected - self.filtered.len();
+            self.zoxide_results.get(zi).map(|s| s.as_str())
+        } else {
+            None
+        }
     }
 
     /// Get the visible (filtered) entries.
@@ -152,9 +190,16 @@ impl DirBrowser {
         self.filtered.iter().map(|&i| &self.all_entries[i]).collect()
     }
 
-    /// Enter the selected filtered entry.
+    /// Enter the selected filtered entry or zoxide result.
     pub fn enter_selected(&mut self) {
-        if let Some(&idx) = self.filtered.get(self.selected) {
+        if let Some(zpath) = self.selected_zoxide_path().map(|s| s.to_string()) {
+            // Selected a zoxide result — jump to that directory
+            let path = std::path::PathBuf::from(&zpath);
+            if path.is_dir() {
+                self.current_dir = path;
+                self.refresh();
+            }
+        } else if let Some(&idx) = self.filtered.get(self.selected) {
             let entry = &self.all_entries[idx];
             let new_path = self.current_dir.join(&entry.name);
             if new_path.is_dir() {
@@ -215,7 +260,7 @@ impl DirBrowser {
     }
 
     pub fn move_down(&mut self) {
-        if self.selected + 1 < self.filtered.len() {
+        if self.selected + 1 < self.total_count() {
             self.selected += 1;
             self.clamp_scroll(14);
         }
@@ -245,6 +290,14 @@ impl DirBrowser {
 
     /// Display path including the currently selected entry (for preview).
     pub fn display_path_with_selected(&self) -> String {
+        if let Some(zpath) = self.selected_zoxide_path() {
+            // Show the zoxide path with ~ substitution
+            let home = std::env::var("HOME").unwrap_or_default();
+            if !home.is_empty() && zpath.starts_with(&home) {
+                return format!("~{}", &zpath[home.len()..]);
+            }
+            return zpath.to_string();
+        }
         let base = self.display_path();
         if let Some(&idx) = self.filtered.get(self.selected) {
             let name = &self.all_entries[idx].name;
@@ -256,6 +309,23 @@ impl DirBrowser {
         } else {
             base
         }
+    }
+}
+
+/// Query zoxide for directories matching the input (up to 5 results).
+fn query_zoxide(input: &str) -> Vec<String> {
+    let output = std::process::Command::new("zoxide")
+        .args(["query", "-l", "--", input])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .take(5)
+                .map(|s| s.to_string())
+                .collect()
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -613,6 +683,32 @@ impl Client {
                             }
                         }
                     }
+                } else if self.mode == Mode::TabPicker {
+                    let picker_area = {
+                        let size = tui.size()?;
+                        Rect::new(0, 0, size.width, size.height)
+                    };
+                    if crate::ui::tab_picker::is_inside_popup(picker_area, x, y) {
+                        // Check if we hit a list item
+                        let click = self.tab_picker_state.as_ref()
+                            .and_then(|s| crate::ui::tab_picker::hit_test(s, picker_area, x, y));
+                        if let Some(crate::ui::tab_picker::TabPickerClick::Item(idx)) = click {
+                            let tp = self.tab_picker_state.as_mut().unwrap();
+                            tp.selected = idx;
+                            let cmd = tp.selected_command();
+                            if let Some(cmd) = cmd {
+                                let mut w = writer.lock().await;
+                                let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                            }
+                            self.tab_picker_state = None;
+                            self.mode = Mode::Interact;
+                        }
+                        // Click inside popup but not on an item — keep picker open
+                    } else {
+                        // Click outside popup — dismiss
+                        self.tab_picker_state = None;
+                        self.mode = Mode::Normal;
+                    }
                 } else if self.mode == Mode::Normal
                     || self.mode == Mode::Interact
                 {
@@ -666,8 +762,10 @@ impl Client {
 
                     // Check if click hit a tab bar + button (open picker client-side)
                     if self.hit_test_tab_bar_plus(tui, x, y) {
-                        self.tab_picker_state =
-                            Some(TabPickerState::new(&self.config.tab_picker_entries));
+                        self.tab_picker_state = Some(TabPickerState::new(
+                            &self.config.tab_picker_entries,
+                            &self.config.favorites,
+                        ));
                         self.mode = Mode::TabPicker;
                         return Ok(());
                     }
@@ -687,8 +785,14 @@ impl Client {
                 let _ = send_request(&mut *w, &ClientRequest::MouseUp { x, y }).await;
             }
             AppEvent::MouseScroll { up } => {
-                let mut w = writer.lock().await;
-                let _ = send_request(&mut *w, &ClientRequest::MouseScroll { up }).await;
+                if self.mode == Mode::TabPicker {
+                    if let Some(ref mut tp) = self.tab_picker_state {
+                        if up { tp.move_up(); } else { tp.move_down(); }
+                    }
+                } else {
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut *w, &ClientRequest::MouseScroll { up }).await;
+                }
             }
             AppEvent::MouseMove { x, y } => {
                 let mut w = writer.lock().await;
@@ -984,13 +1088,17 @@ impl Client {
                 return Ok(());
             }
             Action::NewTab => {
-                self.tab_picker_state = Some(TabPickerState::new(&self.config.tab_picker_entries));
+                self.tab_picker_state = Some(TabPickerState::new(
+                    &self.config.tab_picker_entries,
+                    &self.config.favorites,
+                ));
                 self.mode = Mode::TabPicker;
                 return Ok(());
             }
             Action::SplitHorizontal => {
                 self.tab_picker_state = Some(TabPickerState::with_mode(
                     &self.config.tab_picker_entries,
+                    &self.config.favorites,
                     crate::ui::tab_picker::TabPickerMode::SplitHorizontal,
                 ));
                 self.mode = Mode::TabPicker;
@@ -999,6 +1107,7 @@ impl Client {
             Action::SplitVertical => {
                 self.tab_picker_state = Some(TabPickerState::with_mode(
                     &self.config.tab_picker_entries,
+                    &self.config.favorites,
                     crate::ui::tab_picker::TabPickerMode::SplitVertical,
                 ));
                 self.mode = Mode::TabPicker;
@@ -1133,13 +1242,15 @@ impl Client {
                 let cmd = if let Some(cmd) = state.selected_command() {
                     Some(cmd)
                 } else if !state.input.trim().is_empty() {
-                    // No match — run the typed input as a custom command
+                    // No match — run the typed input as a custom command wrapped in user's shell
+                    let user_shell = std::env::var("SHELL")
+                        .unwrap_or_else(|_| "/bin/bash".to_string());
                     let base = match state.mode {
                         crate::ui::tab_picker::TabPickerMode::NewTab => "new-window",
                         crate::ui::tab_picker::TabPickerMode::SplitHorizontal => "split-window -h",
                         crate::ui::tab_picker::TabPickerMode::SplitVertical => "split-window -v",
                     };
-                    Some(format!("{} -c {}", base, state.input.trim()))
+                    Some(format!("{} -c \"{}\" -s \"{}\"", base, state.input.trim(), user_shell))
                 } else {
                     None
                 };

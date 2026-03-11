@@ -806,6 +806,7 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
                                     let _ = state.add_tab_to_active_group(
                                         crate::window::TabKind::Shell,
                                         None,
+                                        None,
                                         cols,
                                         rows,
                                     );

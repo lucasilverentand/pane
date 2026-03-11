@@ -86,6 +86,14 @@ pub fn popup_rect(size: PopupSize, anchor: PopupAnchor, area: Rect) -> Rect {
     }
 }
 
+/// Compute the inner area of a popup without rendering (for hit-testing).
+pub fn inner_rect(popup_area: Rect) -> Rect {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    block.inner(popup_area)
+}
+
 /// Render the popup chrome (Clear + rounded border block) and return the inner area.
 ///
 /// `title` can be empty for no title.  When non-empty, it's rendered in

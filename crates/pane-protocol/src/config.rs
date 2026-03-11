@@ -593,6 +593,19 @@ pub struct TabPickerEntryConfig {
     pub name: String,
     pub command: String,
     pub description: Option<String>,
+    /// Shell to run the command in (e.g. "/bin/zsh"). When set, the command is
+    /// executed as `shell -c "command"` instead of being run directly.
+    pub shell: Option<String>,
+}
+
+/// A favorite entry shown at the top of the tab picker.
+#[derive(Clone, Debug)]
+pub struct FavoriteConfig {
+    pub name: String,
+    pub command: String,
+    pub description: Option<String>,
+    /// Shell to run the command in. Required for non-shell commands.
+    pub shell: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -606,6 +619,7 @@ pub struct Config {
     pub leader: LeaderConfig,
     pub plugins: Vec<crate::plugin::PluginConfig>,
     pub tab_picker_entries: Vec<TabPickerEntryConfig>,
+    pub favorites: Vec<FavoriteConfig>,
 }
 
 impl Default for Config {
@@ -620,6 +634,7 @@ impl Default for Config {
             leader: LeaderConfig::default(),
             plugins: Vec::new(),
             tab_picker_entries: Vec::new(),
+            favorites: Vec::new(),
         }
     }
 }
@@ -826,6 +841,20 @@ impl Config {
                     name: e.name,
                     command: e.command,
                     description: e.description,
+                    shell: e.shell,
+                })
+                .collect();
+        }
+
+        // Favorites
+        if let Some(favs) = raw.favorites {
+            config.favorites = favs
+                .into_iter()
+                .map(|f| FavoriteConfig {
+                    name: f.name,
+                    command: f.command,
+                    description: f.description,
+                    shell: f.shell,
                 })
                 .collect();
         }
@@ -866,6 +895,7 @@ struct RawConfig {
     leader_keys: Option<HashMap<String, String>>,
     plugins: Option<Vec<RawPlugin>>,
     tab_picker_entries: Option<Vec<RawTabPickerEntry>>,
+    favorites: Option<Vec<RawFavorite>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -882,6 +912,15 @@ struct RawTabPickerEntry {
     name: String,
     command: String,
     description: Option<String>,
+    shell: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct RawFavorite {
+    name: String,
+    command: String,
+    description: Option<String>,
+    shell: Option<String>,
 }
 
 #[derive(Deserialize, Default)]

@@ -195,6 +195,7 @@ impl ServerState {
             rows,
             event_tx.clone(),
             None,
+            None,
             Some(tmux_env),
             Some(&cwd),
         ) {
@@ -302,6 +303,7 @@ impl ServerState {
         &mut self,
         kind: TabKind,
         command: Option<String>,
+        shell: Option<String>,
         cols: u16,
         rows: u16,
     ) -> anyhow::Result<TabId> {
@@ -315,6 +317,7 @@ impl ServerState {
             rows,
             self.event_tx.clone(),
             command,
+            shell,
             Some(tmux_env),
             Some(&ws_cwd),
         ) {
@@ -338,6 +341,7 @@ impl ServerState {
         direction: SplitDirection,
         kind: TabKind,
         command: Option<String>,
+        shell: Option<String>,
         cols: u16,
         rows: u16,
     ) -> anyhow::Result<(WindowId, TabId)> {
@@ -353,6 +357,7 @@ impl ServerState {
             rows,
             self.event_tx.clone(),
             command,
+            shell,
             Some(tmux_env),
             Some(&ws_cwd),
         ) {
@@ -385,6 +390,7 @@ impl ServerState {
             cols,
             rows,
             self.event_tx.clone(),
+            None,
             None,
             Some(tmux_env),
             Some(&cwd),
@@ -446,6 +452,7 @@ impl ServerState {
             rows,
             self.event_tx.clone(),
             command,
+            None,
             Some(tmux_env),
             Some(&ws_cwd),
         ) {
@@ -925,7 +932,7 @@ mod tests {
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 1);
 
         state
-            .add_tab_to_active_group(TabKind::Shell, None, 78, 22)
+            .add_tab_to_active_group(TabKind::Shell, None, None, 78, 22)
             .unwrap();
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 2);
     }
@@ -939,7 +946,7 @@ mod tests {
         assert_eq!(state.active_workspace().groups.len(), 1);
 
         let (new_gid, _new_pid) = state
-            .split_active_group(SplitDirection::Horizontal, TabKind::Shell, None, 40, 22)
+            .split_active_group(SplitDirection::Horizontal, TabKind::Shell, None, None, 40, 22)
             .unwrap();
         assert_eq!(state.active_workspace().groups.len(), 2);
         assert!(state.active_workspace().groups.contains_key(&new_gid));
