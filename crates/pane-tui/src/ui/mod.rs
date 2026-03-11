@@ -418,7 +418,10 @@ fn render_new_workspace_dialog(
     }
 }
 
-/// Stage 1: directory picker with type-to-filter.
+/// Stage 1: directory picker with type-to-filter and zoxide search.
+///
+/// Default mode is browse (filesystem navigation). Press Ctrl+F to toggle
+/// zoxide search mode where typing queries zoxide frecency results.
 fn render_new_workspace_dir_stage(
     state: &crate::client::NewWorkspaceInputState,
     theme: &pane_protocol::config::Theme,
@@ -432,28 +435,33 @@ fn render_new_workspace_dir_stage(
     };
 
     let popup_area = dialog::popup_rect(
-        dialog::PopupSize::FixedClamped { width: 50, height: 22, pad: 4 },
+        dialog::PopupSize::FixedClamped { width: 56, height: 22, pad: 4 },
         dialog::PopupAnchor::Center,
         area,
     );
-    let inner = dialog::render_popup(frame, popup_area, "new workspace", theme);
+    let title = if state.browser.search_mode {
+        "new workspace — zoxide search"
+    } else {
+        "new workspace"
+    };
+    let inner = dialog::render_popup(frame, popup_area, title, theme);
 
     if inner.height < 5 || inner.width < 10 {
         return;
     }
 
     let mut row = inner.y;
-
-    // ── Path display ──
-    // Show the full path including selected folder
+    let search_mode = state.browser.search_mode;
     let has_filter = !state.browser.input.is_empty();
-    let path_display = if has_filter {
-        // When filtering, show: path/filter_
+
+    // ── Search / path bar ──
+    let path_display = if search_mode {
+        state.browser.input.clone()
+    } else if has_filter {
         let base = state.browser.display_path();
         let base_slash = if base.ends_with('/') { base } else { format!("{}/", base) };
         format!("{}{}", base_slash, state.browser.input)
     } else {
-        // When browsing, show path including highlighted folder
         state.browser.display_path_with_selected()
     };
 
@@ -464,15 +472,30 @@ fn render_new_workspace_dir_stage(
         path_display
     };
 
-    let input_line = Line::from(vec![
-        Span::raw(" "),
-        Span::styled(display, Style::default().fg(Color::White)),
+    let input_line = if search_mode {
         if has_filter {
-            Span::styled("_", Style::default().fg(Color::DarkGray))
+            Line::from(vec![
+                Span::styled(" > ", Style::default().fg(theme.accent)),
+                Span::styled(display, Style::default().fg(Color::White)),
+                Span::styled("_", Style::default().fg(Color::DarkGray)),
+            ])
         } else {
-            Span::raw("")
-        },
-    ]);
+            Line::from(vec![
+                Span::styled(" > ", Style::default().fg(theme.accent)),
+                Span::styled("type to search…", Style::default().fg(theme.dim)),
+            ])
+        }
+    } else {
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled(display, Style::default().fg(Color::White)),
+            if has_filter {
+                Span::styled("_", Style::default().fg(Color::DarkGray))
+            } else {
+                Span::raw("")
+            },
+        ])
+    };
     frame.render_widget(
         Paragraph::new(input_line),
         ratatui::layout::Rect::new(inner.x, row, inner.width, 1),
@@ -486,7 +509,7 @@ fn render_new_workspace_dir_stage(
     );
     row += 1;
 
-    // ── Directory listing (filtered) + zoxide results ──
+    // ── List area ──
     let hint_height = 2u16;
     let list_height = (inner.y + inner.height)
         .saturating_sub(row + hint_height) as usize;
@@ -496,115 +519,85 @@ fn render_new_workspace_dir_stage(
 
     let entries = state.browser.visible_entries();
     let selected = state.browser.selected;
-    let dir_count = entries.len();
     let zoxide_results = &state.browser.zoxide_results;
-    let has_zoxide = !zoxide_results.is_empty();
-
-    // Build a unified list of (label, is_header) items for rendering.
-    // We use the selected index spanning both lists:
-    //   0..dir_count = directory entries
-    //   dir_count..dir_count+zoxide_count = zoxide results
     let total_items = state.browser.total_count();
 
-    // Also account for section headers in scroll calculation
-    let zoxide_header_offset = if has_zoxide && dir_count > 0 { 1 } else { 0 };
-    let scroll = {
-        // Convert selected to visual row (accounting for zoxide header)
-        let visual_selected = if selected >= dir_count {
-            selected + zoxide_header_offset
-        } else {
-            selected
-        };
-        let mut s = state.browser.scroll_offset;
-        if visual_selected >= s + list_height {
-            s = visual_selected + 1 - list_height;
-        }
-        if visual_selected < s {
-            s = visual_selected;
-        }
-        s
-    };
-
     let dir_style = Style::default().fg(theme.fg);
+    let dim_style = Style::default().fg(theme.dim);
     let selected_style = Style::default()
         .fg(theme.accent)
         .add_modifier(Modifier::BOLD);
     let home_dir = std::env::var("HOME").unwrap_or_default();
+    let max_w = inner.width as usize;
+
+    // Helper: shorten a path with ~ for home directory
+    let shorten_path = |path: &str| -> String {
+        if !home_dir.is_empty() && path.starts_with(&home_dir) {
+            format!("~{}", &path[home_dir.len()..])
+        } else {
+            path.to_string()
+        }
+    };
 
     if total_items == 0 {
-        let msg = if state.browser.input.is_empty() {
+        let msg = if search_mode && !has_filter {
+            "  type to search…"
+        } else if state.browser.input.is_empty() {
             "  (empty)"
         } else {
             "  (no matches)"
         };
-        let empty_line = Line::from(vec![Span::styled(
-            msg,
-            Style::default().fg(theme.dim),
-        )]);
+        let empty_line = Line::from(vec![Span::styled(msg, dim_style)]);
         frame.render_widget(
             Paragraph::new(empty_line),
             ratatui::layout::Rect::new(inner.x, row, inner.width, 1),
         );
     } else {
-        let mut visual_row = 0usize;
-        let max_w = inner.width as usize;
-
-        // Render directory entries
-        for (i, entry) in entries.iter().enumerate() {
-            if visual_row >= scroll + list_height { break; }
-            if visual_row >= scroll {
-                let is_selected = i == selected;
-                let prefix = if is_selected { " > " } else { "   " };
-                let display = format!("{}{}/", prefix, entry.name);
-                let display = if display.len() > max_w {
-                    format!("{}…", &display[..max_w - 1])
-                } else {
-                    display
-                };
-                let style = if is_selected { selected_style } else { dir_style };
-                let line = Line::from(vec![Span::styled(display, style)]);
-                let line_y = row + (visual_row - scroll) as u16;
-                frame.render_widget(
-                    Paragraph::new(line),
-                    ratatui::layout::Rect::new(inner.x, line_y, inner.width, 1),
-                );
+        let scroll = {
+            let mut s = state.browser.scroll_offset;
+            if selected >= s + list_height {
+                s = selected + 1 - list_height;
             }
-            visual_row += 1;
-        }
+            if selected < s {
+                s = selected;
+            }
+            s
+        };
 
-        // Zoxide section header + results
-        if has_zoxide {
-            if dir_count > 0 {
-                // Section header
-                if visual_row >= scroll && visual_row < scroll + list_height {
-                    let header = Line::from(Span::styled(
-                        " zoxide ",
-                        Style::default()
-                            .fg(theme.dim)
-                            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-                    ));
+        let mut visual_row = 0usize;
+
+        if search_mode {
+            // ── Zoxide search results ──
+            for (zi, zpath) in zoxide_results.iter().enumerate() {
+                if visual_row >= scroll + list_height { break; }
+                if visual_row >= scroll {
+                    let is_selected = zi == selected;
+                    let prefix = if is_selected { " > " } else { "   " };
+                    let short = shorten_path(zpath);
+                    let display = format!("{}{}", prefix, short);
+                    let display = if display.len() > max_w {
+                        format!("{}…", &display[..max_w - 1])
+                    } else {
+                        display
+                    };
+                    let style = if is_selected { selected_style } else { dir_style };
+                    let line = Line::from(vec![Span::styled(display, style)]);
                     let line_y = row + (visual_row - scroll) as u16;
                     frame.render_widget(
-                        Paragraph::new(header),
+                        Paragraph::new(line),
                         ratatui::layout::Rect::new(inner.x, line_y, inner.width, 1),
                     );
                 }
                 visual_row += 1;
             }
-
-            for (zi, zpath) in zoxide_results.iter().enumerate() {
+        } else {
+            // ── Browse mode: local dirs ──
+            for (i, entry) in entries.iter().enumerate() {
                 if visual_row >= scroll + list_height { break; }
                 if visual_row >= scroll {
-                    let item_idx = dir_count + zi;
-                    let is_selected = item_idx == selected;
+                    let is_selected = i == selected;
                     let prefix = if is_selected { " > " } else { "   " };
-                    // Show path with ~ substitution
-                    let display_path = if !home_dir.is_empty() && zpath.starts_with(&home_dir) {
-                        format!("~{}", &zpath[home_dir.len()..])
-                    } else {
-                        zpath.clone()
-                    };
-                    let display = format!("{}{}", prefix, display_path);
+                    let display = format!("{}{}/", prefix, entry.name);
                     let display = if display.len() > max_w {
                         format!("{}…", &display[..max_w - 1])
                     } else {
@@ -629,17 +622,39 @@ fn render_new_workspace_dir_stage(
         frame,
         ratatui::layout::Rect::new(inner.x, hint_y, inner.width, 1),
     );
-    let hint_line = Line::from(vec![
-        Span::raw("  "),
-        Span::styled("enter", Style::default().fg(theme.accent)),
-        Span::styled(" select  ", Style::default().fg(theme.dim)),
-        Span::styled("tab", Style::default().fg(theme.accent)),
-        Span::styled(" complete  ", Style::default().fg(theme.dim)),
-        Span::styled("\u{2192}", Style::default().fg(theme.accent)),
-        Span::styled(" open  ", Style::default().fg(theme.dim)),
-        Span::styled("esc", Style::default().fg(theme.accent)),
-        Span::styled(" cancel", Style::default().fg(theme.dim)),
-    ]);
+    let hint_line = if search_mode {
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("enter", Style::default().fg(theme.accent)),
+            Span::styled(" select  ", dim_style),
+            Span::styled("esc", Style::default().fg(theme.accent)),
+            Span::styled(" back  ", dim_style),
+            Span::styled("^F", Style::default().fg(theme.accent)),
+            Span::styled(" browse", dim_style),
+        ])
+    } else if state.browser.has_zoxide {
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("enter", Style::default().fg(theme.accent)),
+            Span::styled(" select  ", dim_style),
+            Span::styled("tab/\u{2192}", Style::default().fg(theme.accent)),
+            Span::styled(" open  ", dim_style),
+            Span::styled("^F", Style::default().fg(theme.accent)),
+            Span::styled(" search  ", dim_style),
+            Span::styled("esc", Style::default().fg(theme.accent)),
+            Span::styled(" cancel", dim_style),
+        ])
+    } else {
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("enter", Style::default().fg(theme.accent)),
+            Span::styled(" select  ", dim_style),
+            Span::styled("tab/\u{2192}", Style::default().fg(theme.accent)),
+            Span::styled(" open  ", dim_style),
+            Span::styled("esc", Style::default().fg(theme.accent)),
+            Span::styled(" cancel", dim_style),
+        ])
+    };
     frame.render_widget(
         Paragraph::new(hint_line),
         ratatui::layout::Rect::new(inner.x, hint_y + 1, inner.width, 1),

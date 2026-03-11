@@ -86,9 +86,9 @@ impl Default for Theme {
     fn default() -> Self {
         Self {
             accent: Color::Cyan,
-            border_active: Color::Cyan,
+            border_active: Color::DarkGray,
             border_inactive: Color::DarkGray,
-            border_normal: Color::Cyan,
+            border_normal: Color::Gray,
             border_interact: Color::Green,
             border_scroll: Color::Yellow,
             bg: Color::Reset,
@@ -109,9 +109,9 @@ impl Theme {
             "default" => Some(Self::default()),
             "dracula" => Some(Self {
                 accent: Color::Rgb(189, 147, 249),       // purple
-                border_active: Color::Rgb(189, 147, 249),
+                border_active: Color::Rgb(68, 71, 90),
                 border_inactive: Color::Rgb(68, 71, 90),
-                border_normal: Color::Rgb(189, 147, 249),
+                border_normal: Color::Rgb(98, 114, 164),  // comment
                 border_interact: Color::Rgb(80, 250, 123), // green
                 border_scroll: Color::Rgb(241, 250, 140),  // yellow
                 bg: Color::Rgb(40, 42, 54),
@@ -124,9 +124,9 @@ impl Theme {
             }),
             "catppuccin" => Some(Self {
                 accent: Color::Rgb(203, 166, 247),       // mauve
-                border_active: Color::Rgb(203, 166, 247),
+                border_active: Color::Rgb(69, 71, 90),
                 border_inactive: Color::Rgb(69, 71, 90),
-                border_normal: Color::Rgb(203, 166, 247),
+                border_normal: Color::Rgb(108, 112, 134), // overlay1
                 border_interact: Color::Rgb(166, 227, 161), // green
                 border_scroll: Color::Rgb(249, 226, 175),   // yellow
                 bg: Color::Rgb(30, 30, 46),
@@ -139,9 +139,9 @@ impl Theme {
             }),
             "tokyo-night" => Some(Self {
                 accent: Color::Rgb(122, 162, 247),       // blue
-                border_active: Color::Rgb(122, 162, 247),
+                border_active: Color::Rgb(59, 66, 97),
                 border_inactive: Color::Rgb(59, 66, 97),
-                border_normal: Color::Rgb(122, 162, 247),
+                border_normal: Color::Rgb(86, 95, 137),   // comment
                 border_interact: Color::Rgb(158, 206, 106), // green
                 border_scroll: Color::Rgb(224, 175, 104),   // yellow
                 bg: Color::Rgb(26, 27, 38),

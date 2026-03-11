@@ -133,7 +133,10 @@ pub fn render(state: &ContextMenuState, theme: &Theme, frame: &mut Frame, area: 
     let (menu_w, menu_h) = menu_dimensions(state, area);
 
     let popup_area = dialog::popup_rect(
-        dialog::PopupSize::Fixed { width: menu_w, height: menu_h },
+        dialog::PopupSize::Fixed {
+            width: menu_w,
+            height: menu_h,
+        },
         dialog::PopupAnchor::Position {
             x: state.anchor_x,
             y: state.anchor_y,
@@ -182,7 +185,10 @@ pub fn hit_test(state: &ContextMenuState, area: Rect, x: u16, y: u16) -> Option<
     let (menu_w, menu_h) = menu_dimensions(state, area);
 
     let popup = dialog::popup_rect(
-        dialog::PopupSize::Fixed { width: menu_w, height: menu_h },
+        dialog::PopupSize::Fixed {
+            width: menu_w,
+            height: menu_h,
+        },
         dialog::PopupAnchor::Position {
             x: state.anchor_x,
             y: state.anchor_y,
@@ -388,7 +394,10 @@ mod tests {
         let menu = pane_body_menu(10, 10);
         let (menu_w, menu_h) = menu_dimensions(&menu, area);
         let popup = dialog::popup_rect(
-            dialog::PopupSize::Fixed { width: menu_w, height: menu_h },
+            dialog::PopupSize::Fixed {
+                width: menu_w,
+                height: menu_h,
+            },
             dialog::PopupAnchor::Position { x: 10, y: 10 },
             area,
         );
@@ -404,7 +413,10 @@ mod tests {
         let menu = pane_body_menu(10, 10);
         let (menu_w, menu_h) = menu_dimensions(&menu, area);
         let popup = dialog::popup_rect(
-            dialog::PopupSize::Fixed { width: menu_w, height: menu_h },
+            dialog::PopupSize::Fixed {
+                width: menu_w,
+                height: menu_h,
+            },
             dialog::PopupAnchor::Position { x: 10, y: 10 },
             area,
         );
@@ -434,7 +446,10 @@ mod tests {
         let menu = pane_body_menu(10, 10);
         let (menu_w, menu_h) = menu_dimensions(&menu, area);
         let popup = dialog::popup_rect(
-            dialog::PopupSize::Fixed { width: menu_w, height: menu_h },
+            dialog::PopupSize::Fixed {
+                width: menu_w,
+                height: menu_h,
+            },
             dialog::PopupAnchor::Position { x: 10, y: 10 },
             area,
         );
@@ -453,7 +468,10 @@ mod tests {
         let menu = workspace_bar_menu(10, 10);
         let (menu_w, menu_h) = menu_dimensions(&menu, area);
         let popup = dialog::popup_rect(
-            dialog::PopupSize::Fixed { width: menu_w, height: menu_h },
+            dialog::PopupSize::Fixed {
+                width: menu_w,
+                height: menu_h,
+            },
             dialog::PopupAnchor::Position { x: 10, y: 10 },
             area,
         );

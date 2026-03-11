@@ -86,6 +86,8 @@ pub struct DirBrowser {
     pub scroll_offset: usize,
     /// Whether zoxide is available on the system.
     pub has_zoxide: bool,
+    /// Zoxide search mode (toggled with Ctrl+F or /).
+    pub search_mode: bool,
     /// Zoxide query results (absolute paths, ranked by frecency).
     pub zoxide_results: Vec<String>,
 }
@@ -109,6 +111,7 @@ impl DirBrowser {
             selected: 0,
             scroll_offset: 0,
             has_zoxide,
+            search_mode: false,
             zoxide_results: Vec::new(),
         };
         browser.refresh();
@@ -136,26 +139,33 @@ impl DirBrowser {
             self.all_entries = dirs;
         }
         self.input.clear();
+        self.search_mode = false;
         self.update_filter();
     }
 
     pub fn update_filter(&mut self) {
-        if self.input.is_empty() {
-            self.filtered = (0..self.all_entries.len()).collect();
-            self.zoxide_results.clear();
-        } else {
-            let query = self.input.to_lowercase();
-            self.filtered = self
-                .all_entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.name.to_lowercase().contains(&query))
-                .map(|(i, _)| i)
-                .collect();
-
-            // Query zoxide for frecency-ranked results
-            if self.has_zoxide {
+        if self.search_mode {
+            // Zoxide search mode: only zoxide results, no local filtering
+            self.filtered.clear();
+            if self.input.is_empty() {
+                self.zoxide_results.clear();
+            } else {
                 self.zoxide_results = query_zoxide(&self.input);
+            }
+        } else {
+            // Browse mode: filter local dirs, no zoxide
+            self.zoxide_results.clear();
+            if self.input.is_empty() {
+                self.filtered = (0..self.all_entries.len()).collect();
+            } else {
+                let query = self.input.to_lowercase();
+                self.filtered = self
+                    .all_entries
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| e.name.to_lowercase().contains(&query))
+                    .map(|(i, _)| i)
+                    .collect();
             }
         }
         let total = self.total_count();
@@ -165,23 +175,47 @@ impl DirBrowser {
         self.scroll_offset = 0;
     }
 
-    /// Total number of selectable items (dir entries + zoxide results).
+    /// Toggle between browse mode and zoxide search mode.
+    pub fn toggle_search(&mut self) {
+        if !self.has_zoxide {
+            return;
+        }
+        self.search_mode = !self.search_mode;
+        self.input.clear();
+        self.selected = 0;
+        self.scroll_offset = 0;
+        self.update_filter();
+    }
+
+    /// Total number of selectable items.
     pub fn total_count(&self) -> usize {
-        self.filtered.len() + self.zoxide_results.len()
+        if self.search_mode {
+            self.zoxide_results.len()
+        } else {
+            self.filtered.len()
+        }
     }
 
     /// Whether the current selection is a zoxide result.
     pub fn selected_is_zoxide(&self) -> bool {
-        self.selected >= self.filtered.len()
+        self.search_mode && self.selected < self.zoxide_results.len()
     }
 
     /// Get the zoxide result path for the current selection (if applicable).
     pub fn selected_zoxide_path(&self) -> Option<&str> {
         if self.selected_is_zoxide() {
-            let zi = self.selected - self.filtered.len();
-            self.zoxide_results.get(zi).map(|s| s.as_str())
+            self.zoxide_results.get(self.selected).map(|s| s.as_str())
         } else {
             None
+        }
+    }
+
+    /// Get the local dir entry index for the current selection (if applicable).
+    pub fn selected_dir_index(&self) -> Option<usize> {
+        if self.search_mode {
+            None
+        } else {
+            self.filtered.get(self.selected).copied()
         }
     }
 
@@ -199,39 +233,12 @@ impl DirBrowser {
                 self.current_dir = path;
                 self.refresh();
             }
-        } else if let Some(&idx) = self.filtered.get(self.selected) {
+        } else if let Some(idx) = self.selected_dir_index() {
             let entry = &self.all_entries[idx];
             let new_path = self.current_dir.join(&entry.name);
             if new_path.is_dir() {
                 self.current_dir = new_path;
                 self.refresh();
-            }
-        }
-    }
-
-    /// Tab-complete: if there's exactly one match, enter it.
-    /// If there's a common prefix among filtered entries, fill it.
-    pub fn tab_complete(&mut self) {
-        if self.filtered.len() == 1 {
-            self.enter_selected();
-            return;
-        }
-        // Fill the common prefix of filtered entries
-        if self.filtered.is_empty() {
-            return;
-        }
-        let names: Vec<&str> = self
-            .filtered
-            .iter()
-            .map(|&i| self.all_entries[i].name.as_str())
-            .collect();
-        if let Some(prefix) = common_prefix(&names) {
-            if prefix.len() > self.input.len() {
-                self.input = prefix;
-                self.update_filter();
-            } else {
-                // Prefix already typed — enter the selected entry
-                self.enter_selected();
             }
         }
     }
@@ -291,7 +298,6 @@ impl DirBrowser {
     /// Display path including the currently selected entry (for preview).
     pub fn display_path_with_selected(&self) -> String {
         if let Some(zpath) = self.selected_zoxide_path() {
-            // Show the zoxide path with ~ substitution
             let home = std::env::var("HOME").unwrap_or_default();
             if !home.is_empty() && zpath.starts_with(&home) {
                 return format!("~{}", &zpath[home.len()..]);
@@ -299,7 +305,7 @@ impl DirBrowser {
             return zpath.to_string();
         }
         let base = self.display_path();
-        if let Some(&idx) = self.filtered.get(self.selected) {
+        if let Some(idx) = self.selected_dir_index() {
             let name = &self.all_entries[idx].name;
             if base.ends_with('/') {
                 format!("{}{}", base, name)
@@ -312,7 +318,7 @@ impl DirBrowser {
     }
 }
 
-/// Query zoxide for directories matching the input (up to 5 results).
+/// Query zoxide for directories matching the input (up to 10 results).
 fn query_zoxide(input: &str) -> Vec<String> {
     let output = std::process::Command::new("zoxide")
         .args(["query", "-l", "--", input])
@@ -321,7 +327,7 @@ fn query_zoxide(input: &str) -> Vec<String> {
         Ok(out) if out.status.success() => {
             String::from_utf8_lossy(&out.stdout)
                 .lines()
-                .take(5)
+                .take(10)
                 .map(|s| s.to_string())
                 .collect()
         }
@@ -329,33 +335,10 @@ fn query_zoxide(input: &str) -> Vec<String> {
     }
 }
 
-/// Find the longest common prefix of a set of strings (case-sensitive).
-fn common_prefix(strings: &[&str]) -> Option<String> {
-    if strings.is_empty() {
-        return None;
-    }
-    let first = strings[0];
-    let mut len = first.len();
-    for s in &strings[1..] {
-        len = len.min(s.len());
-        for (i, (a, b)) in first.chars().zip(s.chars()).enumerate() {
-            if a != b {
-                len = len.min(i);
-                break;
-            }
-        }
-    }
-    if len == 0 {
-        None
-    } else {
-        Some(first[..len].to_string())
-    }
-}
-
 impl Client {
     pub fn new(config: Config) -> Self {
         Self {
-            mode: Mode::Interact,
+            mode: Mode::Normal,
             render_state: RenderState {
                 workspaces: Vec::new(),
                 active_workspace: 0,
@@ -1209,6 +1192,7 @@ impl Client {
             let idx = (*n as usize).saturating_sub(1);
             if idx < self.render_state.workspaces.len() {
                 self.render_state.active_workspace = idx;
+                self.mode = Mode::Normal;
             }
         }
 
@@ -1352,8 +1336,15 @@ impl Client {
 
         match state.stage {
             NewWorkspaceStage::Directory => match (key.code, key.modifiers) {
+                // Ctrl+F toggles zoxide search mode
+                (KeyCode::Char('f'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    state.browser.toggle_search();
+                }
                 (KeyCode::Esc, _) => {
-                    if !state.browser.input.is_empty() {
+                    if state.browser.search_mode {
+                        // Exit search mode back to browse
+                        state.browser.toggle_search();
+                    } else if !state.browser.input.is_empty() {
                         state.browser.input.clear();
                         state.browser.update_filter();
                     } else {
@@ -1362,24 +1353,41 @@ impl Client {
                     }
                 }
                 (KeyCode::Enter, _) => {
-                    // Enter the selected folder (if any) and confirm
-                    if !state.browser.filtered.is_empty() {
+                    if state.browser.search_mode {
+                        // In search mode: select zoxide result as workspace dir
+                        if let Some(zpath) = state.browser.selected_zoxide_path().map(|s| s.to_string()) {
+                            let path = std::path::PathBuf::from(&zpath);
+                            if path.is_dir() {
+                                state.browser.current_dir = path;
+                            }
+                        }
+                        state.browser.search_mode = false;
+                        state.browser.input.clear();
+                        state.browser.zoxide_results.clear();
+                    } else if state.browser.total_count() > 0 {
+                        // Browse mode: include the highlighted folder
                         state.browser.enter_selected();
                     }
-                    // Auto-fill name from git repo or folder name
+                    // Confirm directory and advance to Name stage
                     state.name = auto_workspace_name_suggestion(&state.browser.current_dir);
                     state.stage = NewWorkspaceStage::Name;
                 }
-                (KeyCode::Tab, _) => {
-                    state.browser.tab_complete();
-                }
                 (KeyCode::Up, _) => state.browser.move_up(),
                 (KeyCode::Down, _) => state.browser.move_down(),
-                (KeyCode::Right, _) => state.browser.enter_selected(),
-                (KeyCode::Left, _) => state.browser.go_up(),
+                (KeyCode::Tab, _) | (KeyCode::Right, _) if !state.browser.search_mode => {
+                    state.browser.enter_selected();
+                }
+                (KeyCode::Left, _) if !state.browser.search_mode => {
+                    state.browser.go_up();
+                }
                 (KeyCode::Backspace, _) => {
                     if state.browser.input.is_empty() {
-                        state.browser.go_up();
+                        if state.browser.search_mode {
+                            // Empty backspace in search mode: exit search
+                            state.browser.toggle_search();
+                        } else {
+                            state.browser.go_up();
+                        }
                     } else {
                         state.browser.input.pop();
                         state.browser.update_filter();

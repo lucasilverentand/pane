@@ -107,7 +107,7 @@ pub fn render(
     area: Rect,
 ) {
     let border_color = if focused {
-        theme.border_active
+        theme.border_normal
     } else {
         theme.border_inactive
     };

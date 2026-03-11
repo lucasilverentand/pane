@@ -34,7 +34,8 @@ pub fn global_defaults() -> Vec<(&'static str, Action)> {
 pub fn normal_defaults() -> Vec<(&'static str, Action)> {
     vec![
         // ── Mode ────────────────────────────────────────────────────────
-        ("i", Action::EnterInteract), // Switch to Interact mode (keys go to PTY)
+        ("i", Action::EnterInteract),     // Switch to Interact mode (keys go to PTY)
+        ("enter", Action::EnterInteract), // Switch to Interact mode (keys go to PTY)
         // ── Navigation ─────────────────────────────────────────────────
         ("h", Action::FocusLeft),      // Focus left (context-dependent)
         ("j", Action::FocusDown),      // Focus down (context-dependent)
