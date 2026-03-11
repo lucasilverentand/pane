@@ -1787,4 +1787,80 @@ mod tests {
             .unwrap();
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
     }
+
+    #[tokio::test]
+    async fn test_full_screen_dump_alt_screen() {
+        let (_client, _handle, state) = setup_test_server().await;
+
+        // Feed btop-like alt-screen output into the first tab
+        let mut s = state.lock().await;
+        let ws = s.active_workspace_mut();
+        let group = ws.groups.get_mut(&ws.active_group).unwrap();
+        let tab = group.active_tab_mut();
+
+        // Simulate btop: enter alt screen, cursor-addressed frame
+        let mut output = Vec::new();
+        output.extend_from_slice(b"\x1b[?1049h"); // enter alt screen
+        output.extend_from_slice(b"\x1b[?25l"); // hide cursor
+        for row in 0..24u16 {
+            output.extend_from_slice(format!("\x1b[{};1H", row + 1).as_bytes());
+            output.extend_from_slice(format!("btop row {:>2}", row).as_bytes());
+        }
+        tab.process_output(&output);
+
+        // Verify alt screen is active
+        assert!(tab.screen().alternate_screen());
+
+        // Get state_formatted and round-trip through a fresh parser
+        let formatted = tab.screen().state_formatted();
+        drop(s);
+
+        let mut parser = vt100::Parser::new(24, 80, 0);
+        parser.process(&formatted);
+
+        assert!(
+            parser.screen().alternate_screen(),
+            "round-tripped parser should be in alt screen mode"
+        );
+
+        // Verify content matches cell-by-cell for first row
+        let expected = "btop row  0";
+        for (col, ch) in expected.chars().enumerate() {
+            assert_eq!(
+                parser.screen().cell(0, col as u16).unwrap().contents(),
+                ch.to_string(),
+                "mismatch at row 0, col {col}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_full_screen_dump_main_screen() {
+        let (_client, _handle, state) = setup_test_server().await;
+
+        // Feed normal main-screen output
+        let mut s = state.lock().await;
+        let ws = s.active_workspace_mut();
+        let group = ws.groups.get_mut(&ws.active_group).unwrap();
+        let tab = group.active_tab_mut();
+
+        tab.process_output(b"$ hello world\r\n$ ls -la\r\n");
+
+        assert!(!tab.screen().alternate_screen());
+
+        let formatted = tab.screen().state_formatted();
+        drop(s);
+
+        let mut parser = vt100::Parser::new(24, 80, 0);
+        parser.process(&formatted);
+
+        assert!(
+            !parser.screen().alternate_screen(),
+            "round-tripped parser should be on main screen"
+        );
+
+        // Verify "$ hello world" on first row
+        assert_eq!(parser.screen().cell(0, 0).unwrap().contents(), "$");
+        assert_eq!(parser.screen().cell(0, 2).unwrap().contents(), "h");
+    }
 }

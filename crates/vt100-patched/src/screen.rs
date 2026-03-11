@@ -238,6 +238,11 @@ impl Screen {
     #[must_use]
     pub fn state_formatted(&self) -> Vec<u8> {
         let mut contents = vec![];
+        // Emit alternate screen switch BEFORE contents so the consuming
+        // parser writes into the correct grid.
+        if self.alternate_screen() {
+            crate::term::AlternateScreen::new(true).write_buf(&mut contents);
+        }
         self.write_contents_formatted(&mut contents);
         self.write_input_mode_formatted(&mut contents);
         contents
@@ -250,6 +255,9 @@ impl Screen {
     #[must_use]
     pub fn state_diff(&self, prev: &Self) -> Vec<u8> {
         let mut contents = vec![];
+        // Emit alternate screen transition BEFORE contents so the consuming
+        // parser targets the correct grid.
+        self.write_alternate_screen_diff(&mut contents, prev);
         self.write_contents_diff(&mut contents, prev);
         self.write_input_mode_diff(&mut contents, prev);
         contents
@@ -418,6 +426,20 @@ impl Screen {
             MouseProtocolEncoding::Default,
         )
         .write_buf(contents);
+    }
+
+    /// Returns whether the screen is currently in alternate screen mode.
+    /// This is separate from input_mode because it must be emitted before
+    /// content (in state_formatted), not after.
+    fn write_alternate_screen_diff(
+        &self,
+        contents: &mut Vec<u8>,
+        prev: &Self,
+    ) {
+        if self.alternate_screen() != prev.alternate_screen() {
+            crate::term::AlternateScreen::new(self.alternate_screen())
+                .write_buf(contents);
+        }
     }
 
     /// Returns terminal escape sequences sufficient to change the previous
@@ -1396,6 +1418,281 @@ impl Screen {
     // CSI r
     pub(crate) fn decstbm(&mut self, (top, bottom): (u16, u16)) {
         self.grid_mut().set_scroll_region(top - 1, bottom - 1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parser(rows: u16, cols: u16) -> crate::Parser {
+        crate::Parser::new(rows, cols, 0)
+    }
+
+    #[test]
+    fn test_alternate_screen_basic() {
+        let mut p = parser(24, 80);
+        // Enter alt screen, write text
+        p.process(b"\x1b[?1049h");
+        assert!(p.screen().alternate_screen());
+        p.process(b"hello alt");
+        assert_eq!(
+            p.screen().cell(0, 0).unwrap().contents(),
+            "h"
+        );
+    }
+
+    #[test]
+    fn test_alternate_screen_exit_restores_main() {
+        let mut p = parser(24, 80);
+        // Write on main
+        p.process(b"main text");
+        assert_eq!(p.screen().cell(0, 0).unwrap().contents(), "m");
+
+        // Enter alt, write different content
+        p.process(b"\x1b[?1049h");
+        p.process(b"alt text");
+        assert_eq!(p.screen().cell(0, 0).unwrap().contents(), "a");
+
+        // Exit alt — main content restored
+        p.process(b"\x1b[?1049l");
+        assert!(!p.screen().alternate_screen());
+        assert_eq!(p.screen().cell(0, 0).unwrap().contents(), "m");
+    }
+
+    #[test]
+    fn test_state_formatted_includes_alt_screen() {
+        let mut p = parser(24, 80);
+        p.process(b"\x1b[?1049h");
+        p.process(b"on alt");
+        let formatted = p.screen().state_formatted();
+        // Must contain the alt screen switch escape
+        let haystack = String::from_utf8_lossy(&formatted);
+        assert!(
+            haystack.contains("\x1b[?1049h"),
+            "state_formatted should contain alt screen escape, got: {:?}",
+            haystack
+        );
+    }
+
+    #[test]
+    fn test_state_formatted_no_alt_when_on_main() {
+        let mut p = parser(24, 80);
+        p.process(b"on main");
+        let formatted = p.screen().state_formatted();
+        let haystack = String::from_utf8_lossy(&formatted);
+        assert!(
+            !haystack.contains("\x1b[?1049h"),
+            "state_formatted should NOT contain alt screen escape on main, got: {:?}",
+            haystack
+        );
+    }
+
+    #[test]
+    fn test_state_formatted_round_trip_alt_screen() {
+        let mut p = parser(24, 80);
+        p.process(b"\x1b[?1049h");
+        p.process(b"\x1b[H"); // home
+        p.process(b"round trip alt");
+
+        let formatted = p.screen().state_formatted();
+
+        // Feed into a fresh parser
+        let mut p2 = parser(24, 80);
+        p2.process(&formatted);
+
+        assert!(p2.screen().alternate_screen());
+        // Cell-by-cell match for the text we wrote
+        for col in 0..14u16 {
+            let c1 = p.screen().cell(0, col).unwrap().contents();
+            let c2 = p2.screen().cell(0, col).unwrap().contents();
+            assert_eq!(c1, c2, "mismatch at col {col}");
+        }
+    }
+
+    #[test]
+    fn test_state_formatted_round_trip_main_screen() {
+        let mut p = parser(24, 80);
+        p.process(b"round trip main");
+
+        let formatted = p.screen().state_formatted();
+
+        let mut p2 = parser(24, 80);
+        p2.process(&formatted);
+
+        assert!(!p2.screen().alternate_screen());
+        for col in 0..15u16 {
+            let c1 = p.screen().cell(0, col).unwrap().contents();
+            let c2 = p2.screen().cell(0, col).unwrap().contents();
+            assert_eq!(c1, c2, "mismatch at col {col}");
+        }
+    }
+
+    #[test]
+    fn test_state_formatted_preserves_mouse_mode() {
+        let mut p = parser(24, 80);
+        p.process(b"\x1b[?1049h"); // alt screen
+        p.process(b"\x1b[?1003h"); // any-motion mouse
+        p.process(b"mouse test");
+
+        let formatted = p.screen().state_formatted();
+        let mut p2 = parser(24, 80);
+        p2.process(&formatted);
+
+        assert!(p2.screen().alternate_screen());
+        assert_eq!(
+            p2.screen().mouse_protocol_mode(),
+            MouseProtocolMode::AnyMotion
+        );
+    }
+
+    #[test]
+    fn test_btop_like_redraw_on_alt_screen() {
+        let mut p = parser(5, 10);
+        p.process(b"\x1b[?1049h");
+
+        // Frame 1: fill all rows
+        for row in 0..5u16 {
+            p.process(format!("\x1b[{};1H", row + 1).as_bytes());
+            p.process(format!("frame1 r{row}").as_bytes());
+        }
+        assert!(p.screen().cell(0, 0).unwrap().contents() == "f");
+
+        // Frame 2: overwrite in-place
+        for row in 0..5u16 {
+            p.process(format!("\x1b[{};1H", row + 1).as_bytes());
+            p.process(format!("FRAME2 R{row}").as_bytes());
+        }
+
+        // Only frame 2 should be visible
+        assert_eq!(p.screen().cell(0, 0).unwrap().contents(), "F");
+        assert_eq!(p.screen().cell(0, 1).unwrap().contents(), "R");
+    }
+
+    #[test]
+    fn test_btop_like_redraw_after_state_formatted() {
+        let mut p = parser(5, 10);
+        p.process(b"\x1b[?1049h");
+
+        // Frame 1
+        for row in 0..5u16 {
+            p.process(format!("\x1b[{};1H", row + 1).as_bytes());
+            p.process(format!("frame1 r{row}").as_bytes());
+        }
+
+        // Round-trip through state_formatted
+        let formatted = p.screen().state_formatted();
+        let mut p2 = parser(5, 10);
+        p2.process(&formatted);
+        assert!(p2.screen().alternate_screen());
+
+        // Frame 2 on the round-tripped parser
+        for row in 0..5u16 {
+            p2.process(format!("\x1b[{};1H", row + 1).as_bytes());
+            p2.process(format!("FRAME2 R{row}").as_bytes());
+        }
+
+        // Only frame 2 visible
+        assert_eq!(p2.screen().cell(0, 0).unwrap().contents(), "F");
+        assert_eq!(p2.screen().cell(1, 0).unwrap().contents(), "F");
+    }
+
+    #[test]
+    fn test_hvp_cursor_positioning() {
+        // CSI f (HVP) must work identically to CSI H (CUP)
+        let mut p = parser(5, 20);
+        // Use HVP to move to row 3, col 5 (1-indexed)
+        p.process(b"\x1b[3;5f");
+        p.process(b"X");
+        assert_eq!(p.screen().cell(2, 4).unwrap().contents(), "X");
+
+        // Verify it matches CSI H behavior
+        let mut p2 = parser(5, 20);
+        p2.process(b"\x1b[3;5H");
+        p2.process(b"X");
+        assert_eq!(p2.screen().cell(2, 4).unwrap().contents(), "X");
+    }
+
+    #[test]
+    fn test_btop_uses_hvp_cursor_positioning() {
+        // btop uses CSI f (not CSI H) for cursor positioning.
+        // This test simulates btop's actual output pattern.
+        let mut p = parser(24, 80);
+        p.process(b"\x1b[?1049h"); // alt screen
+        p.process(b"\x1b[?25l"); // hide cursor
+
+        // btop-style frame: uses CSI f for cursor positioning
+        for row in 0..24u16 {
+            p.process(format!("\x1b[{};1f", row + 1).as_bytes());
+            p.process(format!("btop row {:>2}", row).as_bytes());
+        }
+
+        // All rows should be populated at their correct positions
+        assert_eq!(p.screen().cell(0, 0).unwrap().contents(), "b");
+        assert_eq!(p.screen().cell(0, 5).unwrap().contents(), "r");
+        assert_eq!(p.screen().cell(23, 0).unwrap().contents(), "b");
+    }
+
+    #[test]
+    fn test_btop_scrollback_1000_client_parser() {
+        // Reproduce exact client setup: scrollback 1000
+        let mut client = crate::Parser::new(24, 80, 1000);
+
+        // btop enters alt screen
+        client.process(b"\x1b[?1049h");
+        assert!(client.screen().alternate_screen());
+
+        // Frame 1
+        for row in 0..24u16 {
+            client.process(format!("\x1b[{};1H", row + 1).as_bytes());
+            client.process(format!("frame1 row {:>2}", row).as_bytes());
+        }
+        assert_eq!(client.screen().cell(0, 0).unwrap().contents(), "f");
+
+        // Frame 2 overwrites in-place
+        for row in 0..24u16 {
+            client.process(format!("\x1b[{};1H", row + 1).as_bytes());
+            client.process(format!("FRAME2 ROW {:>2}", row).as_bytes());
+        }
+        // Must be frame 2, not frame 1
+        assert_eq!(client.screen().cell(0, 0).unwrap().contents(), "F");
+        assert_eq!(client.screen().scrollback(), 0);
+
+        // Round-trip: FullScreenDump
+        let dump = client.screen().state_formatted();
+        let mut client2 = crate::Parser::new(24, 80, 1000);
+        client2.process(&dump);
+        assert!(client2.screen().alternate_screen());
+        assert_eq!(client2.screen().cell(0, 0).unwrap().contents(), "F");
+
+        // Frame 3 on round-tripped parser must also overwrite
+        for row in 0..24u16 {
+            client2.process(format!("\x1b[{};1H", row + 1).as_bytes());
+            client2.process(format!("frame3 row {:>2}", row).as_bytes());
+        }
+        assert_eq!(client2.screen().cell(0, 0).unwrap().contents(), "f");
+        assert_eq!(client2.screen().scrollback(), 0);
+    }
+
+    #[test]
+    fn test_vim_like_alt_screen_with_scroll_region() {
+        let mut p = parser(10, 20);
+        p.process(b"\x1b[?1049h");
+        // Set scroll region to rows 2-9 (1-indexed)
+        p.process(b"\x1b[2;9r");
+        // Write header on row 1
+        p.process(b"\x1b[1;1H");
+        p.process(b"== HEADER ==");
+        // Write content in scroll region
+        p.process(b"\x1b[2;1H");
+        p.process(b"line one");
+        p.process(b"\x1b[3;1H");
+        p.process(b"line two");
+
+        assert!(p.screen().alternate_screen());
+        assert_eq!(p.screen().cell(0, 0).unwrap().contents(), "=");
+        assert_eq!(p.screen().cell(1, 0).unwrap().contents(), "l");
+        assert_eq!(p.screen().cell(2, 0).unwrap().contents(), "l");
     }
 }
 

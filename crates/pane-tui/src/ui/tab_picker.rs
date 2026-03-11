@@ -68,9 +68,14 @@ impl TabPickerState {
     ) -> Self {
         let entries = build_entries(custom_entries, favorites);
         let filtered: Vec<usize> = (0..entries.len()).collect();
+        // Default selection to the first Recent entry if one exists.
+        let selected = entries
+            .iter()
+            .position(|e| e.section == TabPickerSection::Recent)
+            .unwrap_or(0);
         Self {
             input: String::new(),
-            selected: 0,
+            selected,
             entries,
             mode,
             filtered,
@@ -365,8 +370,17 @@ pub fn hit_test(state: &TabPickerState, area: Rect, x: u16, y: u16) -> Option<Ta
     let filtered = state.filtered_entries();
     let show_sections = state.input.is_empty();
 
-    // Walk through items accounting for section headers to map row → item index
+    // Compute scroll offset to match render_select_list logic
+    let visible_count = list_area.height as usize;
+    let scroll_offset = if state.selected >= visible_count {
+        state.selected - visible_count + 1
+    } else {
+        0
+    };
+
+    // Walk through items accounting for section headers and scroll to map row → item index
     let mut visual_row = 0usize;
+    let mut item_idx_visual = 0usize; // counts headers + items for scroll comparison
     let mut last_section: Option<&str> = None;
 
     for (item_idx, (_, entry)) in filtered.iter().enumerate() {
@@ -378,17 +392,25 @@ pub fn hit_test(state: &TabPickerState, area: Rect, x: u16, y: u16) -> Option<Ta
             };
             if need_header {
                 last_section = Some(section);
-                if visual_row == row {
-                    // Clicked on a section header — ignore
-                    return None;
+                if item_idx_visual >= scroll_offset {
+                    if visual_row == row {
+                        // Clicked on a section header — ignore
+                        return None;
+                    }
+                    visual_row += 1;
                 }
-                visual_row += 1;
+                item_idx_visual += 1;
             }
+        }
+        if item_idx_visual < scroll_offset {
+            item_idx_visual += 1;
+            continue;
         }
         if visual_row == row {
             return Some(TabPickerClick::Item(item_idx));
         }
         visual_row += 1;
+        item_idx_visual += 1;
     }
 
     None
@@ -435,7 +457,14 @@ mod tests {
         let state = TabPickerState::new(&[], &[]);
         assert_eq!(state.mode, TabPickerMode::NewTab);
         assert!(state.input.is_empty());
-        assert_eq!(state.selected, 0);
+        // selected defaults to first Recent entry, or 0 if none
+        let has_recents = state.entries.iter().any(|e| e.section == TabPickerSection::Recent);
+        if has_recents {
+            let first_recent = state.entries.iter().position(|e| e.section == TabPickerSection::Recent).unwrap();
+            assert_eq!(state.selected, first_recent);
+        } else {
+            assert_eq!(state.selected, 0);
+        }
         // Should always have at least "Shell" entry
         assert!(
             state.entries.iter().any(|e| e.name == "Shell"),
@@ -531,7 +560,8 @@ mod tests {
     fn test_move_down_increments() {
         let state_entries = make_custom_entries();
         let mut state = TabPickerState::new(&state_entries, &[]);
-        assert_eq!(state.selected, 0);
+        // Reset to 0 so we can test relative movement
+        state.selected = 0;
         state.move_down();
         assert_eq!(state.selected, 1);
         state.move_down();
@@ -680,8 +710,10 @@ mod tests {
 
     #[test]
     fn test_selected_command_shell() {
-        let state = TabPickerState::new(&[], &[]);
-        // Shell entry has no command → returns just base
+        let mut state = TabPickerState::new(&[], &[]);
+        // Select the Shell entry (which has no command → returns just base)
+        let shell_idx = state.entries.iter().position(|e| e.name == "Shell").unwrap();
+        state.selected = state.filtered.iter().position(|&i| i == shell_idx).unwrap();
         let cmd = state.selected_command().unwrap();
         assert_eq!(cmd, "new-window");
     }
@@ -778,6 +810,83 @@ mod tests {
         let state = TabPickerState::new(&[], &[]);
         let shell_entry = state.entries.iter().find(|e| e.name == "Shell").unwrap();
         assert!(shell_entry.shell.is_none(), "default shell entry should not have shell wrapping");
+    }
+
+    #[test]
+    fn test_initial_selection_recent() {
+        // Build entries with a known Recent entry by using a helper that
+        // bypasses build_entries (which reads real shell history).
+        let entries = vec![
+            TabPickerEntry {
+                name: "Shell".into(),
+                command: None,
+                description: "Default".into(),
+                section: TabPickerSection::Shells,
+                shell: None,
+            },
+            TabPickerEntry {
+                name: "htop".into(),
+                command: Some("htop".into()),
+                description: "Process viewer".into(),
+                section: TabPickerSection::Tools,
+                shell: Some("/bin/zsh".into()),
+            },
+            TabPickerEntry {
+                name: "cargo build".into(),
+                command: Some("cargo build".into()),
+                description: "From history".into(),
+                section: TabPickerSection::Recent,
+                shell: Some("/bin/zsh".into()),
+            },
+        ];
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        let selected = entries
+            .iter()
+            .position(|e| e.section == TabPickerSection::Recent)
+            .unwrap_or(0);
+        let state = TabPickerState {
+            input: String::new(),
+            selected,
+            entries,
+            mode: TabPickerMode::NewTab,
+            filtered,
+        };
+        assert_eq!(state.selected, 2, "should point to first Recent entry");
+        assert_eq!(state.entries[state.selected].section, TabPickerSection::Recent);
+    }
+
+    #[test]
+    fn test_initial_selection_fallback() {
+        // No Recent entries — should default to 0
+        let entries = vec![
+            TabPickerEntry {
+                name: "Shell".into(),
+                command: None,
+                description: "Default".into(),
+                section: TabPickerSection::Shells,
+                shell: None,
+            },
+            TabPickerEntry {
+                name: "htop".into(),
+                command: Some("htop".into()),
+                description: "Process viewer".into(),
+                section: TabPickerSection::Tools,
+                shell: Some("/bin/zsh".into()),
+            },
+        ];
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        let selected = entries
+            .iter()
+            .position(|e| e.section == TabPickerSection::Recent)
+            .unwrap_or(0);
+        let state = TabPickerState {
+            input: String::new(),
+            selected,
+            entries,
+            mode: TabPickerMode::NewTab,
+            filtered,
+        };
+        assert_eq!(state.selected, 0, "should fall back to 0 when no recents");
     }
 
     #[test]

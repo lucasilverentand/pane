@@ -515,6 +515,28 @@ impl BufWrite for ApplicationCursor {
 
 #[derive(Default, Debug)]
 #[must_use = "this struct does nothing unless you call write_buf"]
+pub struct AlternateScreen {
+    state: bool,
+}
+
+impl AlternateScreen {
+    pub fn new(state: bool) -> Self {
+        Self { state }
+    }
+}
+
+impl BufWrite for AlternateScreen {
+    fn write_buf(&self, buf: &mut Vec<u8>) {
+        if self.state {
+            buf.extend_from_slice(b"\x1b[?1049h");
+        } else {
+            buf.extend_from_slice(b"\x1b[?1049l");
+        }
+    }
+}
+
+#[derive(Default, Debug)]
+#[must_use = "this struct does nothing unless you call write_buf"]
 pub struct BracketedPaste {
     state: bool,
 }
