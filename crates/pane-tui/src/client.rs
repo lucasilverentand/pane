@@ -26,6 +26,14 @@ use crate::ui::context_menu::ContextMenuState;
 use crate::ui::palette::UnifiedPaletteState;
 use crate::ui::tab_picker::TabPickerState;
 
+/// Result of hit-testing a tab bar click.
+enum TabBarHit {
+    /// Clicked on a specific tab within a window.
+    Tab { group_index: usize, tab_index: usize },
+    /// Clicked on the + button.
+    Plus,
+}
+
 /// TUI client that connects to a pane daemon via Unix socket.
 pub struct Client {
     // Local rendering state (received from server)
@@ -818,6 +826,20 @@ impl Client {
                         }
                         self.context_menu_state =
                             Some(crate::ui::context_menu::workspace_bar_menu(x, y));
+                        self.mode = Mode::ContextMenu;
+                    } else if let Some(TabBarHit::Tab { group_index, tab_index }) = self.hit_test_tab_bar(tui, x, y) {
+                        // Right-click on a tab — select that tab first, then show tab bar menu
+                        let mut w = writer.lock().await;
+                        let _ = send_request(&mut *w, &ClientRequest::MouseDown { x, y }).await;
+                        drop(w);
+                        // Update local render state to reflect the selected tab
+                        if let Some(ws) = self.render_state.workspaces.get_mut(self.render_state.active_workspace) {
+                            if let Some(group) = ws.groups.get_mut(group_index) {
+                                group.active_tab = tab_index;
+                            }
+                        }
+                        self.context_menu_state =
+                            Some(crate::ui::context_menu::tab_bar_menu(x, y));
                         self.mode = Mode::ContextMenu;
                     } else {
                         // Right-click on pane body (default)
@@ -1725,16 +1747,11 @@ impl Client {
         self.screens.get(&pane_id).map(|p| p.screen())
     }
 
-    /// Check if a click hits the + button in any visible window's tab bar.
-    fn hit_test_tab_bar_plus(&self, tui: &Tui, x: u16, y: u16) -> bool {
-        let ws = match self.active_workspace() {
-            Some(ws) => ws,
-            None => return false,
-        };
-        let size = match tui.size() {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
+    /// Hit-test the tab bar across all visible windows.
+    /// Returns which tab or + button was clicked, along with the window index.
+    fn hit_test_tab_bar(&self, tui: &Tui, x: u16, y: u16) -> Option<TabBarHit> {
+        let ws = self.active_workspace()?;
+        let size = tui.size().ok()?;
         let show_workspace_bar = !self.render_state.workspaces.is_empty();
         let bar_h = if show_workspace_bar {
             crate::ui::workspace_bar::HEIGHT
@@ -1759,23 +1776,54 @@ impl Client {
                         continue;
                     }
                     let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, 1);
-                    let tab_bar_y = padded.y;
-                    let max_x = padded.x + padded.width;
-                    let plus_reserve: u16 = 3;
-                    if plus_reserve > max_x.saturating_sub(padded.x) {
+                    if y != padded.y {
                         continue;
                     }
-                    let plus_start = max_x - plus_reserve;
-                    if y == tab_bar_y && x >= plus_start && x < max_x {
-                        // Check that the group actually has tabs (sanity check)
-                        if !group.tabs.is_empty() {
-                            return true;
+                    let max_x = padded.x + padded.width;
+                    let plus_reserve: u16 = 3;
+
+                    // Check + button first (right-aligned)
+                    if plus_reserve <= max_x.saturating_sub(padded.x) {
+                        let plus_start = max_x - plus_reserve;
+                        if x >= plus_start && x < max_x && !group.tabs.is_empty() {
+                            return Some(TabBarHit::Plus);
+                        }
+                    }
+
+                    // Check individual tabs
+                    let sep_width: u16 = 3;
+                    let mut cursor = padded.x;
+                    for (i, tab) in group.tabs.iter().enumerate() {
+                        let is_active_tab = i == group.active_tab;
+                        let label_width = tab.title.len() as u16 + 2; // " title "
+
+                        if cursor + label_width + plus_reserve > max_x && !is_active_tab {
+                            continue; // tab is clipped
+                        }
+
+                        if i > 0 {
+                            cursor += sep_width;
+                        }
+
+                        let tab_start = cursor;
+                        cursor += label_width;
+
+                        if x >= tab_start && x < cursor {
+                            return Some(TabBarHit::Tab {
+                                group_index: ws.groups.iter().position(|g| g.id == *group_id).unwrap_or(0),
+                                tab_index: i,
+                            });
                         }
                     }
                 }
             }
         }
-        false
+        None
+    }
+
+    /// Check if a click hits the + button in any visible window's tab bar.
+    fn hit_test_tab_bar_plus(&self, tui: &Tui, x: u16, y: u16) -> bool {
+        matches!(self.hit_test_tab_bar(tui, x, y), Some(TabBarHit::Plus))
     }
 
     fn update_terminal_title(&self) {

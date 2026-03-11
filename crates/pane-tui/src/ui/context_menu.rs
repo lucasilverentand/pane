@@ -56,7 +56,6 @@ impl ContextMenuState {
 }
 
 /// Create a context menu for right-clicking a tab in the tab bar.
-#[allow(dead_code)]
 pub fn tab_bar_menu(x: u16, y: u16) -> ContextMenuState {
     ContextMenuState {
         items: vec![
