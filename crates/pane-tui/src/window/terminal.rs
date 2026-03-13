@@ -39,20 +39,20 @@ fn render_screen_inner(
             let cell = screen.cell(row as u16, col as u16);
 
             // Skip wide char continuation cells — the wide char already occupies 2 columns
-            if cell.as_ref().map_or(false, |c| c.is_wide_continuation()) {
+            if cell.as_ref().is_some_and(|c| c.is_wide_continuation()) {
                 continue;
             }
 
             let mut style = match cell {
-                Some(ref cell) => cell_style(cell),
+                Some(cell) => cell_style(cell),
                 None => Style::default(),
             };
 
             // Apply copy mode overlays
             if let Some(cms) = cms {
-                if row == cms.cursor_row && col == cms.cursor_col {
-                    style = style.add_modifier(Modifier::REVERSED);
-                } else if cms.is_selected(row, col) {
+                if (row == cms.cursor_row && col == cms.cursor_col)
+                    || cms.is_selected(row, col)
+                {
                     style = style.add_modifier(Modifier::REVERSED);
                 } else if cms.is_search_match(row, col) {
                     style = style.bg(Color::Yellow).fg(Color::Black);

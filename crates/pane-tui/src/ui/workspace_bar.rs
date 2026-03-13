@@ -17,10 +17,15 @@ pub enum WorkspaceBarClick {
 }
 
 struct TabLayout {
-    /// (start_x, end_x) for each tab's full span (inclusive of padding)
+    /// (start_x, end_x) for each tab's full span (inclusive of padding).
+    /// Hidden tabs have (0, 0).
     tab_ranges: Vec<(u16, u16)>,
     /// (start_x, end_x) for the + button
     plus_range: Option<(u16, u16)>,
+    /// Number of tabs hidden to the left (before the visible window).
+    hidden_left: usize,
+    /// Number of tabs hidden to the right (after the visible window).
+    hidden_right: usize,
 }
 
 /// Compute the inner content area for the workspace bar, inset by 1 extra
@@ -56,38 +61,119 @@ fn truncate_name(name: &str, max: usize) -> String {
     }
 }
 
+const SEP_WIDTH: u16 = 3; // " · "
+const PLUS_RESERVE: u16 = 3; // " + "
+const INDICATOR_WIDTH: u16 = 2; // "◂ " or " ▸"
+
 fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
-    let mut tab_ranges: Vec<(u16, u16)> = Vec::new();
+    let n = names.len();
     let max_x = area.x + area.width;
-    let plus_reserve = 3u16; // " + "
-    let sep_width = 3u16; // " · " — 3 display columns
-    let mut cursor_x = area.x;
 
-    for (i, name) in names.iter().enumerate() {
-        let display_name = truncate_name(name, 20);
-        let label = format!(" {} ", display_name);
-        let label_width = label.len() as u16;
-
-        // Check if this tab fits (reserve space for + button on the right)
-        if cursor_x + label_width + plus_reserve > max_x && i != active_idx {
-            tab_ranges.push((0, 0));
-            continue;
-        }
-
-        // Separator before non-first tabs
-        if i > 0 {
-            cursor_x += sep_width;
-        }
-
-        let tab_start = cursor_x;
-        cursor_x += label_width;
-        tab_ranges.push((tab_start, cursor_x));
+    if n == 0 {
+        let plus_range = if PLUS_RESERVE <= area.width {
+            Some((max_x - PLUS_RESERVE, max_x))
+        } else {
+            None
+        };
+        return TabLayout {
+            tab_ranges: vec![],
+            plus_range,
+            hidden_left: 0,
+            hidden_right: 0,
+        };
     }
 
-    // Right-align the + button
-    let plus_range = if plus_reserve <= max_x.saturating_sub(area.x) {
-        let plus_start = max_x - plus_reserve;
-        Some((plus_start, max_x))
+    // Compute label widths
+    let label_widths: Vec<u16> = names
+        .iter()
+        .map(|name| truncate_name(name, 20).len() as u16 + 2)
+        .collect();
+
+    // Check if everything fits without overflow
+    let total: u16 = label_widths.iter().sum::<u16>()
+        + if n > 1 {
+            SEP_WIDTH * (n as u16 - 1)
+        } else {
+            0
+        }
+        + PLUS_RESERVE;
+
+    if total <= area.width {
+        // Everything fits — lay out left-to-right
+        let mut tab_ranges = Vec::new();
+        let mut cursor_x = area.x;
+        for (i, &w) in label_widths.iter().enumerate() {
+            if i > 0 {
+                cursor_x += SEP_WIDTH;
+            }
+            tab_ranges.push((cursor_x, cursor_x + w));
+            cursor_x += w;
+        }
+        let plus_range = Some((max_x - PLUS_RESERVE, max_x));
+        return TabLayout {
+            tab_ranges,
+            plus_range,
+            hidden_left: 0,
+            hidden_right: 0,
+        };
+    }
+
+    // Overflow — find the widest contiguous range centered on active_idx
+    let active = active_idx.min(n - 1);
+    let range_width = |lo: usize, hi: usize| -> u16 {
+        let mut w: u16 = 0;
+        for (j, lw) in label_widths[lo..=hi].iter().enumerate() {
+            w += lw;
+            if j > 0 {
+                w += SEP_WIDTH;
+            }
+        }
+        if lo > 0 {
+            w += INDICATOR_WIDTH;
+        }
+        if hi < n - 1 {
+            w += INDICATOR_WIDTH;
+        }
+        w + PLUS_RESERVE
+    };
+
+    let mut lo = active;
+    let mut hi = active;
+
+    loop {
+        let mut expanded = false;
+        if lo > 0 && range_width(lo - 1, hi) <= area.width {
+            lo -= 1;
+            expanded = true;
+        }
+        if hi + 1 < n && range_width(lo, hi + 1) <= area.width {
+            hi += 1;
+            expanded = true;
+        }
+        if !expanded {
+            break;
+        }
+    }
+
+    let hidden_left = lo;
+    let hidden_right = n - 1 - hi;
+
+    // Build tab_ranges
+    let mut tab_ranges = vec![(0u16, 0u16); n];
+    let mut cursor_x = area.x;
+    if hidden_left > 0 {
+        cursor_x += INDICATOR_WIDTH;
+    }
+    for i in lo..=hi {
+        if i > lo {
+            cursor_x += SEP_WIDTH;
+        }
+        tab_ranges[i] = (cursor_x, cursor_x + label_widths[i]);
+        cursor_x += label_widths[i];
+    }
+
+    let plus_range = if PLUS_RESERVE <= area.width {
+        Some((max_x - PLUS_RESERVE, max_x))
     } else {
         None
     };
@@ -95,6 +181,8 @@ fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
     TabLayout {
         tab_ranges,
         plus_range,
+        hidden_left,
+        hidden_right,
     }
 }
 
@@ -108,7 +196,7 @@ pub fn render(
     area: Rect,
 ) {
     let border_color = if focused {
-        theme.border_normal
+        theme.accent
     } else {
         theme.border_inactive
     };
@@ -124,8 +212,14 @@ pub fn render(
     let hovered = hover.and_then(|(hx, hy)| hit_test(workspace_names, active_idx, area, hx, hy));
 
     let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut first = true;
+    let mut first_visible = true;
     let mut content_end = tab_area.x;
+
+    // Left overflow indicator
+    if layout.hidden_left > 0 {
+        spans.push(Span::styled("\u{25C2} ", Style::default().fg(theme.dim)));
+        content_end = tab_area.x + INDICATOR_WIDTH;
+    }
 
     for (i, name) in workspace_names.iter().enumerate() {
         if i >= layout.tab_ranges.len() {
@@ -137,10 +231,10 @@ pub fn render(
         }
 
         // Separator before non-first visible tabs
-        if !first {
+        if !first_visible {
             spans.push(Span::styled(sep, Style::default().fg(theme.dim)));
         }
-        first = false;
+        first_visible = false;
 
         let is_active = i == active_idx;
         let is_hovered = matches!(hovered, Some(WorkspaceBarClick::Tab(t)) if t == i);
@@ -159,6 +253,12 @@ pub fn render(
 
         spans.push(Span::styled(label, style));
         content_end = end;
+    }
+
+    // Right overflow indicator
+    if layout.hidden_right > 0 {
+        spans.push(Span::styled(" \u{25B8}", Style::default().fg(theme.dim)));
+        content_end += INDICATOR_WIDTH;
     }
 
     // Right-align the + button with padding

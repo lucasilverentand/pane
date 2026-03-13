@@ -394,19 +394,19 @@ fn render_full_search(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Fr
         let entry = &state.all_entries[entry_idx];
 
         // Category header (only in unfiltered view)
-        if show_categories {
-            if current_category != Some(entry.category) {
-                current_category = Some(entry.category);
-                if !lines.is_empty() {
-                    lines.push(Line::raw(""));
-                }
-                lines.push(Line::styled(
-                    format!("  {}", entry.category),
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                ));
+        if show_categories
+            && current_category != Some(entry.category)
+        {
+            current_category = Some(entry.category);
+            if !lines.is_empty() {
+                lines.push(Line::raw(""));
             }
+            lines.push(Line::styled(
+                format!("  {}", entry.category),
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ));
         }
 
         let is_selected = visual_idx == state.selected;
@@ -415,11 +415,7 @@ fn render_full_search(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Fr
             .as_ref()
             .is_some_and(|a| *a == entry.action);
 
-        let name_style = if is_selected {
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else if is_highlighted {
+        let name_style = if is_selected || is_highlighted {
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
@@ -502,9 +498,9 @@ fn render_compact_hints(
     // Multi-column layout: fit entries in columns
     let item_width = (max_key_len + 2 + max_label_len + 2) as u16;
     let max_popup_width = (area.width * 60 / 100).max(30);
-    let cols = ((max_popup_width - 2) / item_width).max(1).min(4) as usize;
+    let cols = ((max_popup_width - 2) / item_width).clamp(1, 4) as usize;
     let total_items = entries.len();
-    let rows = (total_items + cols - 1) / cols;
+    let rows = total_items.div_ceil(cols);
 
     let popup_width = ((item_width * cols as u16) + 4).min(max_popup_width);
     let popup_height = (rows as u16 + 4).min(area.height.saturating_sub(4));

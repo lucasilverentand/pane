@@ -9,11 +9,15 @@ use ratatui::widgets::{Block, BorderType, Borders};
 use pane_protocol::config::Theme;
 use crate::window::Window;
 
+const SEP_WIDTH: u16 = 3; // " · "
+const PLUS_RESERVE: u16 = 3; // " + "
+const INDICATOR_WIDTH: u16 = 2; // "◂ " or " ▸"
+
 /// Layout information for tab bar hit testing.
 pub struct TabBarLayout {
     /// Absolute area of the tab bar row.
     pub area: Rect,
-    /// (start_x, end_x) for each tab.
+    /// (start_x, end_x) for each tab. Hidden tabs have (0, 0).
     pub tab_ranges: Vec<(u16, u16)>,
     /// (start_x, end_x) for the + button, if present.
     pub plus_range: Option<(u16, u16)>,
@@ -41,39 +45,85 @@ pub fn tab_bar_area(_group: &Window, area: Rect) -> Option<Rect> {
 
 /// Compute tab bar layout for a given group and area (for hit testing).
 pub fn tab_bar_layout(group: &Window, theme: &Theme, area: Rect) -> TabBarLayout {
-    let mut tab_ranges: Vec<(u16, u16)> = Vec::new();
-    let mut cursor_x = area.x;
+    let n = group.tabs.len();
     let max_x = area.x + area.width;
-    let sep_width = 3u16;
-    let plus_reserve = 3u16;
 
-    for (i, tab) in group.tabs.iter().enumerate() {
-        let is_active_tab = i == group.active_tab;
-        let label = format!(" {} ", tab.title);
-        let label_width = label.len() as u16;
+    // Compute label widths
+    let label_widths: Vec<u16> = group
+        .tabs
+        .iter()
+        .map(|tab| tab.title.len() as u16 + 2)
+        .collect();
 
-        if cursor_x + label_width + plus_reserve > max_x && !is_active_tab {
-            tab_ranges.push((0, 0));
-            continue;
+    // Check if everything fits
+    let total: u16 = label_widths.iter().sum::<u16>()
+        + if n > 1 { SEP_WIDTH * (n as u16 - 1) } else { 0 }
+        + PLUS_RESERVE;
+
+    let (lo, hi) = if n == 0 || total <= area.width {
+        (0, n.saturating_sub(1))
+    } else {
+        // Overflow — sliding window centered on active tab
+        let active = group.active_tab.min(n - 1);
+        let range_width = |lo: usize, hi: usize| -> u16 {
+            let mut w: u16 = 0;
+            for (j, lw) in label_widths[lo..=hi].iter().enumerate() {
+                w += lw;
+                if j > 0 {
+                    w += SEP_WIDTH;
+                }
+            }
+            if lo > 0 {
+                w += INDICATOR_WIDTH;
+            }
+            if hi < n - 1 {
+                w += INDICATOR_WIDTH;
+            }
+            w + PLUS_RESERVE
+        };
+
+        let mut lo = active;
+        let mut hi = active;
+        loop {
+            let mut expanded = false;
+            if lo > 0 && range_width(lo - 1, hi) <= area.width {
+                lo -= 1;
+                expanded = true;
+            }
+            if hi + 1 < n && range_width(lo, hi + 1) <= area.width {
+                hi += 1;
+                expanded = true;
+            }
+            if !expanded {
+                break;
+            }
         }
+        (lo, hi)
+    };
 
-        if i > 0 {
-            cursor_x += sep_width;
+    // Build tab_ranges
+    let mut tab_ranges = vec![(0u16, 0u16); n];
+    let mut cursor_x = area.x;
+    if lo > 0 {
+        cursor_x += INDICATOR_WIDTH;
+    }
+    if n > 0 {
+        for i in lo..=hi {
+            if i > lo {
+                cursor_x += SEP_WIDTH;
+            }
+            tab_ranges[i] = (cursor_x, cursor_x + label_widths[i]);
+            cursor_x += label_widths[i];
         }
-
-        let tab_start = cursor_x;
-        cursor_x += label_width;
-        tab_ranges.push((tab_start, cursor_x));
     }
 
-    // The + button is right-aligned in the render, so match that here.
-    let plus_range = if plus_reserve <= max_x.saturating_sub(area.x) {
-        let plus_start = max_x - plus_reserve;
+    let plus_range = if PLUS_RESERVE <= max_x.saturating_sub(area.x) {
+        let plus_start = max_x - PLUS_RESERVE;
         Some((plus_start, max_x))
     } else {
         None
     };
-    let _ = theme; // used for styling only (not needed for hit-testing geometry)
+    let _ = theme;
 
     TabBarLayout {
         area,
@@ -224,14 +274,14 @@ mod tests {
 
         let (plus_start, plus_end) = layout.plus_range.unwrap();
         assert_eq!(plus_end, 60); // right edge of area
-        assert_eq!(plus_end - plus_start, 3); // plus_reserve = 3
+        assert_eq!(plus_end - plus_start, 3); // PLUS_RESERVE = 3
     }
 
     #[test]
     fn test_tab_bar_layout_very_narrow_no_plus() {
         let group = make_group_with_tabs(&["x"]);
         let theme = Theme::default();
-        // Area just 2 wide: too small for plus_reserve (3)
+        // Area just 2 wide: too small for PLUS_RESERVE (3)
         let area = Rect::new(0, 0, 2, 1);
         let layout = tab_bar_layout(&group, &theme, area);
         assert!(layout.plus_range.is_none());

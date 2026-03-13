@@ -28,7 +28,7 @@ fn read_until_matching_brace(chars: &mut std::iter::Peekable<std::str::Chars>) -
     let mut buf = String::new();
     let mut depth = 1u32;
 
-    while let Some(ch) = chars.next() {
+    for ch in chars.by_ref() {
         match ch {
             '{' => {
                 depth += 1;
@@ -78,9 +78,7 @@ fn split_conditional(s: &str) -> Vec<&str> {
         match ch {
             '{' => depth += 1,
             '}' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
+                depth = depth.saturating_sub(1);
             }
             ',' if depth == 0 => {
                 parts.push(&s[start..i]);

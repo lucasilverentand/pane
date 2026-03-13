@@ -14,15 +14,9 @@ use pane_protocol::config::Theme;
 use crate::ui::format::format_string;
 
 fn format_leader_key(key: &crossterm::event::KeyEvent) -> String {
-    use crossterm::event::{KeyCode, KeyModifiers};
+    use crossterm::event::KeyCode;
     match key.code {
-        KeyCode::Char(c) => {
-            if key.modifiers.contains(KeyModifiers::SHIFT) || c.is_uppercase() {
-                c.to_string()
-            } else {
-                c.to_string()
-            }
-        }
+        KeyCode::Char(c) => c.to_string(),
         _ => "?".to_string(),
     }
 }
@@ -65,7 +59,7 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
         Mode::Confirm => (String::new(), "enter/y confirm  esc/n cancel ".to_string()),
         Mode::Leader => {
             let path_str = if let Some(ref ls) = client.leader_state {
-                let keys: Vec<String> = ls.path.iter().map(|k| format_leader_key(k)).collect();
+                let keys: Vec<String> = ls.path.iter().map(format_leader_key).collect();
                 if keys.is_empty() {
                     "⎵".to_string()
                 } else {

@@ -281,9 +281,9 @@ fn handle_socket_command(subcmd: &str, args: &[String]) -> Result<()> {
                 }
             } else if !output.is_empty() {
                 // list-* commands print their output
-                if subcmd.starts_with("list-") || subcmd == "lsp" || subcmd == "lsw" {
-                    println!("{}", output);
-                } else if subcmd == "display-message" || subcmd == "display" {
+                if subcmd.starts_with("list-") || subcmd == "lsp" || subcmd == "lsw"
+                    || subcmd == "display-message" || subcmd == "display"
+                {
                     println!("{}", output);
                 }
             }

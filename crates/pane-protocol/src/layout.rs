@@ -367,7 +367,7 @@ impl LayoutNode {
                     return false;
                 }
 
-                let axis_matches = axis.map_or(true, |a| a == *direction);
+                let axis_matches = axis.is_none_or(|a| a == *direction);
 
                 // If the target is directly in this split and axis matches, adjust
                 let is_direct = matches!(first.as_ref(), LayoutNode::Leaf(id) if *id == target)

@@ -145,6 +145,19 @@ impl ServerState {
     }
 
     /// Find a pane mutably across all workspaces/groups/tabs.
+    pub fn find_tab(&self, pane_id: TabId) -> Option<&Tab> {
+        for ws in &self.workspaces {
+            for group in ws.groups.values() {
+                for pane in &group.tabs {
+                    if pane.id == pane_id {
+                        return Some(pane);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn find_tab_mut(&mut self, pane_id: TabId) -> Option<&mut Tab> {
         for ws in &mut self.workspaces {
             for group in ws.groups.values_mut() {
@@ -282,7 +295,7 @@ impl ServerState {
         if ws
             .groups
             .get(&source_group_id)
-            .map_or(true, |g| g.tabs.len() <= 1)
+            .is_none_or(|g| g.tabs.len() <= 1)
         {
             return;
         }
@@ -1373,12 +1386,26 @@ pub fn render_state_from_server(state: &ServerState) -> RenderState {
                         .iter()
                         .map(|pane| {
                             let (rows, cols) = pane.screen().size();
+                            // Resolve foreground process name: if the binary name
+                            // doesn't match any decoration, check the full path.
+                            // e.g. claude installs as `~/.local/share/claude/versions/2.1.74`
+                            let fg = match (&pane.foreground_process, &pane.foreground_process_path) {
+                                (Some(name), _) if state.config.decoration_for(name).is_some() => {
+                                    Some(name.clone())
+                                }
+                                (_, Some(path)) => {
+                                    let resolved = state.config.decoration_for_path(path)
+                                        .map(|d| d.process.clone());
+                                    resolved.or_else(|| pane.foreground_process.clone())
+                                }
+                                (name, _) => name.clone(),
+                            };
                             TabSnapshot {
                                 id: pane.id,
                                 kind: pane.kind.clone(),
                                 title: pane.title.clone(),
                                 exited: pane.exited,
-                                foreground_process: pane.foreground_process.clone(),
+                                foreground_process: fg,
                                 cwd: pane.cwd.to_string_lossy().to_string(),
                                 cols,
                                 rows,
@@ -1386,6 +1413,7 @@ pub fn render_state_from_server(state: &ServerState) -> RenderState {
                         })
                         .collect(),
                     active_tab: group.active_tab,
+                    name: group.name.clone(),
                 })
                 .collect();
             WorkspaceSnapshot {

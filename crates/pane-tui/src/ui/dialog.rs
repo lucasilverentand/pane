@@ -135,6 +135,7 @@ pub fn render_popup(
 /// - When unfocused, the value (or `placeholder`) is rendered in `dim`.
 ///
 /// Returns the number of rows consumed (always 2: label + input).
+#[allow(clippy::too_many_arguments)]
 pub fn render_text_field(
     frame: &mut Frame,
     area: Rect,
@@ -195,9 +196,9 @@ pub fn render_filter_input_placeholder(
     area: Rect,
     input: &str,
     placeholder: Option<&str>,
-    theme: &Theme,
+    _theme: &Theme,
 ) {
-    let mut spans = vec![Span::styled("> ", Style::default().fg(theme.accent))];
+    let mut spans = vec![Span::styled("  ", Style::default())];
     if input.is_empty() {
         if let Some(ph) = placeholder {
             spans.push(Span::styled(ph, Style::default().fg(Color::DarkGray)));
@@ -300,7 +301,7 @@ pub fn render_select_list(
 
         let is_selected = i == selected;
         let actual_y = area.y + row_y;
-        let is_hovered = hover.map_or(false, |(hx, hy)| {
+        let is_hovered = hover.is_some_and(|(hx, hy)| {
             hy == actual_y && hx >= area.x && hx < area.x + area.width
         });
         let style = if is_selected {
@@ -313,9 +314,8 @@ pub fn render_select_list(
             Style::default().fg(theme.fg)
         };
 
-        let prefix = if is_selected { "\u{25B8} " } else { "  " };
         let mut spans = vec![
-            Span::styled(prefix, style),
+            Span::styled("  ", style),
             Span::styled(item.label, style),
         ];
 

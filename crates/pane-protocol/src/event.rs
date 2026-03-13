@@ -16,6 +16,7 @@ pub enum AppEvent {
     PtyOutput { pane_id: TabId, bytes: Vec<u8> },
     PtyExited { pane_id: TabId },
     SystemStats(SystemStats),
+    ForegroundPoll,
 }
 
 #[cfg(test)]

@@ -2,12 +2,9 @@ use std::io::Write;
 
 pub fn copy_to_clipboard(text: &str) -> anyhow::Result<()> {
     // Try arboard first
-    match arboard::Clipboard::new() {
-        Ok(mut clipboard) => {
-            clipboard.set_text(text)?;
-            return Ok(());
-        }
-        Err(_) => {}
+    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+        clipboard.set_text(text)?;
+        return Ok(());
     }
 
     // Fallback: OSC 52 escape sequence (works over SSH/tmux)

@@ -225,6 +225,9 @@ pub struct WindowSnapshot {
     pub id: WindowId,
     pub tabs: Vec<TabSnapshot>,
     pub active_tab: usize,
+    /// Optional user-assigned window name.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -417,6 +420,7 @@ mod tests {
                         rows: 24,
                     }],
                     active_tab: 0,
+                    name: None,
                 }],
                 active_group: WindowId::new_v4(),
                 sync_panes: false,
@@ -721,6 +725,7 @@ mod tests {
                         rows: 24,
                     }],
                     active_tab: 0,
+                    name: None,
                 }],
                 active_group: window_id,
                 sync_panes: true,
@@ -936,6 +941,7 @@ mod tests {
                 },
             ],
             active_tab: 1,
+            name: None,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored: WindowSnapshot = serde_json::from_str(&json).unwrap();

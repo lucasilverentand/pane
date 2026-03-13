@@ -142,6 +142,21 @@ pub async fn run_server(config: Config) -> Result<()> {
     // Start system stats collector
     system_stats::start_stats_collector(event_tx.clone(), config.status_bar.update_interval_secs);
 
+    // Periodic foreground process polling (every 2s)
+    {
+        let tx = event_tx.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                if tx.send(AppEvent::ForegroundPoll).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
     let auto_suspend_secs = config.behavior.auto_suspend_secs;
 
     let state = ServerState::new(&event_tx, 80, 24, config)?;
@@ -323,26 +338,39 @@ async fn process_events(
     while let Some(event) = event_rx.recv().await {
         match event {
             AppEvent::PtyOutput { pane_id, bytes } => {
-                {
+                let fg_changed = {
                     let mut state = state.lock().await;
                     if let Some(pane) = state.find_tab_mut(pane_id) {
                         // Catch panics in vt100 processing so a single pane
                         // can't take down the entire daemon.
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            pane.process_output(&bytes);
+                            pane.process_output(&bytes)
                         }));
-                        if result.is_err() {
-                            eprintln!(
-                                "pane: caught panic in process_output for pane {:?}",
-                                pane_id
-                            );
+                        match result {
+                            Ok(changed) => changed,
+                            Err(_) => {
+                                eprintln!(
+                                    "pane: caught panic in process_output for pane {:?}",
+                                    pane_id
+                                );
+                                false
+                            }
                         }
+                    } else {
+                        false
                     }
-                }
+                };
                 let _ = broadcast_tx.send(ServerResponse::PaneOutput {
                     pane_id,
                     data: bytes,
                 });
+                if fg_changed {
+                    let state = state.lock().await;
+                    let render_state = render_state_from_server(&state);
+                    let _ = broadcast_tx.send(ServerResponse::LayoutChanged {
+                        render_state,
+                    });
+                }
             }
             AppEvent::PtyExited { pane_id } => {
                 let should_quit = {
@@ -371,6 +399,29 @@ async fn process_events(
                 }
                 let serializable = SerializableSystemStats::from(&stats);
                 let _ = broadcast_tx.send(ServerResponse::StatsUpdate(serializable));
+            }
+            AppEvent::ForegroundPoll => {
+                let any_changed = {
+                    let mut state = state.lock().await;
+                    let mut changed = false;
+                    for ws in &mut state.workspaces {
+                        for group in ws.groups.values_mut() {
+                            for tab in &mut group.tabs {
+                                if tab.update_foreground_process() {
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                    changed
+                };
+                if any_changed {
+                    let state = state.lock().await;
+                    let render_state = render_state_from_server(&state);
+                    let _ = broadcast_tx.send(ServerResponse::LayoutChanged {
+                        render_state,
+                    });
+                }
             }
             AppEvent::Tick => {
                 // No-op for daemon mode — ticks are client-side
@@ -693,12 +744,10 @@ async fn handle_client(
                     let button = if up { 64u8 } else { 65u8 };
                     let bytes = encode_mouse_sgr(button, 0, 0, true, encoding);
                     state.active_workspace_mut().active_group_mut().active_tab_mut().write_input(&bytes);
+                } else if up {
+                    state.scroll_active_tab(|p| p.scroll_up(3));
                 } else {
-                    if up {
-                        state.scroll_active_tab(|p| p.scroll_up(3));
-                    } else {
-                        state.scroll_active_tab(|p| p.scroll_down(3));
-                    }
+                    state.scroll_active_tab(|p| p.scroll_down(3));
                 }
             }
             ClientRequest::Command(cmd) => {
@@ -913,8 +962,8 @@ fn encode_mouse_sgr(
         _ => {
             // Default/UTF-8 encoding: \x1b[M CbCxCy (all +32, release=3)
             let cb = if pressed { button + 32 } else { 3 + 32 };
-            let cx = (x as u8).saturating_add(33).min(255);
-            let cy = (y as u8).saturating_add(33).min(255);
+            let cx = (x as u8).saturating_add(33);
+            let cy = (y as u8).saturating_add(33);
             vec![0x1b, b'[', b'M', cb, cx, cy]
         }
     }
@@ -1219,7 +1268,7 @@ mod tests {
                         {
                             let mut s = state_clone.lock().await;
                             if let Some(pane) = s.find_tab_mut(pane_id) {
-                                pane.process_output(&bytes);
+                                let _ = pane.process_output(&bytes);
                             }
                         }
                         let _ = btx_clone.send(ServerResponse::PaneOutput {

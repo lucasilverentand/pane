@@ -443,7 +443,7 @@ impl CopyModeState {
                 if contents.is_empty() {
                     line.push(' ');
                 } else {
-                    line.push_str(&contents);
+                    line.push_str(contents);
                 }
             } else {
                 line.push(' ');

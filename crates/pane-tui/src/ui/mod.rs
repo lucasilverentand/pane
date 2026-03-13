@@ -508,14 +508,15 @@ fn render_new_workspace_dir_stage(
         state.browser.display_path_with_selected()
     };
 
-    let max_w = inner.width.saturating_sub(4) as usize;
-    let display = if path_display.len() > max_w {
-        format!("…{}", &path_display[path_display.len() - max_w + 1..])
-    } else {
-        path_display
-    };
+    let has_parent = state.browser.current_dir.parent().is_some();
 
     let input_line = if search_mode {
+        let max_w = inner.width.saturating_sub(4) as usize;
+        let display = if path_display.len() > max_w {
+            format!("…{}", &path_display[path_display.len() - max_w + 1..])
+        } else {
+            path_display
+        };
         if has_filter {
             Line::from(vec![
                 Span::styled(" > ", Style::default().fg(theme.accent)),
@@ -529,15 +530,33 @@ fn render_new_workspace_dir_stage(
             ])
         }
     } else {
-        Line::from(vec![
-            Span::raw(" "),
+        // Reserve space for ← (3) and → (3) buttons around the path
+        let back_prefix = if has_parent { "← " } else { "  " };
+        let suffix = if has_filter { "_" } else { " →" };
+        let reserved = back_prefix.len() + suffix.len();
+        let max_w = (inner.width as usize).saturating_sub(reserved + 1);
+        let display = if path_display.len() > max_w {
+            format!("…{}", &path_display[path_display.len() - max_w + 1..])
+        } else {
+            path_display
+        };
+        let mut spans = vec![
+            Span::styled(
+                format!(" {}", back_prefix),
+                if has_parent {
+                    Style::default().fg(theme.accent)
+                } else {
+                    Style::default().fg(theme.dim)
+                },
+            ),
             Span::styled(display, Style::default().fg(Color::White)),
-            if has_filter {
-                Span::styled("_", Style::default().fg(Color::DarkGray))
-            } else {
-                Span::raw("")
-            },
-        ])
+        ];
+        if has_filter {
+            spans.push(Span::styled("_", Style::default().fg(Color::DarkGray)));
+        } else {
+            spans.push(Span::styled(" →", Style::default().fg(theme.accent)));
+        }
+        Line::from(spans)
     };
     frame.render_widget(
         Paragraph::new(input_line),
@@ -819,6 +838,25 @@ pub fn confirm_dialog_hit_test(
 pub enum DirPickerClick {
     /// Clicked on a list item at the given index (relative to scroll).
     Item(usize),
+    /// Clicked the ← back button to go to the parent directory.
+    Back,
+    /// Clicked the → confirm button on the path bar.
+    Confirm,
+    /// Clicked "enter" (select) in the hint bar.
+    HintEnter,
+    /// Clicked "tab/→" (open) in the hint bar.
+    HintOpen,
+    /// Clicked "^F" (search/browse toggle) in the hint bar.
+    HintSearch,
+    /// Clicked "esc" (cancel/back) in the hint bar.
+    HintEsc,
+}
+
+pub enum NamePickerClick {
+    /// Clicked "enter" (create) in the hint bar.
+    HintEnter,
+    /// Clicked "esc" (back) in the hint bar.
+    HintEsc,
 }
 
 /// Hit-test the directory picker list. Returns which item was clicked, if any.
@@ -839,6 +877,33 @@ pub fn dir_picker_hit_test(
         return None;
     }
 
+    // Must be within the popup horizontally
+    if x < inner.x || x >= inner.x + inner.width {
+        return None;
+    }
+
+    // Path bar is at inner.y — ← on the left, → on the right
+    if y == inner.y && !browser.search_mode && browser.input.is_empty() {
+        // "← " occupies columns inner.x..inner.x+4 (space + "← " = 4 chars)
+        let has_parent = browser.current_dir.parent().is_some();
+        if has_parent && x < inner.x + 4 {
+            return Some(DirPickerClick::Back);
+        }
+        // " →" occupies the last 3 columns
+        if x >= inner.x + inner.width.saturating_sub(3) {
+            return Some(DirPickerClick::Confirm);
+        }
+        // Click on the path text itself also confirms
+        return Some(DirPickerClick::Confirm);
+    }
+
+    // Hint bar is the last row of inner
+    let hint_y = inner.y + inner.height - 1;
+    if y == hint_y {
+        let col = x.saturating_sub(inner.x) as usize;
+        return hit_test_dir_hint_bar(col, browser.search_mode, browser.has_zoxide);
+    }
+
     // List starts after path bar (1 row) + separator (1 row)
     let list_y = inner.y + 2;
     let hint_height = 2u16;
@@ -847,10 +912,6 @@ pub fn dir_picker_hit_test(
         return None;
     }
 
-    // Must be within the list area
-    if x < inner.x || x >= inner.x + inner.width {
-        return None;
-    }
     if y < list_y || y >= list_y + list_height as u16 {
         return None;
     }
@@ -879,6 +940,31 @@ pub fn dir_picker_hit_test(
     }
 }
 
+/// Hit-test the hint bar buttons in the directory picker.
+/// Column offsets must match the spans in `render_new_workspace_dir_stage`.
+fn hit_test_dir_hint_bar(col: usize, search_mode: bool, has_zoxide: bool) -> Option<DirPickerClick> {
+    if search_mode {
+        // "  enter select  esc back  ^F browse"
+        //  01234567890123456789012345678901234567
+        //  ^^enter^^^^^^^^^esc^^^^^^^F
+        if col < 15 { return Some(DirPickerClick::HintEnter); }   // "  enter select"
+        if col < 25 { return Some(DirPickerClick::HintEsc); }     // "  esc back"
+        return Some(DirPickerClick::HintSearch);                    // "  ^F browse"
+    }
+    if has_zoxide {
+        // "  enter select  tab/→ open  ^F search  esc cancel"
+        //  0         1         2         3         4
+        if col < 16 { return Some(DirPickerClick::HintEnter); }   // "  enter select  "
+        if col < 27 { return Some(DirPickerClick::HintOpen); }    // "tab/→ open  "
+        if col < 39 { return Some(DirPickerClick::HintSearch); }  // "^F search  "
+        return Some(DirPickerClick::HintEsc);                      // "esc cancel"
+    }
+    // "  enter select  tab/→ open  esc cancel"
+    if col < 16 { return Some(DirPickerClick::HintEnter); }
+    if col < 27 { return Some(DirPickerClick::HintOpen); }
+    Some(DirPickerClick::HintEsc)
+}
+
 /// Check if a click is inside the directory picker popup area.
 pub fn dir_picker_is_inside(area: ratatui::layout::Rect, x: u16, y: u16) -> bool {
     let popup_area = dialog::popup_rect(
@@ -903,6 +989,33 @@ pub fn name_picker_is_inside(area: ratatui::layout::Rect, x: u16, y: u16) -> boo
         && x < popup_area.x + popup_area.width
         && y >= popup_area.y
         && y < popup_area.y + popup_area.height
+}
+
+/// Hit-test the name picker hint bar buttons.
+pub fn name_picker_hit_test(area: ratatui::layout::Rect, x: u16, y: u16) -> Option<NamePickerClick> {
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::Fixed { width: 44, height: 9 },
+        dialog::PopupAnchor::Center,
+        area,
+    );
+    let inner = dialog::inner_rect(popup_area);
+    if inner.height < 5 || inner.width < 10 {
+        return None;
+    }
+    if x < inner.x || x >= inner.x + inner.width {
+        return None;
+    }
+    // Hint bar: last row of inner
+    // "  enter create  esc back"
+    let hint_y = inner.y + inner.height - 1;
+    if y == hint_y {
+        let col = x.saturating_sub(inner.x) as usize;
+        if col < 16 {
+            return Some(NamePickerClick::HintEnter);
+        }
+        return Some(NamePickerClick::HintEsc);
+    }
+    None
 }
 
 fn render_resize_borders(

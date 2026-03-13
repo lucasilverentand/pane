@@ -198,10 +198,36 @@ pub struct PaneDecoration {
 
 impl PaneDecoration {
     fn defaults() -> Vec<Self> {
-        vec![PaneDecoration {
-            process: "claude".to_string(),
-            border_color: Color::Rgb(249, 115, 22), // orange
-        }]
+        vec![
+            PaneDecoration {
+                process: "claude".to_string(),
+                border_color: Color::Rgb(249, 115, 22), // orange
+            },
+            PaneDecoration {
+                process: "nvim".to_string(),
+                border_color: Color::Rgb(86, 156, 48), // green
+            },
+            PaneDecoration {
+                process: "vim".to_string(),
+                border_color: Color::Rgb(86, 156, 48), // green
+            },
+            PaneDecoration {
+                process: "htop".to_string(),
+                border_color: Color::Rgb(59, 130, 246), // blue
+            },
+            PaneDecoration {
+                process: "btop".to_string(),
+                border_color: Color::Rgb(59, 130, 246), // blue
+            },
+            PaneDecoration {
+                process: "python3".to_string(),
+                border_color: Color::Rgb(250, 204, 21), // yellow
+            },
+            PaneDecoration {
+                process: "node".to_string(),
+                border_color: Color::Rgb(74, 222, 128), // node green
+            },
+        ]
     }
 }
 
@@ -665,6 +691,21 @@ impl Config {
         self.decorations.iter().find(|d| d.process == process)
     }
 
+    /// Match a decoration by checking if any decoration's process name appears
+    /// as a component in the executable path. This handles cases where the binary
+    /// filename is not recognizable (e.g. a version string) but the install path
+    /// contains the program name (e.g. `~/.local/share/claude/versions/2.1.74`).
+    pub fn decoration_for_path(&self, path: &str) -> Option<&PaneDecoration> {
+        let p = std::path::Path::new(path);
+        self.decorations.iter().find(|d| {
+            p.components().any(|c| {
+                c.as_os_str()
+                    .to_str()
+                    .is_some_and(|s| s == d.process)
+            })
+        })
+    }
+
     fn from_raw(raw: RawConfig) -> Self {
         let mut config = Self::default();
 
@@ -1069,8 +1110,7 @@ pub fn normalize_key(key: KeyEvent) -> KeyEvent {
 pub fn parse_color(s: &str) -> Option<Color> {
     let s = s.trim().to_lowercase();
 
-    if s.starts_with('#') {
-        let hex = &s[1..];
+    if let Some(hex) = s.strip_prefix('#') {
         return match hex.len() {
             6 => {
                 let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
@@ -1773,7 +1813,31 @@ min_pane_width = 80
     #[test]
     fn test_decoration_for_no_match() {
         let config = Config::default();
-        assert!(config.decoration_for("vim").is_none());
+        assert!(config.decoration_for("emacs").is_none());
+    }
+
+    // --- decoration_for_path ---
+
+    #[test]
+    fn test_decoration_for_path_claude() {
+        let config = Config::default();
+        let dec = config.decoration_for_path("/Users/luca/.local/share/claude/versions/2.1.74");
+        assert!(dec.is_some());
+        assert_eq!(dec.unwrap().process, "claude");
+    }
+
+    #[test]
+    fn test_decoration_for_path_direct_binary() {
+        let config = Config::default();
+        let dec = config.decoration_for_path("/opt/homebrew/bin/nvim");
+        assert!(dec.is_some());
+        assert_eq!(dec.unwrap().process, "nvim");
+    }
+
+    #[test]
+    fn test_decoration_for_path_no_match() {
+        let config = Config::default();
+        assert!(config.decoration_for_path("/usr/bin/emacs").is_none());
     }
 
     // --- Action name round-tripping ---

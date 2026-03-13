@@ -10,31 +10,45 @@ use std::io::Write;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
-/// Get the name of a process by PID. Returns None if lookup fails.
+/// Get the name and full executable path of a process by PID in a single syscall.
 #[cfg(target_os = "macos")]
-fn process_name_by_pid(pid: u32) -> Option<String> {
+fn process_info_by_pid(pid: u32) -> (Option<String>, Option<String>) {
     extern "C" {
-        fn proc_name(pid: std::ffi::c_int, buffer: *mut u8, buffersize: u32) -> std::ffi::c_int;
+        fn proc_pidpath(
+            pid: std::ffi::c_int,
+            buffer: *mut u8,
+            buffersize: u32,
+        ) -> std::ffi::c_int;
     }
-    let mut buf = [0u8; 256];
-    let ret = unsafe { proc_name(pid as std::ffi::c_int, buf.as_mut_ptr(), buf.len() as u32) };
+    let mut buf = [0u8; 4096];
+    let ret =
+        unsafe { proc_pidpath(pid as std::ffi::c_int, buf.as_mut_ptr(), buf.len() as u32) };
     if ret > 0 {
-        Some(String::from_utf8_lossy(&buf[..ret as usize]).to_string())
+        let path_str = String::from_utf8_lossy(&buf[..ret as usize]).to_string();
+        let name = std::path::Path::new(&path_str)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string());
+        (name, Some(path_str))
     } else {
-        None
+        (None, None)
     }
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn process_name_by_pid(pid: u32) -> Option<String> {
-    std::fs::read_to_string(format!("/proc/{}/comm", pid))
+fn process_info_by_pid(pid: u32) -> (Option<String>, Option<String>) {
+    let path = std::fs::read_link(format!("/proc/{}/exe", pid))
         .ok()
-        .map(|s| s.trim().to_string())
+        .and_then(|p| p.to_str().map(|s| s.to_string()));
+    let name = std::fs::read_to_string(format!("/proc/{}/comm", pid))
+        .ok()
+        .map(|s| s.trim().to_string());
+    (name, path)
 }
 
 #[cfg(not(unix))]
-fn process_name_by_pid(_pid: u32) -> Option<String> {
-    None
+fn process_info_by_pid(_pid: u32) -> (Option<String>, Option<String>) {
+    (None, None)
 }
 
 pub struct Window {
@@ -122,12 +136,15 @@ pub struct Tab {
     pub scroll_offset: usize,
     /// Cached name of the foreground process (e.g. "claude", "nvim").
     pub foreground_process: Option<String>,
+    /// Full executable path of the foreground process for decoration matching.
+    pub foreground_process_path: Option<String>,
     shell_pid: Option<u32>,
     pty_writer: Option<Box<dyn Write + Send>>,
     pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
 }
 
 impl Tab {
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn_with_env(
         id: TabId,
         kind: TabKind,
@@ -147,12 +164,13 @@ impl Tab {
             TabKind::Shell => {
                 if let Some(ref cmd_str) = command {
                     if let Some(ref shell_path) = shell {
-                        // Run command wrapped in the specified shell: shell -c "command"
+                        // Run command wrapped in the specified shell: shell -ic "command"
+                        // -i (interactive) ensures aliases and shell config are loaded
                         let shell_leaked: &'static str =
                             Box::leak(shell_path.clone().into_boxed_str());
                         let cmd_leaked: &'static str =
                             Box::leak(cmd_str.clone().into_boxed_str());
-                        (shell_leaked, vec!["-c", cmd_leaked])
+                        (shell_leaked, vec!["-ic", cmd_leaked])
                     } else {
                         // Run command directly (split by whitespace)
                         let leaked: &'static str = Box::leak(cmd_str.clone().into_boxed_str());
@@ -184,7 +202,7 @@ impl Tab {
                 let shell_leaked: &'static str = Box::leak(default_shell.into_boxed_str());
                 let cmd_leaked: &'static str =
                     Box::leak(cmd_str.to_string().into_boxed_str());
-                (shell_leaked, vec!["-c", cmd_leaked])
+                (shell_leaked, vec!["-ic", cmd_leaked])
             }
         };
 
@@ -217,6 +235,7 @@ impl Tab {
             cwd,
             scroll_offset: 0,
             foreground_process: None,
+            foreground_process_path: None,
             shell_pid,
             pty_writer: Some(pty_handle.writer),
             pty_master: Some(pty_handle.master),
@@ -237,6 +256,7 @@ impl Tab {
             cwd: PathBuf::from("/"),
             scroll_offset: 0,
             foreground_process: None,
+            foreground_process_path: None,
             shell_pid: None,
             pty_writer: None,
             pty_master: None,
@@ -255,32 +275,67 @@ impl Tab {
         self.scroll_offset > 0
     }
 
+    /// Detect the foreground process running in this tab's PTY.
+    /// Returns `true` if the foreground process changed since the last call.
     #[cfg(unix)]
-    pub fn update_foreground_process(&mut self) {
+    pub fn update_foreground_process(&mut self) -> bool {
         if self.exited {
+            let changed = self.foreground_process.is_some() || self.foreground_process_path.is_some();
             self.foreground_process = None;
-            return;
+            self.foreground_process_path = None;
+            return changed;
         }
         let fg_pid = self
             .pty_master
             .as_ref()
             .and_then(|m| m.process_group_leader())
             .map(|pgid| pgid as u32);
-        self.foreground_process = match fg_pid {
-            Some(pid) => {
-                if self.shell_pid == Some(pid) {
-                    None
-                } else {
-                    process_name_by_pid(pid)
-                }
+        let old_name = self.foreground_process.clone();
+        let old_path = self.foreground_process_path.clone();
+        match fg_pid {
+            Some(pid) if self.shell_pid != Some(pid) => {
+                // A child process has taken the foreground (e.g. user ran `claude` in a shell tab)
+                let (name, path) = process_info_by_pid(pid);
+                self.foreground_process = name;
+                self.foreground_process_path = path;
             }
-            None => None,
-        };
+            Some(pid) if self.kind != TabKind::Shell => {
+                // Non-shell tab (Agent, Nvim, DevServer): the spawned process IS the
+                // interesting process, so detect it from the shell_pid itself.
+                // Always re-check — the first lookup may happen before exec completes.
+                let (name, path) = process_info_by_pid(pid);
+                if name.is_none() {
+                    eprintln!("pane: process lookup failed for pid={} tab={:?}", pid, self.id);
+                }
+                self.foreground_process = name;
+                self.foreground_process_path = path;
+            }
+            Some(_) => {
+                // fg == shell in a shell tab, no foreground process
+                self.foreground_process = None;
+                self.foreground_process_path = None;
+            }
+            None => {
+                self.foreground_process = None;
+                self.foreground_process_path = None;
+            }
+        }
+        let changed = self.foreground_process != old_name || self.foreground_process_path != old_path;
+        if changed {
+            eprintln!(
+                "pane: fg process changed: {:?} -> {:?} (pid={:?}, path={:?})",
+                old_name, self.foreground_process, fg_pid, self.foreground_process_path
+            );
+        }
+        changed
     }
 
     #[cfg(not(unix))]
-    pub fn update_foreground_process(&mut self) {
+    pub fn update_foreground_process(&mut self) -> bool {
+        let changed = self.foreground_process.is_some() || self.foreground_process_path.is_some();
         self.foreground_process = None;
+        self.foreground_process_path = None;
+        changed
     }
 
     pub fn scroll_up(&mut self, n: usize) {
@@ -301,7 +356,9 @@ impl Tab {
         self.vt.screen_mut().set_scrollback(0);
     }
 
-    pub fn process_output(&mut self, bytes: &[u8]) {
+    /// Process PTY output bytes.
+    /// Returns `true` if the foreground process changed (caller should broadcast layout).
+    pub fn process_output(&mut self, bytes: &[u8]) -> bool {
         self.vt.process(bytes);
         if self.scroll_offset > 0 {
             self.scroll_offset = self.vt.screen().scrollback();
@@ -310,7 +367,7 @@ impl Tab {
         if !osc_title.is_empty() {
             self.title = clean_tab_title(osc_title);
         }
-        self.update_foreground_process();
+        self.update_foreground_process()
     }
 
     pub fn resize_pty(&mut self, cols: u16, rows: u16) {
@@ -801,4 +858,69 @@ mod tests {
         assert_eq!(rows, 1);
         assert_eq!(cols, 1);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_pty_foreground_process_detection() {
+        use portable_pty::{native_pty_system, PtySize, CommandBuilder};
+        use std::io::{Read, Write};
+
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+
+        let cmd = CommandBuilder::new("/bin/sh");
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        let shell_pid = child.process_id();
+        drop(pair.slave);
+
+        let mut writer = pair.master.take_writer().unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
+
+        // Drain output in background
+        let drain = std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // Before running a command, fg should be the shell
+        let fg1 = pair.master.process_group_leader();
+        eprintln!("shell_pid={:?} fg_before={:?}", shell_pid, fg1);
+        assert_eq!(fg1.map(|p| p as u32), shell_pid);
+
+        // Run sleep in the shell
+        writer.write_all(b"sleep 30\n").unwrap();
+        writer.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // Now fg should be sleep, not the shell
+        let fg2 = pair.master.process_group_leader();
+        eprintln!("fg_after_sleep={:?}", fg2);
+        assert_ne!(fg2.map(|p| p as u32), shell_pid, "foreground should be sleep, not shell");
+
+        // Check the process name
+        if let Some(pid) = fg2 {
+            let (name, _path) = process_info_by_pid(pid as u32);
+            eprintln!("detected process: {:?}", name);
+            assert_eq!(name.as_deref(), Some("sleep"));
+        }
+
+        // Cleanup
+        writer.write_all(&[3]).unwrap(); // Ctrl-C
+        writer.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        writer.write_all(b"exit\n").unwrap();
+        writer.flush().unwrap();
+        let _ = child.wait();
+        let _ = drain.join();
+    }
+
 }

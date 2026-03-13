@@ -925,6 +925,95 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_hit_test_recent_items() {
+        // Create a state with known entries across sections
+        let entries = vec![
+            TabPickerEntry {
+                name: "Shell".into(),
+                command: None,
+                description: "Default".into(),
+                section: TabPickerSection::Shells,
+                shell: None,
+            },
+            TabPickerEntry {
+                name: "htop".into(),
+                command: Some("htop".into()),
+                description: "Process viewer".into(),
+                section: TabPickerSection::Tools,
+                shell: Some("/bin/zsh".into()),
+            },
+            TabPickerEntry {
+                name: "cargo build".into(),
+                command: Some("cargo build".into()),
+                description: "From history".into(),
+                section: TabPickerSection::Recent,
+                shell: Some("/bin/zsh".into()),
+            },
+            TabPickerEntry {
+                name: "git status".into(),
+                command: Some("git status".into()),
+                description: "From history".into(),
+                section: TabPickerSection::Recent,
+                shell: Some("/bin/zsh".into()),
+            },
+        ];
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        let state = TabPickerState {
+            input: String::new(),
+            selected: 0,
+            entries,
+            mode: TabPickerMode::NewTab,
+            filtered,
+        };
+
+        // Use an area large enough that the popup fits
+        let area = Rect::new(0, 0, 80, 30);
+        let popup = compute_popup_area(area);
+        let inner = crate::ui::dialog::inner_rect(popup);
+
+        // List starts at inner.y + 2 (input + separator)
+        let list_y = inner.y + 2;
+
+        // With sections visible and no scroll, layout is:
+        // row 0: Shells header
+        // row 1: Shell
+        // row 2: Tools header
+        // row 3: htop
+        // row 4: Recent header
+        // row 5: cargo build (item_idx=2)
+        // row 6: git status (item_idx=3)
+
+        // Click on "cargo build" (row 5)
+        let click = hit_test(&state, area, inner.x + 5, list_y + 5);
+        assert_eq!(
+            click.as_ref().map(|c| match c { TabPickerClick::Item(i) => *i }),
+            Some(2),
+            "clicking on 'cargo build' should return item index 2"
+        );
+
+        // Click on "git status" (row 6)
+        let click = hit_test(&state, area, inner.x + 5, list_y + 6);
+        assert_eq!(
+            click.as_ref().map(|c| match c { TabPickerClick::Item(i) => *i }),
+            Some(3),
+            "clicking on 'git status' should return item index 3"
+        );
+
+        // Verify the command for item 2
+        let state_with_selection = TabPickerState {
+            input: String::new(),
+            selected: 2,
+            entries: state.entries.clone(),
+            mode: TabPickerMode::NewTab,
+            filtered: state.filtered.clone(),
+        };
+        let cmd = state_with_selection.selected_command();
+        assert!(cmd.is_some(), "Recent item should produce a command");
+        let cmd = cmd.unwrap();
+        assert!(cmd.contains("cargo build"), "command should contain the history entry, got: {}", cmd);
+    }
 }
 
 pub fn render(state: &TabPickerState, theme: &Theme, hover: Option<(u16, u16)>, frame: &mut Frame, area: Rect) {

@@ -56,6 +56,7 @@ fn render_search_bar(cms: &CopyModeState, theme: &Theme, frame: &mut Frame, area
 
 /// Render a pane group from a snapshot (used by the client).
 /// Receives the active tab's vt100 screen directly instead of accessing the Pane struct.
+#[allow(clippy::too_many_arguments)]
 pub fn render_group_from_snapshot(
     group: &pane_protocol::protocol::WindowSnapshot,
     screen: Option<&vt100::Screen>,
@@ -87,6 +88,8 @@ pub fn render_group_from_snapshot(
         };
         let color = decoration_color.unwrap_or(mode_color);
         Style::default().fg(color)
+    } else if let Some(dec_color) = decoration_color {
+        Style::default().fg(dec_color)
     } else {
         Style::default().fg(theme.border_inactive)
     };
@@ -122,14 +125,15 @@ pub fn render_group_from_snapshot(
     let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, inner.height);
 
     let cms = if is_active { copy_mode_state } else { None };
-    let show_search = cms.map_or(false, |c| c.search_active);
+    let show_search = cms.is_some_and(|c| c.search_active);
     let mut constraints = vec![Constraint::Length(1), Constraint::Length(1), Constraint::Fill(1)];
     if show_search {
         constraints.push(Constraint::Length(1));
     }
     let areas = Layout::vertical(constraints).split(padded);
 
-    render_tab_bar_from_snapshot(group, theme, hover, frame, areas[0]);
+    let tab_accent = decoration_color;
+    render_tab_bar_from_snapshot(group, theme, tab_accent, hover, frame, areas[0]);
     render_tab_separator(theme, frame, areas[1]);
     let content_area = areas[2];
     let search_area = areas.get(3).copied();
@@ -160,6 +164,7 @@ fn render_tab_separator(theme: &Theme, frame: &mut Frame, area: Rect) {
 fn render_tab_bar_from_snapshot(
     group: &pane_protocol::protocol::WindowSnapshot,
     theme: &Theme,
+    decoration_color: Option<Color>,
     hover: Option<(u16, u16)>,
     frame: &mut Frame,
     area: Rect,
@@ -168,75 +173,144 @@ fn render_tab_bar_from_snapshot(
     const SEP_WIDTH: u16 = 3;
     const PLUS_TEXT: &str = " + ";
     const PLUS_RESERVE: u16 = 3;
+    const INDICATOR_WIDTH: u16 = 2; // "◂ " or " ▸"
+
+    let n = group.tabs.len();
+    let max_x = area.x + area.width;
 
     // Check if hover is on the tab bar row
     let hover_x = hover.and_then(|(hx, hy)| if hy == area.y { Some(hx) } else { None });
 
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut cursor_x = area.x;
-    let max_x = area.x + area.width;
+    // Compute label widths
+    let label_widths: Vec<u16> = group
+        .tabs
+        .iter()
+        .map(|tab| tab.title.len() as u16 + 2)
+        .collect();
 
-    // First pass: compute tab positions for hover detection
-    let mut tab_ranges: Vec<(u16, u16)> = Vec::new();
-    let mut pos = area.x;
-    for (i, tab) in group.tabs.iter().enumerate() {
-        let is_active_tab = i == group.active_tab;
-        let label_width = tab.title.len() as u16 + 2; // " title "
-        if pos + label_width + SEP_WIDTH + PLUS_RESERVE > max_x && !is_active_tab {
-            tab_ranges.push((0, 0));
-            continue;
+    // Check if everything fits
+    let total: u16 = label_widths.iter().sum::<u16>()
+        + if n > 1 { SEP_WIDTH * (n as u16 - 1) } else { 0 }
+        + PLUS_RESERVE;
+
+    let (lo, hi, hidden_left, hidden_right) = if n == 0 || total <= area.width {
+        (0, n.saturating_sub(1), 0usize, 0usize)
+    } else {
+        // Overflow — find widest contiguous range centered on active tab
+        let active = group.active_tab.min(n - 1);
+        let range_width = |lo: usize, hi: usize| -> u16 {
+            let mut w: u16 = 0;
+            for (j, lw) in label_widths[lo..=hi].iter().enumerate() {
+                w += lw;
+                if j > 0 {
+                    w += SEP_WIDTH;
+                }
+            }
+            if lo > 0 {
+                w += INDICATOR_WIDTH;
+            }
+            if hi < n - 1 {
+                w += INDICATOR_WIDTH;
+            }
+            w + PLUS_RESERVE
+        };
+
+        let mut lo = active;
+        let mut hi = active;
+        loop {
+            let mut expanded = false;
+            if lo > 0 && range_width(lo - 1, hi) <= area.width {
+                lo -= 1;
+                expanded = true;
+            }
+            if hi + 1 < n && range_width(lo, hi + 1) <= area.width {
+                hi += 1;
+                expanded = true;
+            }
+            if !expanded {
+                break;
+            }
         }
-        if i > 0 {
-            pos += SEP_WIDTH;
-        }
-        let start = pos;
-        pos += label_width;
-        tab_ranges.push((start, pos));
+        (lo, hi, lo, n - 1 - hi)
+    };
+
+    // Compute tab_ranges for hit testing
+    let mut tab_ranges: Vec<(u16, u16)> = vec![(0, 0); n];
+    let mut cursor_x = area.x;
+    if hidden_left > 0 {
+        cursor_x += INDICATOR_WIDTH;
     }
+    if n > 0 {
+        for i in lo..=hi {
+            if i > lo {
+                cursor_x += SEP_WIDTH;
+            }
+            tab_ranges[i] = (cursor_x, cursor_x + label_widths[i]);
+            cursor_x += label_widths[i];
+        }
+    }
+
     let plus_start = if PLUS_RESERVE <= max_x.saturating_sub(area.x) {
         Some(max_x - PLUS_RESERVE)
     } else {
         None
     };
 
-    for (i, tab) in group.tabs.iter().enumerate() {
-        let is_active_tab = i == group.active_tab;
-        let label = format!(" {} ", tab.title);
-        let label_width = label.len() as u16;
+    // Build spans
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut content_end = area.x;
 
-        if cursor_x + label_width + SEP_WIDTH + PLUS_RESERVE > max_x && !is_active_tab {
-            continue;
+    // Left overflow indicator
+    if hidden_left > 0 {
+        spans.push(Span::styled("\u{25C2} ", Style::default().fg(theme.dim)));
+        content_end = area.x + INDICATOR_WIDTH;
+    }
+
+    let mut first_visible = true;
+    if n > 0 {
+        for (i, (tab, &(tab_start, tab_end))) in group.tabs[lo..=hi]
+            .iter()
+            .zip(&tab_ranges[lo..=hi])
+            .enumerate()
+        {
+            if !first_visible {
+                spans.push(Span::styled(SEP, Style::default().fg(theme.dim)));
+            }
+            first_visible = false;
+
+            let is_hovered = hover_x.is_some_and(|hx| hx >= tab_start && hx < tab_end);
+            let is_active_tab = (lo + i) == group.active_tab;
+
+            let style = if is_active_tab {
+                let color = decoration_color.unwrap_or(theme.tab_active);
+                Style::default()
+                    .fg(color)
+                    .add_modifier(Modifier::BOLD)
+            } else if is_hovered {
+                Style::default().fg(theme.fg)
+            } else {
+                Style::default().fg(theme.tab_inactive)
+            };
+
+            let label = format!(" {} ", tab.title);
+            spans.push(Span::styled(label, style));
+            content_end = tab_end;
         }
+    }
 
-        if i > 0 {
-            spans.push(Span::styled(SEP, Style::default().fg(theme.dim)));
-            cursor_x += SEP_WIDTH;
-        }
-
-        let (tab_start, tab_end) = tab_ranges[i];
-        let is_hovered = hover_x.map_or(false, |hx| hx >= tab_start && hx < tab_end);
-
-        let style = if is_active_tab {
-            Style::default()
-                .fg(theme.tab_active)
-                .add_modifier(Modifier::BOLD)
-        } else if is_hovered {
-            Style::default().fg(theme.fg)
-        } else {
-            Style::default().fg(theme.tab_inactive)
-        };
-
-        spans.push(Span::styled(label, style));
-        cursor_x += label_width;
+    // Right overflow indicator
+    if hidden_right > 0 {
+        spans.push(Span::styled(" \u{25B8}", Style::default().fg(theme.dim)));
+        content_end += INDICATOR_WIDTH;
     }
 
     // Right-align the + button
     if let Some(ps) = plus_start {
-        let gap = ps.saturating_sub(cursor_x);
+        let gap = ps.saturating_sub(content_end);
         if gap > 0 {
             spans.push(Span::raw(" ".repeat(gap as usize)));
         }
-        let plus_hovered = hover_x.map_or(false, |hx| hx >= ps && hx < ps + PLUS_RESERVE);
+        let plus_hovered = hover_x.is_some_and(|hx| hx >= ps && hx < ps + PLUS_RESERVE);
         let plus_style = if plus_hovered {
             Style::default().fg(theme.fg)
         } else {

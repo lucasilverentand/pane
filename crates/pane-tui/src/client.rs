@@ -81,6 +81,8 @@ pub struct NewWorkspaceInputState {
     pub stage: NewWorkspaceStage,
     pub name: String,
     pub browser: DirBrowser,
+    /// Track last click for double-click detection: (item index, timestamp).
+    last_click: Option<(usize, std::time::Instant)>,
 }
 
 pub struct DirBrowser {
@@ -391,7 +393,7 @@ impl Client {
 
             let resp: ServerResponse = framing::recv_required(&mut stream).await?;
             match resp {
-                ServerResponse::Attached { .. } => {}
+                ServerResponse::Attached => {}
                 ServerResponse::Error(e) => anyhow::bail!("server error: {}", e),
                 _ => anyhow::bail!("unexpected response: {:?}", resp),
             };
@@ -502,7 +504,7 @@ impl Client {
         // Try to send Detach, but don't hang if the server is already gone
         let detach = async {
             let mut w = writer.lock().await;
-            let _ = send_request(&mut *w, &ClientRequest::Detach).await;
+            let _ = send_request(&mut w, &ClientRequest::Detach).await;
         };
         let _ = tokio::time::timeout(std::time::Duration::from_millis(500), detach).await;
 
@@ -611,7 +613,7 @@ impl Client {
                 self.plugin_segments = segments;
             }
             ServerResponse::Error(_)
-            | ServerResponse::Attached { .. }
+            | ServerResponse::Attached
             | ServerResponse::CommandOutput { .. } => {}
         }
     }
@@ -630,7 +632,7 @@ impl Client {
             AppEvent::Resize(w, h) => {
                 let mut w_guard = writer.lock().await;
                 let _ = send_request(
-                    &mut *w_guard,
+                    &mut w_guard,
                     &ClientRequest::Resize {
                         width: w,
                         height: h,
@@ -663,7 +665,7 @@ impl Client {
                                 if let Some(action) = self.pending_confirm_action.take() {
                                     if let Some(cmd) = action_to_command(&action) {
                                         let mut w = writer.lock().await;
-                                        let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                                        let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
                                     }
                                 }
                                 self.confirm_message = None;
@@ -692,7 +694,7 @@ impl Client {
                             let cmd = tp.selected_command();
                             if let Some(cmd) = cmd {
                                 let mut w = writer.lock().await;
-                                let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                                let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
                             }
                             self.tab_picker_state = None;
                             self.mode = Mode::Interact;
@@ -709,18 +711,81 @@ impl Client {
                     if let Some(ref mut state) = self.new_workspace_input {
                         match state.stage {
                             NewWorkspaceStage::Directory => {
-                                if let Some(ui::DirPickerClick::Item(idx)) =
+                                if let Some(hit) =
                                     ui::dir_picker_hit_test(&state.browser, area, x, y)
                                 {
-                                    state.browser.selected = idx;
-                                    state.browser.clamp_scroll(14);
+                                    match hit {
+                                        ui::DirPickerClick::Item(idx) => {
+                                            let now = std::time::Instant::now();
+                                            let is_double = state.last_click
+                                                .map(|(prev_idx, prev_time)| {
+                                                    prev_idx == idx && now.duration_since(prev_time).as_millis() < 400
+                                                })
+                                                .unwrap_or(false);
+                                            state.browser.selected = idx;
+                                            state.browser.clamp_scroll(14);
+                                            if is_double {
+                                                state.browser.enter_selected();
+                                                state.last_click = None;
+                                            } else {
+                                                state.last_click = Some((idx, now));
+                                            }
+                                        }
+                                        ui::DirPickerClick::Back => {
+                                            state.browser.go_up();
+                                            state.last_click = None;
+                                        }
+                                        ui::DirPickerClick::Confirm | ui::DirPickerClick::HintEnter => {
+                                            // Enter the highlighted folder first (same as Enter key)
+                                            if state.browser.total_count() > 0 {
+                                                state.browser.enter_selected();
+                                            }
+                                            state.name = auto_workspace_name_suggestion(&state.browser.current_dir);
+                                            state.stage = NewWorkspaceStage::Name;
+                                        }
+                                        ui::DirPickerClick::HintOpen => {
+                                            state.browser.enter_selected();
+                                            state.last_click = None;
+                                        }
+                                        ui::DirPickerClick::HintSearch => {
+                                            state.browser.toggle_search();
+                                        }
+                                        ui::DirPickerClick::HintEsc => {
+                                            if state.browser.search_mode {
+                                                state.browser.toggle_search();
+                                            } else {
+                                                self.new_workspace_input = None;
+                                                self.mode = Mode::Normal;
+                                            }
+                                        }
+                                    }
                                 } else if !ui::dir_picker_is_inside(area, x, y) {
                                     self.new_workspace_input = None;
                                     self.mode = Mode::Normal;
                                 }
                             }
                             NewWorkspaceStage::Name => {
-                                if !ui::name_picker_is_inside(area, x, y) {
+                                if let Some(hit) = ui::name_picker_hit_test(area, x, y) {
+                                    match hit {
+                                        ui::NamePickerClick::HintEnter => {
+                                            let name = state.name.clone();
+                                            let dir = state.browser.current_dir.to_string_lossy().to_string();
+                                            self.new_workspace_input = None;
+                                            self.mode = Mode::Normal;
+                                            self.render_state.active_workspace = self.render_state.workspaces.len();
+                                            let cmd = format!("new-workspace -c \"{}\"", dir);
+                                            let mut w = writer.lock().await;
+                                            let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
+                                            if !name.is_empty() {
+                                                let rename_cmd = format!("rename-workspace {}", name);
+                                                let _ = send_request(&mut w, &ClientRequest::Command(rename_cmd)).await;
+                                            }
+                                        }
+                                        ui::NamePickerClick::HintEsc => {
+                                            state.stage = NewWorkspaceStage::Directory;
+                                        }
+                                    }
+                                } else if !ui::name_picker_is_inside(area, x, y) {
                                     self.new_workspace_input = None;
                                     self.mode = Mode::Normal;
                                 }
@@ -754,7 +819,7 @@ impl Client {
                                     self.render_state.active_workspace = i;
                                     let mut w = writer.lock().await;
                                     let _ = send_request(
-                                        &mut *w,
+                                        &mut w,
                                         &ClientRequest::Command(format!(
                                             "select-workspace -t {}",
                                             i
@@ -770,6 +835,7 @@ impl Client {
                                         stage: NewWorkspaceStage::Directory,
                                         name: String::new(),
                                         browser: DirBrowser::new(home),
+                                        last_click: None,
                                     });
                                     self.mode = Mode::NewWorkspaceInput;
                                 }
@@ -791,16 +857,16 @@ impl Client {
                     // Forward mouse to server (click on body clears workspace bar focus)
                     self.workspace_bar_focused = false;
                     let mut w = writer.lock().await;
-                    let _ = send_request(&mut *w, &ClientRequest::MouseDown { x, y }).await;
+                    let _ = send_request(&mut w, &ClientRequest::MouseDown { x, y }).await;
                 }
             }
             AppEvent::MouseDrag { x, y } => {
                 let mut w = writer.lock().await;
-                let _ = send_request(&mut *w, &ClientRequest::MouseDrag { x, y }).await;
+                let _ = send_request(&mut w, &ClientRequest::MouseDrag { x, y }).await;
             }
             AppEvent::MouseUp { x, y } => {
                 let mut w = writer.lock().await;
-                let _ = send_request(&mut *w, &ClientRequest::MouseUp { x, y }).await;
+                let _ = send_request(&mut w, &ClientRequest::MouseUp { x, y }).await;
             }
             AppEvent::MouseScroll { up } => {
                 if self.mode == Mode::NewWorkspaceInput {
@@ -815,13 +881,13 @@ impl Client {
                     }
                 } else {
                     let mut w = writer.lock().await;
-                    let _ = send_request(&mut *w, &ClientRequest::MouseScroll { up }).await;
+                    let _ = send_request(&mut w, &ClientRequest::MouseScroll { up }).await;
                 }
             }
             AppEvent::MouseMove { x, y } => {
                 self.hover = Some((x, y));
                 let mut w = writer.lock().await;
-                let _ = send_request(&mut *w, &ClientRequest::MouseMove { x, y }).await;
+                let _ = send_request(&mut w, &ClientRequest::MouseMove { x, y }).await;
             }
             AppEvent::MouseRightDown { x, y } => {
                 if self.mode == Mode::Normal || self.mode == Mode::Interact {
@@ -849,7 +915,7 @@ impl Client {
                             self.render_state.active_workspace = i;
                             let mut w = writer.lock().await;
                             let _ = send_request(
-                                &mut *w,
+                                &mut w,
                                 &ClientRequest::Command(format!("select-workspace -t {}", i)),
                             )
                             .await;
@@ -860,7 +926,7 @@ impl Client {
                     } else if let Some(TabBarHit::Tab { group_index, tab_index }) = self.hit_test_tab_bar(tui, x, y) {
                         // Right-click on a tab — select that tab first, then show tab bar menu
                         let mut w = writer.lock().await;
-                        let _ = send_request(&mut *w, &ClientRequest::MouseDown { x, y }).await;
+                        let _ = send_request(&mut w, &ClientRequest::MouseDown { x, y }).await;
                         drop(w);
                         // Update local render state to reflect the selected tab
                         if let Some(ws) = self.render_state.workspaces.get_mut(self.render_state.active_workspace) {
@@ -880,8 +946,8 @@ impl Client {
                 }
             }
             AppEvent::Tick => {}
-            AppEvent::PtyOutput { .. } | AppEvent::PtyExited { .. } | AppEvent::SystemStats(_) => {
-                // These come from the server, not terminal
+            AppEvent::PtyOutput { .. } | AppEvent::PtyExited { .. } | AppEvent::SystemStats(_) | AppEvent::ForegroundPoll => {
+                // These come from the server/daemon, not terminal
             }
         }
         Ok(())
@@ -896,7 +962,7 @@ impl Client {
         // Modal modes handled client-side
         match &self.mode {
             Mode::Scroll => return self.handle_scroll_key(key, writer).await,
-            Mode::Copy => return self.handle_copy_mode_key(key),
+            Mode::Copy => self.handle_copy_mode_key(key),
             Mode::Palette => return self.handle_palette_key(key, tui, writer).await,
             Mode::TabPicker => return self.handle_tab_picker_key(key, writer).await,
             Mode::Confirm => return self.handle_confirm_key(key, writer).await,
@@ -928,7 +994,7 @@ impl Client {
         // Forward to PTY
         let mut w = writer.lock().await;
         let _ = send_request(
-            &mut *w,
+            &mut w,
             &ClientRequest::Key(SerializableKeyEvent::from(key)),
         )
         .await;
@@ -1010,7 +1076,7 @@ impl Client {
                         self.render_state.active_workspace = idx - 1;
                         let mut w = writer.lock().await;
                         let _ = send_request(
-                            &mut *w,
+                            &mut w,
                             &ClientRequest::Command(format!("select-workspace -t {}", idx - 1)),
                         )
                         .await;
@@ -1023,7 +1089,7 @@ impl Client {
                         self.render_state.active_workspace = idx + 1;
                         let mut w = writer.lock().await;
                         let _ = send_request(
-                            &mut *w,
+                            &mut w,
                             &ClientRequest::Command(format!("select-workspace -t {}", idx + 1)),
                         )
                         .await;
@@ -1036,8 +1102,13 @@ impl Client {
                 }
                 Action::CloseTab => {
                     // Remap to close workspace when bar is focused
+                    let is_last = self.render_state.workspaces.len() <= 1;
                     self.pending_confirm_action = Some(Action::CloseWorkspace);
-                    self.confirm_message = Some("Close this workspace?".into());
+                    self.confirm_message = Some(if is_last {
+                        "Close last workspace? This will end the session.".into()
+                    } else {
+                        "Close this workspace?".into()
+                    });
                     self.workspace_bar_focused = false;
                     self.mode = Mode::Confirm;
                     return Ok(());
@@ -1153,13 +1224,28 @@ impl Client {
                 return Ok(());
             }
             Action::RenameWindow => {
-                self.rename_input.clear();
+                // Pre-populate with the current window name (if set) or the
+                // active tab title so the user can edit instead of retyping.
+                self.rename_input = self
+                    .active_workspace()
+                    .and_then(|ws| {
+                        let group = ws.groups.iter().find(|g| g.id == ws.active_group)?;
+                        group
+                            .name
+                            .clone()
+                            .or_else(|| group.tabs.get(group.active_tab).map(|t| t.title.clone()))
+                    })
+                    .unwrap_or_default();
                 self.rename_target = RenameTarget::Window;
                 self.mode = Mode::Rename;
                 return Ok(());
             }
             Action::RenameWorkspace => {
-                self.rename_input.clear();
+                // Pre-populate with the current workspace name.
+                self.rename_input = self
+                    .active_workspace()
+                    .map(|ws| ws.name.clone())
+                    .unwrap_or_default();
                 self.rename_target = RenameTarget::Workspace;
                 self.mode = Mode::Rename;
                 return Ok(());
@@ -1172,6 +1258,7 @@ impl Client {
                     stage: NewWorkspaceStage::Directory,
                     name: String::new(),
                     browser: DirBrowser::new(home),
+                    last_click: None,
                 });
                 self.mode = Mode::NewWorkspaceInput;
                 return Ok(());
@@ -1186,7 +1273,7 @@ impl Client {
                     if !text.is_empty() {
                         let mut w = writer.lock().await;
                         let _ = send_request(
-                            &mut *w,
+                            &mut w,
                             &ClientRequest::Command(format!("paste-buffer {}", text)),
                         )
                         .await;
@@ -1215,11 +1302,12 @@ impl Client {
                 } else {
                     // Idle shell — close immediately
                     let mut w = writer.lock().await;
-                    let _ = send_request(&mut *w, &ClientRequest::Command("kill-pane".to_string())).await;
+                    let _ = send_request(&mut w, &ClientRequest::Command("kill-pane".to_string())).await;
                 }
                 return Ok(());
             }
             Action::CloseWorkspace => {
+                let is_last = self.render_state.workspaces.len() <= 1;
                 let has_any_fg = self
                     .active_workspace()
                     .map(|ws| {
@@ -1229,14 +1317,19 @@ impl Client {
                     })
                     .unwrap_or(false);
 
-                if has_any_fg {
+                if is_last {
+                    self.pending_confirm_action = Some(Action::CloseWorkspace);
+                    self.confirm_message = Some("Close last workspace? This will end the session.".into());
+                    self.workspace_bar_focused = false;
+                    self.mode = Mode::Confirm;
+                } else if has_any_fg {
                     self.pending_confirm_action = Some(Action::CloseWorkspace);
                     self.confirm_message = Some("Close workspace? (processes running)".into());
                     self.workspace_bar_focused = false;
                     self.mode = Mode::Confirm;
                 } else {
                     let mut w = writer.lock().await;
-                    let _ = send_request(&mut *w, &ClientRequest::Command("close-workspace".to_string())).await;
+                    let _ = send_request(&mut w, &ClientRequest::Command("close-workspace".to_string())).await;
                 }
                 return Ok(());
             }
@@ -1255,7 +1348,7 @@ impl Client {
         // Server-mutating actions — translate to commands
         if let Some(cmd) = action_to_command(&action) {
             let mut w = writer.lock().await;
-            let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+            let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
         }
         Ok(())
     }
@@ -1298,7 +1391,7 @@ impl Client {
                 };
                 if let Some(cmd) = cmd {
                     let mut w = writer.lock().await;
-                    let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                    let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
                 }
                 self.tab_picker_state = None;
                 self.mode = Mode::Interact;
@@ -1333,7 +1426,7 @@ impl Client {
                 if let Some(action) = self.pending_confirm_action.take() {
                     if let Some(cmd) = action_to_command(&action) {
                         let mut w = writer.lock().await;
-                        let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                        let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
                     }
                 }
                 self.confirm_message = None;
@@ -1369,7 +1462,7 @@ impl Client {
                         RenameTarget::Workspace => format!("rename-workspace {}", name),
                     };
                     let mut w = writer.lock().await;
-                    let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                    let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
                 }
             }
             _ => {
@@ -1473,10 +1566,10 @@ impl Client {
                     self.render_state.active_workspace = self.render_state.workspaces.len();
                     let cmd = format!("new-workspace -c \"{}\"", dir);
                     let mut w = writer.lock().await;
-                    let _ = send_request(&mut *w, &ClientRequest::Command(cmd)).await;
+                    let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
                     if !name.is_empty() {
                         let _ = send_request(
-                            &mut *w,
+                            &mut w,
                             &ClientRequest::Command(format!("rename-workspace {}", name)),
                         )
                         .await;
@@ -1511,7 +1604,7 @@ impl Client {
             KeyCode::Char('=') => {
                 let mut w = writer.lock().await;
                 let _ =
-                    send_request(&mut *w, &ClientRequest::Command("equalize-layout".to_string()))
+                    send_request(&mut w, &ClientRequest::Command("equalize-layout".to_string()))
                         .await;
             }
             KeyCode::Char(c @ ('h' | 'j' | 'k' | 'l')) => {
@@ -1543,7 +1636,7 @@ impl Client {
                     };
                     let mut w = writer.lock().await;
                     let _ =
-                        send_request(&mut *w, &ClientRequest::Command(cmd.to_string())).await;
+                        send_request(&mut w, &ClientRequest::Command(cmd.to_string())).await;
                 } else {
                     // No border selected yet → select this one
                     state.selected = Some(match c {
@@ -1648,22 +1741,22 @@ impl Client {
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 let mut w = writer.lock().await;
-                let _ = send_request(&mut *w, &ClientRequest::MouseScroll { up: true }).await;
+                let _ = send_request(&mut w, &ClientRequest::MouseScroll { up: true }).await;
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 let mut w = writer.lock().await;
-                let _ = send_request(&mut *w, &ClientRequest::MouseScroll { up: false }).await;
+                let _ = send_request(&mut w, &ClientRequest::MouseScroll { up: false }).await;
             }
             KeyCode::PageUp | KeyCode::Char('u') => {
                 for _ in 0..10 {
                     let mut w = writer.lock().await;
-                    let _ = send_request(&mut *w, &ClientRequest::MouseScroll { up: true }).await;
+                    let _ = send_request(&mut w, &ClientRequest::MouseScroll { up: true }).await;
                 }
             }
             KeyCode::PageDown | KeyCode::Char('d') => {
                 for _ in 0..10 {
                     let mut w = writer.lock().await;
-                    let _ = send_request(&mut *w, &ClientRequest::MouseScroll { up: false }).await;
+                    let _ = send_request(&mut w, &ClientRequest::MouseScroll { up: false }).await;
                 }
             }
             _ => {
@@ -1671,7 +1764,7 @@ impl Client {
                 // Forward the key to PTY
                 let mut w = writer.lock().await;
                 let _ = send_request(
-                    &mut *w,
+                    &mut w,
                     &ClientRequest::Key(SerializableKeyEvent::from(key)),
                 )
                 .await;
@@ -1749,7 +1842,7 @@ impl Client {
                 let leader_key = self.config.leader.key;
                 let mut w = writer.lock().await;
                 let _ = send_request(
-                    &mut *w,
+                    &mut w,
                     &ClientRequest::Key(SerializableKeyEvent::from(leader_key)),
                 )
                 .await;
@@ -1822,29 +1915,70 @@ impl Client {
                         }
                     }
 
-                    // Check individual tabs
+                    // Check individual tabs (sliding window layout matching render)
                     let sep_width: u16 = 3;
+                    let indicator_width: u16 = 2;
+                    let n = group.tabs.len();
+
+                    let label_widths: Vec<u16> = group
+                        .tabs
+                        .iter()
+                        .map(|tab| tab.title.len() as u16 + 2)
+                        .collect();
+
+                    let total: u16 = label_widths.iter().sum::<u16>()
+                        + if n > 1 { sep_width * (n as u16 - 1) } else { 0 }
+                        + plus_reserve;
+
+                    let (lo, hi) = if n == 0 || total <= padded.width {
+                        (0, n.saturating_sub(1))
+                    } else {
+                        let active = group.active_tab.min(n - 1);
+                        let range_w = |lo: usize, hi: usize| -> u16 {
+                            let mut w: u16 = 0;
+                            for (j, lw) in label_widths[lo..=hi].iter().enumerate() {
+                                w += lw;
+                                if j > 0 { w += sep_width; }
+                            }
+                            if lo > 0 { w += indicator_width; }
+                            if hi < n - 1 { w += indicator_width; }
+                            w + plus_reserve
+                        };
+                        let mut lo = active;
+                        let mut hi = active;
+                        loop {
+                            let mut expanded = false;
+                            if lo > 0 && range_w(lo - 1, hi) <= padded.width {
+                                lo -= 1;
+                                expanded = true;
+                            }
+                            if hi + 1 < n && range_w(lo, hi + 1) <= padded.width {
+                                hi += 1;
+                                expanded = true;
+                            }
+                            if !expanded { break; }
+                        }
+                        (lo, hi)
+                    };
+
                     let mut cursor = padded.x;
-                    for (i, tab) in group.tabs.iter().enumerate() {
-                        let is_active_tab = i == group.active_tab;
-                        let label_width = tab.title.len() as u16 + 2; // " title "
+                    if lo > 0 {
+                        cursor += indicator_width;
+                    }
+                    if n > 0 {
+                        for (j, &lw) in label_widths[lo..=hi].iter().enumerate() {
+                            if j > 0 {
+                                cursor += sep_width;
+                            }
+                            let tab_start = cursor;
+                            cursor += lw;
 
-                        if cursor + label_width + plus_reserve > max_x && !is_active_tab {
-                            continue; // tab is clipped
-                        }
-
-                        if i > 0 {
-                            cursor += sep_width;
-                        }
-
-                        let tab_start = cursor;
-                        cursor += label_width;
-
-                        if x >= tab_start && x < cursor {
-                            return Some(TabBarHit::Tab {
-                                group_index: ws.groups.iter().position(|g| g.id == *group_id).unwrap_or(0),
-                                tab_index: i,
-                            });
+                            if x >= tab_start && x < cursor {
+                                return Some(TabBarHit::Tab {
+                                    group_index: ws.groups.iter().position(|g| g.id == *group_id).unwrap_or(0),
+                                    tab_index: lo + j,
+                                });
+                            }
                         }
                     }
                 }

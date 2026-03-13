@@ -180,7 +180,7 @@ pub async fn run_control_mode(
 /// Simple base64 encoding for control mode output.
 fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
     let chunks = data.chunks(3);
 
     for chunk in chunks {
