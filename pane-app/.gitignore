@@ -1,6 +1,12 @@
+# Tuist
+Derived/
+Tuist/.build/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+
+# SPM (legacy)
 .build/
 .swiftpm/
 Package.resolved
-*.xcodeproj
-xcuserdata/
-DerivedData/

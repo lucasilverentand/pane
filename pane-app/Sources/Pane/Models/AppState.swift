@@ -6,9 +6,15 @@ import PaneKit
 @Observable
 final class AppState {
     let client = PaneClient()
+    let browser = BrowserManager()
+    let mcpServer: BrowserMCPServer
 
     var selectedWorkspaceIndex: Int = 0
     var selectedWindowId: WindowId?
+
+    init() {
+        mcpServer = BrowserMCPServer(browser: browser)
+    }
 
     var windowTitle: String {
         guard let state = client.renderState,
@@ -37,6 +43,7 @@ final class AppState {
         Task {
             do {
                 try await client.connect()
+                mcpServer.start()
             } catch {
                 // Connection error is surfaced via client.connectionState
             }
@@ -44,6 +51,7 @@ final class AppState {
     }
 
     func disconnect() {
+        mcpServer.stop()
         client.disconnect()
     }
 

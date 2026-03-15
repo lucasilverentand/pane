@@ -10,6 +10,7 @@ struct PaneApp: App {
             ContentView()
                 .environment(appState)
                 .environment(appState.client)
+                .environment(appState.browser)
                 .navigationTitle(appState.windowTitle)
                 .onAppear {
                     appState.connect()

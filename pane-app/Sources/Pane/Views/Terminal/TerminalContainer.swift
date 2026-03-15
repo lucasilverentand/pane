@@ -1,6 +1,12 @@
 import SwiftUI
 import PaneKit
 
+/// Which tab type is currently active in a pane.
+enum ActivePaneTab: Equatable {
+    case terminal(Int)     // daemon tab index
+    case browser(UUID)     // client-side browser tab id
+}
+
 /// Renders the split layout tree from a workspace's `LayoutNode`.
 /// Each leaf maps to a `TerminalView` for the corresponding window.
 struct TerminalContainer: View {
@@ -52,29 +58,54 @@ struct TerminalContainer: View {
     }
 }
 
-/// Placeholder pane view for a single terminal window.
-/// In the full implementation, this wraps SwiftTerm's TerminalView.
+/// Pane view for a single window — shows terminal tabs, browser tabs, and content.
 struct TerminalPane: View {
     let windowId: WindowId
     let window: WindowSnapshot?
     let isActive: Bool
 
+    @Environment(BrowserManager.self) private var browser
+    @State private var activeTab: ActivePaneTab = .terminal(0)
+
+    private var browserTabs: [BrowserTab] {
+        browser.browserTabs(for: windowId)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Tab bar (only shown when >1 tab)
-            if let window, window.tabs.count > 1 {
+            // Always show tab bar when there are browser tabs, or when >1 terminal tab
+            if let window, window.tabs.count > 1 || !browserTabs.isEmpty {
                 tabBar(window)
             }
 
-            // Terminal content area
-            TerminalView(windowId: windowId)
-                .border(isActive ? Color.accentColor : Color.clear, width: 1)
+            // Content area
+            switch activeTab {
+            case .terminal:
+                TerminalView(windowId: windowId)
+                    .border(isActive ? Color.accentColor : Color.clear, width: 1)
+            case .browser(let tabId):
+                if let tab = browserTabs.first(where: { $0.id == tabId }) {
+                    BrowserPaneView(tab: tab)
+                        .border(isActive ? Color.accentColor : Color.clear, width: 1)
+                } else {
+                    // Tab was closed, fall back to terminal
+                    TerminalView(windowId: windowId)
+                        .border(isActive ? Color.accentColor : Color.clear, width: 1)
+                        .onAppear { activeTab = .terminal(window?.activeTab ?? 0) }
+                }
+            }
+        }
+        .onChange(of: window?.activeTab) { _, newIndex in
+            if case .terminal = activeTab, let newIndex {
+                activeTab = .terminal(newIndex)
+            }
         }
     }
 
     @ViewBuilder
     private func tabBar(_ window: WindowSnapshot) -> some View {
         HStack(spacing: 0) {
+            // Terminal tabs
             ForEach(Array(window.tabs.enumerated()), id: \.element.id) { index, tab in
                 HStack(spacing: 4) {
                     Text(tab.kind.label)
@@ -85,8 +116,50 @@ struct TerminalPane: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(index == window.activeTab ? Color.accentColor.opacity(0.3) : Color.clear)
+                .background(activeTab == .terminal(index) ? Color.accentColor.opacity(0.3) : Color.clear)
+                .onTapGesture {
+                    activeTab = .terminal(index)
+                }
             }
+
+            // Browser tabs
+            ForEach(browserTabs) { tab in
+                HStack(spacing: 4) {
+                    Image(systemName: "globe")
+                        .font(.caption2)
+                    Text(tab.title)
+                        .font(.caption)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(activeTab == .browser(tab.id) ? Color.accentColor.opacity(0.3) : Color.clear)
+                .onTapGesture {
+                    activeTab = .browser(tab.id)
+                    browser.setActiveBrowserTab(tab.id, in: windowId)
+                }
+                .contextMenu {
+                    Button("Close Tab") {
+                        browser.closeTab(id: tab.id, in: windowId)
+                        if case .browser(let id) = activeTab, id == tab.id {
+                            activeTab = .terminal(window.activeTab)
+                        }
+                    }
+                }
+            }
+
+            // New browser tab button
+            Button(action: {
+                let tab = browser.openTab(in: windowId)
+                activeTab = .browser(tab.id)
+            }) {
+                Image(systemName: "plus")
+                    .font(.caption2)
+            }
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+
             Spacer()
         }
         .background(.bar)
