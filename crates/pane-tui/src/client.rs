@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -24,7 +24,7 @@ use crate::tui::Tui;
 use crate::ui;
 use crate::ui::context_menu::ContextMenuState;
 use crate::ui::palette::UnifiedPaletteState;
-use crate::ui::tab_picker::TabPickerState;
+use crate::ui::tab_picker::{TabPickerEntry, TabPickerState};
 
 /// Result of hit-testing a tab bar click.
 enum TabBarHit {
@@ -49,6 +49,8 @@ pub struct Client {
     pub leader_state: Option<LeaderState>,
     pub palette_state: Option<UnifiedPaletteState>,
     pub copy_mode_state: Option<CopyModeState>,
+    pub system_programs: Vec<TabPickerEntry>,
+    pub favorites: HashSet<String>,
     pub tab_picker_state: Option<TabPickerState>,
     pub context_menu_state: Option<ContextMenuState>,
     pub pending_confirm_action: Option<Action>,
@@ -61,6 +63,9 @@ pub struct Client {
     pub rename_input: String,
     pub rename_target: RenameTarget,
     pub new_workspace_input: Option<NewWorkspaceInputState>,
+    pub project_hub_state: Option<ProjectHubState>,
+    /// When true, the project hub is shown as the first "workspace" in the bar.
+    pub hub_active: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -329,6 +334,250 @@ impl DirBrowser {
     }
 }
 
+/// A project entry discovered in a project directory.
+#[derive(Clone, Debug)]
+pub struct ProjectEntry {
+    /// Display name (directory name).
+    pub name: String,
+    /// Full path to the project.
+    pub path: std::path::PathBuf,
+}
+
+/// Cached git info for a project.
+#[derive(Clone, Debug, Default)]
+pub struct ProjectGitInfo {
+    pub branch: String,
+    pub commits: Vec<GitCommit>,
+    pub status_lines: Vec<String>,
+    pub dirty_count: usize,
+    pub staged_count: usize,
+    pub untracked_count: usize,
+    pub ahead: usize,
+    pub behind: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct GitCommit {
+    pub hash: String,
+    pub message: String,
+    pub author: String,
+    pub age: String,
+}
+
+pub struct ProjectHubState {
+    /// All discovered projects.
+    pub all_projects: Vec<ProjectEntry>,
+    /// Filtered indices into all_projects.
+    pub filtered: Vec<usize>,
+    /// User's search query.
+    pub input: String,
+    /// Currently selected index.
+    pub selected: usize,
+    /// Scroll offset.
+    pub scroll_offset: usize,
+    /// Cached git info keyed by project index.
+    pub git_cache: HashMap<usize, ProjectGitInfo>,
+    /// Which project index we last fetched git info for.
+    pub last_git_fetch: Option<usize>,
+}
+
+impl ProjectHubState {
+    pub fn new(config: &config::Config) -> Self {
+        let dirs = config.behavior.resolved_projects_dirs();
+
+        let mut projects = Vec::new();
+        for dir in &dirs {
+            if let Ok(read_dir) = std::fs::read_dir(dir) {
+                for entry in read_dir.filter_map(|e| e.ok()) {
+                    let path = entry.path();
+                    if !path.is_dir() {
+                        continue;
+                    }
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                    // Check if it's a git repo
+                    if !path.join(".git").exists() {
+                        continue;
+                    }
+                    projects.push(ProjectEntry {
+                        name,
+                        path,
+                    });
+                }
+            }
+        }
+
+        projects.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+        });
+
+        let filtered: Vec<usize> = (0..projects.len()).collect();
+        let mut state = ProjectHubState {
+            all_projects: projects,
+            filtered,
+            input: String::new(),
+            selected: 0,
+            scroll_offset: 0,
+            git_cache: HashMap::new(),
+            last_git_fetch: None,
+        };
+        state.ensure_git_info();
+        state
+    }
+
+    pub fn update_filter(&mut self) {
+        if self.input.is_empty() {
+            self.filtered = (0..self.all_projects.len()).collect();
+        } else {
+            let query = self.input.to_lowercase();
+            self.filtered = self
+                .all_projects
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.name.to_lowercase().contains(&query))
+                .map(|(i, _)| i)
+                .collect();
+        }
+        if self.selected >= self.filtered.len() {
+            self.selected = self.filtered.len().saturating_sub(1);
+        }
+        self.scroll_offset = 0;
+    }
+
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+            self.ensure_git_info();
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        if self.selected + 1 < self.filtered.len() {
+            self.selected += 1;
+            self.ensure_git_info();
+        }
+    }
+
+    pub fn selected_project(&self) -> Option<&ProjectEntry> {
+        self.filtered
+            .get(self.selected)
+            .and_then(|&i| self.all_projects.get(i))
+    }
+
+    /// Get git info for the currently selected project (if cached).
+    pub fn selected_git_info(&self) -> Option<&ProjectGitInfo> {
+        self.filtered
+            .get(self.selected)
+            .and_then(|&i| self.git_cache.get(&i))
+    }
+
+    /// Fetch git info for the selected project if not already cached.
+    pub fn ensure_git_info(&mut self) {
+        let project_idx = match self.filtered.get(self.selected) {
+            Some(&i) => i,
+            None => return,
+        };
+        if self.last_git_fetch == Some(project_idx) {
+            return;
+        }
+        self.last_git_fetch = Some(project_idx);
+        if self.git_cache.contains_key(&project_idx) {
+            return;
+        }
+        let path = &self.all_projects[project_idx].path;
+        let info = fetch_git_info(path);
+        self.git_cache.insert(project_idx, info);
+    }
+}
+
+fn fetch_git_info(path: &std::path::Path) -> ProjectGitInfo {
+    let run = |args: &[&str]| -> String {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default()
+    };
+
+    // Branch
+    let branch = run(&["rev-parse", "--abbrev-ref", "HEAD"]);
+
+    // Recent commits
+    let log_output = run(&[
+        "log", "--oneline", "--format=%h\t%s\t%an\t%ar", "-15",
+    ]);
+    let commits: Vec<GitCommit> = log_output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            let parts: Vec<&str> = line.splitn(4, '\t').collect();
+            GitCommit {
+                hash: parts.first().unwrap_or(&"").to_string(),
+                message: parts.get(1).unwrap_or(&"").to_string(),
+                author: parts.get(2).unwrap_or(&"").to_string(),
+                age: parts.get(3).unwrap_or(&"").to_string(),
+            }
+        })
+        .collect();
+
+    // Status
+    let status_output = run(&["status", "--porcelain=v1"]);
+    let status_lines: Vec<String> = status_output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect();
+
+    let mut dirty_count = 0;
+    let mut staged_count = 0;
+    let mut untracked_count = 0;
+    for line in &status_lines {
+        let bytes = line.as_bytes();
+        if bytes.len() >= 2 {
+            let x = bytes[0];
+            let y = bytes[1];
+            if x == b'?' {
+                untracked_count += 1;
+            } else {
+                if x != b' ' && x != b'?' {
+                    staged_count += 1;
+                }
+                if y != b' ' && y != b'?' {
+                    dirty_count += 1;
+                }
+            }
+        }
+    }
+
+    // Ahead/behind
+    let ab_output = run(&["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]);
+    let (ahead, behind) = if let Some((a, b)) = ab_output.split_once('\t') {
+        (
+            a.trim().parse::<usize>().unwrap_or(0),
+            b.trim().parse::<usize>().unwrap_or(0),
+        )
+    } else {
+        (0, 0)
+    };
+
+    ProjectGitInfo {
+        branch,
+        commits,
+        status_lines,
+        dirty_count,
+        staged_count,
+        untracked_count,
+        ahead,
+        behind,
+    }
+}
+
 /// Query zoxide for directories matching the input (up to 10 results).
 fn query_zoxide(input: &str) -> Vec<String> {
     let output = std::process::Command::new("zoxide")
@@ -363,6 +612,8 @@ impl Client {
             leader_state: None,
             palette_state: None,
             copy_mode_state: None,
+            system_programs: crate::ui::tab_picker::scan_system_programs(),
+            favorites: crate::ui::tab_picker::load_favorites(),
             tab_picker_state: None,
             context_menu_state: None,
             pending_confirm_action: None,
@@ -375,6 +626,8 @@ impl Client {
             rename_input: String::new(),
             rename_target: RenameTarget::Window,
             new_workspace_input: None,
+            project_hub_state: None,
+            hub_active: true,
         }
     }
 
@@ -413,6 +666,10 @@ impl Client {
         if let ServerResponse::LayoutChanged { render_state } = resp {
             client.apply_layout(render_state);
         }
+
+        // Always initialize the project hub (it's a permanent workspace)
+        client.project_hub_state = Some(ProjectHubState::new(&client.config));
+        client.hub_active = true;
 
         // Set up TUI
         let mut tui = Tui::new()?;
@@ -562,8 +819,10 @@ impl Client {
     ) -> Result<()> {
         match event {
             ServerEvent::Terminal(AppEvent::Tick) => {
-                // Tick is only used as a keepalive for the event loop;
-                // no state changed so no redraw needed.
+                // Redraw on tick for animations (tab picker placeholder, interact label).
+                if self.tab_picker_state.is_some() || self.mode == Mode::Interact {
+                    self.needs_redraw = true;
+                }
             }
             ServerEvent::Terminal(app_event) => {
                 self.handle_terminal_event(app_event, tui, writer).await?;
@@ -659,7 +918,8 @@ impl Client {
                 } else if self.mode == Mode::Confirm {
                     let size = tui.size()?;
                     let area = Rect::new(0, 0, size.width, size.height);
-                    if let Some(click) = ui::confirm_dialog_hit_test(area, x, y) {
+                    let msg = self.confirm_message.as_deref().unwrap_or("Are you sure?");
+                    if let Some(click) = ui::dialog::confirm_hit_test(area, msg, x, y) {
                         match click {
                             ui::ConfirmDialogClick::Confirm => {
                                 if let Some(action) = self.pending_confirm_action.take() {
@@ -796,19 +1056,26 @@ impl Client {
                     || self.mode == Mode::Interact
                 {
                     // Check workspace bar clicks (client-side)
-                    let show_workspace_bar = !self.render_state.workspaces.is_empty();
+                    let show_workspace_bar = self.hub_active || !self.render_state.workspaces.is_empty();
                     if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
-                        let names: Vec<&str> = self
-                            .render_state
-                            .workspaces
-                            .iter()
-                            .map(|ws| ws.name.as_str())
-                            .collect();
+                        let mut names: Vec<String> = vec!["Hub".to_string()];
+                        names.extend(
+                            self.render_state
+                                .workspaces
+                                .iter()
+                                .map(|ws| ws.name.clone()),
+                        );
+                        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                        let active_idx = if self.hub_active {
+                            0
+                        } else {
+                            self.render_state.active_workspace + 1
+                        };
                         let bar_area =
                             Rect::new(0, 0, tui.size()?.width, crate::ui::workspace_bar::HEIGHT);
                         if let Some(click) = crate::ui::workspace_bar::hit_test(
-                            &names,
-                            self.render_state.active_workspace,
+                            &name_refs,
+                            active_idx,
                             bar_area,
                             x,
                             y,
@@ -816,16 +1083,27 @@ impl Client {
                             self.workspace_bar_focused = true;
                             match click {
                                 crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
-                                    self.render_state.active_workspace = i;
-                                    let mut w = writer.lock().await;
-                                    let _ = send_request(
-                                        &mut w,
-                                        &ClientRequest::Command(format!(
-                                            "select-workspace -t {}",
-                                            i
-                                        )),
-                                    )
-                                    .await;
+                                    if i == 0 {
+                                        // Hub workspace
+                                        self.hub_active = true;
+                                        if self.project_hub_state.is_none() {
+                                            self.project_hub_state = Some(ProjectHubState::new(&self.config));
+                                        }
+                                    } else {
+                                        // Real daemon workspace (offset by -1)
+                                        self.hub_active = false;
+                                        let daemon_idx = i - 1;
+                                        self.render_state.active_workspace = daemon_idx;
+                                        let mut w = writer.lock().await;
+                                        let _ = send_request(
+                                            &mut w,
+                                            &ClientRequest::Command(format!(
+                                                "select-workspace -t {}",
+                                                daemon_idx
+                                            )),
+                                        )
+                                        .await;
+                                    }
                                 }
                                 crate::ui::workspace_bar::WorkspaceBarClick::NewWorkspace => {
                                     let home = std::env::var("HOME")
@@ -847,8 +1125,9 @@ impl Client {
                     // Check if click hit a tab bar + button (open picker client-side)
                     if self.hit_test_tab_bar_plus(tui, x, y) {
                         self.tab_picker_state = Some(TabPickerState::new(
+                            &self.system_programs,
                             &self.config.tab_picker_entries,
-                            &self.config.favorites,
+                            &self.favorites,
                         ));
                         self.mode = Mode::TabPicker;
                         return Ok(());
@@ -869,7 +1148,11 @@ impl Client {
                 let _ = send_request(&mut w, &ClientRequest::MouseUp { x, y }).await;
             }
             AppEvent::MouseScroll { up } => {
-                if self.mode == Mode::NewWorkspaceInput {
+                if self.hub_active {
+                    if let Some(ref mut hub) = self.project_hub_state {
+                        if up { hub.move_up(); } else { hub.move_down(); }
+                    }
+                } else if self.mode == Mode::NewWorkspaceInput {
                     if let Some(ref mut state) = self.new_workspace_input {
                         if matches!(state.stage, NewWorkspaceStage::Directory) {
                             if up { state.browser.move_up(); } else { state.browser.move_down(); }
@@ -891,32 +1174,46 @@ impl Client {
             }
             AppEvent::MouseRightDown { x, y } => {
                 if self.mode == Mode::Normal || self.mode == Mode::Interact {
-                    let show_workspace_bar = !self.render_state.workspaces.is_empty();
+                    let show_workspace_bar = self.hub_active || !self.render_state.workspaces.is_empty();
 
                     if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
                         // Right-click on workspace bar — select the clicked workspace first
-                        let names: Vec<&str> = self
-                            .render_state
-                            .workspaces
-                            .iter()
-                            .map(|ws| ws.name.as_str())
-                            .collect();
+                        let mut names: Vec<String> = vec!["Hub".to_string()];
+                        names.extend(
+                            self.render_state
+                                .workspaces
+                                .iter()
+                                .map(|ws| ws.name.clone()),
+                        );
+                        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                        let active_idx = if self.hub_active {
+                            0
+                        } else {
+                            self.render_state.active_workspace + 1
+                        };
                         let bar_area =
                             Rect::new(0, 0, tui.size()?.width, crate::ui::workspace_bar::HEIGHT);
                         if let Some(crate::ui::workspace_bar::WorkspaceBarClick::Tab(i)) =
                             crate::ui::workspace_bar::hit_test(
-                                &names,
-                                self.render_state.active_workspace,
+                                &name_refs,
+                                active_idx,
                                 bar_area,
                                 x,
                                 y,
                             )
                         {
-                            self.render_state.active_workspace = i;
+                            if i == 0 {
+                                // Right-click on Hub — just select it, don't show close menu
+                                self.hub_active = true;
+                                return Ok(());
+                            }
+                            let daemon_idx = i - 1;
+                            self.hub_active = false;
+                            self.render_state.active_workspace = daemon_idx;
                             let mut w = writer.lock().await;
                             let _ = send_request(
                                 &mut w,
-                                &ClientRequest::Command(format!("select-workspace -t {}", i)),
+                                &ClientRequest::Command(format!("select-workspace -t {}", daemon_idx)),
                             )
                             .await;
                         }
@@ -959,6 +1256,14 @@ impl Client {
         tui: &Tui,
         writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     ) -> Result<()> {
+        // Hub workspace: handle keys when hub is active (regardless of mode)
+        if self.hub_active && self.mode != Mode::Palette && self.mode != Mode::Confirm
+            && self.mode != Mode::Rename && self.mode != Mode::ContextMenu
+            && self.mode != Mode::Leader
+        {
+            return self.handle_project_hub_key(key, writer).await;
+        }
+
         // Modal modes handled client-side
         match &self.mode {
             Mode::Scroll => return self.handle_scroll_key(key, writer).await,
@@ -969,6 +1274,11 @@ impl Client {
             Mode::Leader => return self.handle_leader_key(key, tui, writer).await,
             Mode::Rename => return self.handle_rename_key(key, writer).await,
             Mode::NewWorkspaceInput => return self.handle_new_workspace_key(key, writer).await,
+            Mode::ProjectHub => {
+                // Legacy: should not be reached, but handle gracefully
+                self.mode = Mode::Normal;
+                return Ok(());
+            }
             Mode::ContextMenu => return self.handle_context_menu_key(key, tui, writer).await,
             Mode::Resize => return self.handle_resize_key(key, writer).await,
             Mode::Normal => return self.handle_normal_key(key, tui, writer).await,
@@ -1071,28 +1381,52 @@ impl Client {
         if self.workspace_bar_focused {
             match &action {
                 Action::FocusLeft => {
-                    let idx = self.render_state.active_workspace;
-                    if idx > 0 {
-                        self.render_state.active_workspace = idx - 1;
-                        let mut w = writer.lock().await;
-                        let _ = send_request(
-                            &mut w,
-                            &ClientRequest::Command(format!("select-workspace -t {}", idx - 1)),
-                        )
-                        .await;
+                    if self.hub_active {
+                        // Already at leftmost (Hub)
+                    } else {
+                        let idx = self.render_state.active_workspace;
+                        if idx > 0 {
+                            self.render_state.active_workspace = idx - 1;
+                            let mut w = writer.lock().await;
+                            let _ = send_request(
+                                &mut w,
+                                &ClientRequest::Command(format!("select-workspace -t {}", idx - 1)),
+                            )
+                            .await;
+                        } else {
+                            // At first daemon workspace, go to hub
+                            self.hub_active = true;
+                            if self.project_hub_state.is_none() {
+                                self.project_hub_state = Some(ProjectHubState::new(&self.config));
+                            }
+                        }
                     }
                     return Ok(());
                 }
                 Action::FocusRight => {
-                    let idx = self.render_state.active_workspace;
-                    if idx + 1 < self.render_state.workspaces.len() {
-                        self.render_state.active_workspace = idx + 1;
-                        let mut w = writer.lock().await;
-                        let _ = send_request(
-                            &mut w,
-                            &ClientRequest::Command(format!("select-workspace -t {}", idx + 1)),
-                        )
-                        .await;
+                    if self.hub_active {
+                        // From hub, go to first daemon workspace if exists
+                        if !self.render_state.workspaces.is_empty() {
+                            self.hub_active = false;
+                            self.render_state.active_workspace = 0;
+                            let mut w = writer.lock().await;
+                            let _ = send_request(
+                                &mut w,
+                                &ClientRequest::Command("select-workspace -t 0".to_string()),
+                            )
+                            .await;
+                        }
+                    } else {
+                        let idx = self.render_state.active_workspace;
+                        if idx + 1 < self.render_state.workspaces.len() {
+                            self.render_state.active_workspace = idx + 1;
+                            let mut w = writer.lock().await;
+                            let _ = send_request(
+                                &mut w,
+                                &ClientRequest::Command(format!("select-workspace -t {}", idx + 1)),
+                            )
+                            .await;
+                        }
                     }
                     return Ok(());
                 }
@@ -1101,6 +1435,10 @@ impl Client {
                     return Ok(());
                 }
                 Action::CloseTab => {
+                    if self.hub_active {
+                        // Can't close the hub workspace
+                        return Ok(());
+                    }
                     // Remap to close workspace when bar is focused
                     let is_last = self.render_state.workspaces.len() <= 1;
                     self.pending_confirm_action = Some(Action::CloseWorkspace);
@@ -1199,16 +1537,18 @@ impl Client {
             }
             Action::NewTab => {
                 self.tab_picker_state = Some(TabPickerState::new(
+                    &self.system_programs,
                     &self.config.tab_picker_entries,
-                    &self.config.favorites,
+                    &self.favorites,
                 ));
                 self.mode = Mode::TabPicker;
                 return Ok(());
             }
             Action::SplitHorizontal => {
                 self.tab_picker_state = Some(TabPickerState::with_mode(
+                    &self.system_programs,
                     &self.config.tab_picker_entries,
-                    &self.config.favorites,
+                    &self.favorites,
                     crate::ui::tab_picker::TabPickerMode::SplitHorizontal,
                 ));
                 self.mode = Mode::TabPicker;
@@ -1216,8 +1556,9 @@ impl Client {
             }
             Action::SplitVertical => {
                 self.tab_picker_state = Some(TabPickerState::with_mode(
+                    &self.system_programs,
                     &self.config.tab_picker_entries,
-                    &self.config.favorites,
+                    &self.favorites,
                     crate::ui::tab_picker::TabPickerMode::SplitVertical,
                 ));
                 self.mode = Mode::TabPicker;
@@ -1261,6 +1602,14 @@ impl Client {
                     last_click: None,
                 });
                 self.mode = Mode::NewWorkspaceInput;
+                return Ok(());
+            }
+            Action::ProjectHub => {
+                self.hub_active = true;
+                self.workspace_bar_focused = false;
+                if self.project_hub_state.is_none() {
+                    self.project_hub_state = Some(ProjectHubState::new(&self.config));
+                }
                 return Ok(());
             }
             Action::ResizeMode => {
@@ -1398,6 +1747,16 @@ impl Client {
             }
             KeyCode::Up => state.move_up(),
             KeyCode::Down => state.move_down(),
+            KeyCode::Tab => {
+                if let Some((name, is_fav)) = state.toggle_favorite() {
+                    if is_fav {
+                        self.favorites.insert(name);
+                    } else {
+                        self.favorites.remove(&name);
+                    }
+                    crate::ui::tab_picker::save_favorites(&self.favorites);
+                }
+            }
             KeyCode::Char(' ') if state.input.is_empty() => {
                 // Space on empty input → open command palette (leader key)
                 self.tab_picker_state = None;
@@ -1579,6 +1938,60 @@ impl Client {
                     ui::dialog::handle_text_input(key.code, &mut state.name);
                 }
             },
+        }
+        Ok(())
+    }
+
+    async fn handle_project_hub_key(
+        &mut self,
+        key: KeyEvent,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        let state = match self.project_hub_state.as_mut() {
+            Some(s) => s,
+            None => {
+                self.mode = Mode::Normal;
+                return Ok(());
+            }
+        };
+
+        match key.code {
+            KeyCode::Esc => {
+                // Switch to first real workspace if one exists
+                if !self.render_state.workspaces.is_empty() {
+                    self.hub_active = false;
+                }
+            }
+            KeyCode::Up => {
+                state.move_up();
+            }
+            KeyCode::Down => {
+                state.move_down();
+            }
+            KeyCode::Enter => {
+                if let Some(project) = state.selected_project().cloned() {
+                    let dir = project.path.to_string_lossy().to_string();
+                    let name = project.name.clone();
+
+                    self.hub_active = false;
+                    self.render_state.active_workspace = self.render_state.workspaces.len();
+                    let cmd = format!("new-workspace -c \"{}\"", dir);
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
+                    let rename_cmd = format!("rename-workspace {}", name);
+                    let _ = send_request(&mut w, &ClientRequest::Command(rename_cmd)).await;
+                }
+            }
+            KeyCode::Char(c) => {
+                state.input.push(c);
+                state.update_filter();
+            }
+            KeyCode::Backspace => {
+                if state.input.pop().is_some() {
+                    state.update_filter();
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -2084,6 +2497,7 @@ fn action_to_command(action: &Action) -> Option<String> {
         | Action::Detach
         | Action::SessionPicker
         | Action::NewWorkspace // opens input dialog client-side
+        | Action::ProjectHub // opens project hub client-side
         | Action::NewTab // NewTab opens picker client-side
         | Action::SplitHorizontal // opens picker client-side
         | Action::SplitVertical // opens picker client-side

@@ -12,6 +12,101 @@ use crate::copy_mode::CopyModeState;
 use pane_protocol::layout::SplitDirection;
 use crate::window::terminal::{render_screen, render_screen_copy_mode};
 
+// Typewriter animation timing (milliseconds).
+const LABEL_HOLD_MS: u128 = 5000;
+const LABEL_TYPE_MS: u128 = 60;
+const LABEL_DELETE_MS: u128 = 30;
+const LABEL_PAUSE_MS: u128 = 200;
+
+fn interact_labels(foreground_process: Option<&str>) -> &'static [&'static str] {
+    match foreground_process {
+        Some("claude") => &["VIBING", "THINKING", "SCHEMING", "COOKING", "JAMMING"],
+        Some("aider" | "codex" | "goose" | "cline" | "mentat" | "gpt-engineer" | "gemini") =>
+            &["PROMPTING", "CONJURING", "SUMMONING", "CHANNELING"],
+        Some("nvim" | "vim" | "helix" | "hx" | "kak") =>
+            &["EDITING", "HACKING", "CRAFTING", "SHAPING"],
+        Some("nano" | "micro" | "emacs") =>
+            &["WRITING", "TYPING", "COMPOSING"],
+        Some("python3" | "python" | "node" | "bun" | "deno" | "irb" | "iex" | "erl"
+            | "ghci" | "julia" | "lua" | "luajit" | "R" | "swift" | "scala" | "amm") =>
+            &["REPL", "EVAL", "TINKERING"],
+        Some("htop" | "btop" | "top" | "btm" | "glances" | "zenith" | "bandwhich") =>
+            &["MONITORING", "WATCHING", "OBSERVING"],
+        Some("lazygit" | "tig" | "gitui") =>
+            &["GITTING", "COMMITTING", "BRANCHING", "REBASING"],
+        Some("yazi" | "ranger" | "lf" | "nnn" | "mc" | "broot" | "spf") =>
+            &["BROWSING", "EXPLORING", "NAVIGATING"],
+        Some("lazydocker") =>
+            &["DOCKING", "CONTAINING", "SHIPPING"],
+        Some("k9s" | "kdash") =>
+            &["STEERING", "HELMING", "ORCHESTRATING"],
+        Some("sqlite3" | "psql" | "mysql" | "redis-cli" | "mongosh" | "pgcli" | "mycli" | "litecli") =>
+            &["QUERYING", "SELECTING", "JOINING"],
+        Some("ssh") =>
+            &["REMOTE", "TUNNELING", "CONNECTING"],
+        Some("man" | "less" | "more") =>
+            &["READING", "STUDYING", "LEARNING"],
+        Some("make" | "cargo" | "npm" | "go" | "gradle" | "mvn") =>
+            &["BUILDING", "COMPILING", "ASSEMBLING"],
+        _ => &["INTERACT"],
+    }
+}
+
+/// Animate a typewriter cycling through labels.
+/// Returns the current display string with leading/trailing spaces for padding.
+fn animate_interact_label(foreground_process: Option<&str>) -> String {
+    let labels = interact_labels(foreground_process);
+    if labels.len() <= 1 {
+        return format!(" {} ", labels[0]);
+    }
+
+    // Compute per-label durations and total cycle time.
+    let durations: Vec<u128> = labels
+        .iter()
+        .map(|w| {
+            let n = w.len() as u128;
+            n * LABEL_TYPE_MS + LABEL_HOLD_MS + n * LABEL_DELETE_MS + LABEL_PAUSE_MS
+        })
+        .collect();
+    let total: u128 = durations.iter().sum();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let mut t = now % total;
+
+    for (i, word) in labels.iter().enumerate() {
+        let dur = durations[i];
+        if t >= dur {
+            t -= dur;
+            continue;
+        }
+        let n = word.len();
+        // Phase 1: type in
+        let type_time = n as u128 * LABEL_TYPE_MS;
+        if t < type_time {
+            let chars = (t / LABEL_TYPE_MS) as usize;
+            return format!(" {} ", &word[..chars]);
+        }
+        t -= type_time;
+        // Phase 2: hold
+        if t < LABEL_HOLD_MS {
+            return format!(" {} ", word);
+        }
+        t -= LABEL_HOLD_MS;
+        // Phase 3: delete
+        let delete_time = n as u128 * LABEL_DELETE_MS;
+        if t < delete_time {
+            let remaining = n.saturating_sub((t / LABEL_DELETE_MS) as usize);
+            return format!(" {} ", &word[..remaining]);
+        }
+        // Phase 4: pause (empty)
+        return " ".to_string();
+    }
+    " ".to_string()
+}
+
 fn render_content(
     screen: &vt100::Screen,
     cms: Option<&CopyModeState>,
@@ -100,10 +195,16 @@ pub fn render_group_from_snapshot(
         .border_style(border_style);
 
     if is_active && matches!(mode, Mode::Interact) {
+        let fg_process = group
+            .tabs
+            .get(group.active_tab)
+            .and_then(|snap| snap.foreground_process.as_deref());
+        let label = animate_interact_label(fg_process);
+        let label_color = decoration_color.unwrap_or(theme.accent);
         block = block.title_bottom(Line::styled(
-            " INTERACT ",
+            label,
             Style::default()
-                .fg(theme.accent)
+                .fg(label_color)
                 .add_modifier(Modifier::BOLD),
         ));
     } else if is_active && matches!(mode, Mode::Resize) {
@@ -161,6 +262,58 @@ fn render_tab_separator(theme: &Theme, frame: &mut Frame, area: Rect) {
     }
 }
 
+/// Maximum display width for a single tab title (excluding padding).
+const MAX_TAB_TITLE: usize = 20;
+/// Ticker scroll speed: characters per second.
+const TICKER_CHARS_PER_SEC: f64 = 4.0;
+/// Pause at the start/end of a ticker cycle (seconds).
+const TICKER_PAUSE_SECS: f64 = 2.0;
+
+/// Truncate a title for an inactive tab, adding "…" if it overflows.
+fn truncate_title(title: &str, max: usize) -> String {
+    if title.len() <= max {
+        title.to_string()
+    } else {
+        let mut s: String = title.chars().take(max.saturating_sub(1)).collect();
+        s.push('…');
+        s
+    }
+}
+
+/// Produce a ticker-scrolling window into a long title.
+fn ticker_title(title: &str, max: usize) -> String {
+    if title.len() <= max {
+        return title.to_string();
+    }
+    let overflow = title.len() - max;
+    let scroll_duration = overflow as f64 / TICKER_CHARS_PER_SEC;
+    let cycle = TICKER_PAUSE_SECS + scroll_duration + TICKER_PAUSE_SECS + scroll_duration;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    let t = now % cycle;
+
+    let offset = if t < TICKER_PAUSE_SECS {
+        // Pause at start
+        0
+    } else if t < TICKER_PAUSE_SECS + scroll_duration {
+        // Scroll forward
+        ((t - TICKER_PAUSE_SECS) * TICKER_CHARS_PER_SEC) as usize
+    } else if t < TICKER_PAUSE_SECS + scroll_duration + TICKER_PAUSE_SECS {
+        // Pause at end
+        overflow
+    } else {
+        // Scroll back
+        let reverse_t = t - TICKER_PAUSE_SECS - scroll_duration - TICKER_PAUSE_SECS;
+        overflow - (reverse_t * TICKER_CHARS_PER_SEC) as usize
+    };
+
+    let offset = offset.min(overflow);
+    title.chars().skip(offset).take(max).collect()
+}
+
 fn render_tab_bar_from_snapshot(
     group: &pane_protocol::protocol::WindowSnapshot,
     theme: &Theme,
@@ -181,11 +334,11 @@ fn render_tab_bar_from_snapshot(
     // Check if hover is on the tab bar row
     let hover_x = hover.and_then(|(hx, hy)| if hy == area.y { Some(hx) } else { None });
 
-    // Compute label widths
+    // Compute label widths (capped at MAX_TAB_TITLE + 2 for padding)
     let label_widths: Vec<u16> = group
         .tabs
         .iter()
-        .map(|tab| tab.title.len() as u16 + 2)
+        .map(|tab| (tab.title.len().min(MAX_TAB_TITLE) as u16) + 2)
         .collect();
 
     // Check if everything fits
@@ -258,12 +411,10 @@ fn render_tab_bar_from_snapshot(
 
     // Build spans
     let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut content_end = area.x;
 
     // Left overflow indicator
     if hidden_left > 0 {
         spans.push(Span::styled("\u{25C2} ", Style::default().fg(theme.dim)));
-        content_end = area.x + INDICATOR_WIDTH;
     }
 
     let mut first_visible = true;
@@ -292,36 +443,36 @@ fn render_tab_bar_from_snapshot(
                 Style::default().fg(theme.tab_inactive)
             };
 
-            let label = format!(" {} ", tab.title);
+            let display_title = if is_active_tab {
+                ticker_title(&tab.title, MAX_TAB_TITLE)
+            } else {
+                truncate_title(&tab.title, MAX_TAB_TITLE)
+            };
+            let label = format!(" {} ", display_title);
             spans.push(Span::styled(label, style));
-            content_end = tab_end;
         }
     }
 
     // Right overflow indicator
     if hidden_right > 0 {
         spans.push(Span::styled(" \u{25B8}", Style::default().fg(theme.dim)));
-        content_end += INDICATOR_WIDTH;
     }
 
-    // Right-align the + button
+    let line = Line::from(spans);
+    let paragraph = Paragraph::new(line);
+    frame.render_widget(paragraph, area);
+
+    // Render + button directly to buffer at a fixed position so it never shifts
     if let Some(ps) = plus_start {
-        let gap = ps.saturating_sub(content_end);
-        if gap > 0 {
-            spans.push(Span::raw(" ".repeat(gap as usize)));
-        }
         let plus_hovered = hover_x.is_some_and(|hx| hx >= ps && hx < ps + PLUS_RESERVE);
         let plus_style = if plus_hovered {
             Style::default().fg(theme.fg)
         } else {
             Style::default().fg(theme.dim)
         };
-        spans.push(Span::styled(PLUS_TEXT, plus_style));
+        let buf = frame.buffer_mut();
+        buf.set_string(ps, area.y, PLUS_TEXT, plus_style);
     }
-
-    let line = Line::from(spans);
-    let paragraph = Paragraph::new(line);
-    frame.render_widget(paragraph, area);
 }
 
 /// Render a fold indicator line with 1-cell padding on each side.

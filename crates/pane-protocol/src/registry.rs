@@ -337,6 +337,14 @@ pub fn action_registry() -> &'static [ActionMeta] {
             palette_visible: true,
             action: CloseWorkspace,
         },
+        ActionMeta {
+            name: "project_hub",
+            display_name: "Project Hub",
+            description: "Browse and open project repositories",
+            category: Workspaces,
+            palette_visible: true,
+            action: ProjectHub,
+        },
         // ── Session ─────────────────────────────────────────────────────
         ActionMeta {
             name: "session_picker",

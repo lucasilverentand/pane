@@ -94,6 +94,17 @@ pub fn inner_rect(popup_area: Rect) -> Rect {
     block.inner(popup_area)
 }
 
+/// Dim the entire area by darkening every cell's foreground and background.
+pub fn dim_background(frame: &mut Frame, area: Rect) {
+    let buf = frame.buffer_mut();
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            let cell = &mut buf[(x, y)];
+            cell.set_style(Style::default().add_modifier(Modifier::DIM));
+        }
+    }
+}
+
 /// Render the popup chrome (Clear + rounded border block) and return the inner area.
 ///
 /// `title` can be empty for no title.  When non-empty, it's rendered in
@@ -343,6 +354,121 @@ pub fn render_select_list(
     }
 
     row_y
+}
+
+// ---------------------------------------------------------------------------
+// Confirm dialog
+// ---------------------------------------------------------------------------
+
+/// Which button was clicked / hovered in a confirm dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmButton {
+    Cancel,
+    Confirm,
+}
+
+// Internal layout constants for the confirm dialog.
+const CONFIRM_PAD: u16 = 4; // outer padding when clamping
+const CONFIRM_MARGIN: u16 = 3; // left indent for text & buttons
+const CANCEL_TEXT: &str = " Cancel ";
+const CONFIRM_TEXT: &str = " Confirm ";
+const BUTTON_GAP: u16 = 2; // space between buttons
+
+/// Compute the popup area for a confirm dialog with the given message.
+fn confirm_popup_area(message: &str, area: Rect) -> Rect {
+    // Width: message + margins, or button row, whichever is wider, + border
+    let msg_width = message.len() as u16 + CONFIRM_MARGIN + 1;
+    let btn_width = CONFIRM_MARGIN + CANCEL_TEXT.len() as u16 + BUTTON_GAP + CONFIRM_TEXT.len() as u16 + 1;
+    let content_width = msg_width.max(btn_width);
+    let width = content_width + 2; // +2 for left/right border
+    let height = 5; // border + message + blank + buttons + border
+    popup_rect(
+        PopupSize::FixedClamped { width, height, pad: CONFIRM_PAD },
+        PopupAnchor::Center,
+        area,
+    )
+}
+
+/// Render a confirm dialog and return the inner area.
+///
+/// `hovered` highlights the corresponding button on mouse-over.
+pub fn render_confirm(
+    frame: &mut Frame,
+    area: Rect,
+    message: &str,
+    hovered: Option<ConfirmButton>,
+    theme: &Theme,
+) {
+    let popup_area = confirm_popup_area(message, area);
+    let inner = render_popup(frame, popup_area, "Confirm", theme);
+
+    if inner.height < 3 || inner.width < 10 {
+        return;
+    }
+
+    // Row 0: message
+    let msg_line = Line::from(vec![
+        Span::raw(" ".repeat(CONFIRM_MARGIN as usize)),
+        Span::styled(message, Style::default().fg(Color::White)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(msg_line),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+
+    // Row 2: buttons (skip row 1 as blank spacer)
+    let button_y = inner.y + 2;
+
+    let cancel_style = if hovered == Some(ConfirmButton::Cancel) {
+        Style::default().fg(theme.bg).bg(theme.fg).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.fg).bg(theme.dim).add_modifier(Modifier::BOLD)
+    };
+    let confirm_style = if hovered == Some(ConfirmButton::Confirm) {
+        Style::default().fg(theme.bg).bg(theme.fg).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.bg).bg(theme.accent).add_modifier(Modifier::BOLD)
+    };
+
+    let btn_line = Line::from(vec![
+        Span::raw(" ".repeat(CONFIRM_MARGIN as usize)),
+        Span::styled(CANCEL_TEXT, cancel_style),
+        Span::raw(" ".repeat(BUTTON_GAP as usize)),
+        Span::styled(CONFIRM_TEXT, confirm_style),
+    ]);
+    frame.render_widget(
+        Paragraph::new(btn_line),
+        Rect::new(inner.x, button_y, inner.width, 1),
+    );
+}
+
+/// Hit-test a confirm dialog. Returns which button was clicked, if any.
+pub fn confirm_hit_test(
+    area: Rect,
+    message: &str,
+    x: u16,
+    y: u16,
+) -> Option<ConfirmButton> {
+    let popup_area = confirm_popup_area(message, area);
+    let inner = inner_rect(popup_area);
+
+    let button_y = inner.y + 2;
+    if y != button_y {
+        return None;
+    }
+
+    let cancel_start = inner.x + CONFIRM_MARGIN;
+    let cancel_end = cancel_start + CANCEL_TEXT.len() as u16;
+    let confirm_start = cancel_end + BUTTON_GAP;
+    let confirm_end = confirm_start + CONFIRM_TEXT.len() as u16;
+
+    if x >= cancel_start && x < cancel_end {
+        Some(ConfirmButton::Cancel)
+    } else if x >= confirm_start && x < confirm_end {
+        Some(ConfirmButton::Confirm)
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------

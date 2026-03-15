@@ -76,6 +76,8 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         ("c", Action::CopyMode),         // Enter copy mode to select and copy text
         ("p", Action::PasteClipboard),   // Paste from system clipboard
         (":", Action::CommandPalette),   // Open the command palette
+        // ── Projects ───────────────────────────────────────────────────
+        ("shift+p", Action::ProjectHub), // Open the project hub to browse repos
         // ── Quit ────────────────────────────────────────────────────────
         ("q", Action::Quit),             // Quit pane
     ]

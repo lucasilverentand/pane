@@ -59,6 +59,7 @@ pub enum Action {
     NewPane,
     ClientPicker,
     ResizeMode,
+    ProjectHub,
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +172,11 @@ pub struct Behavior {
     pub auto_suspend_secs: u64,
     /// Format string for outer terminal title (e.g., "{session} - {workspace}").
     pub terminal_title_format: Option<String>,
+    /// Directories to scan for project repos in the project hub.
+    /// Auto-detected from common locations if empty.
+    pub projects_dirs: Vec<String>,
+    /// Whether to show the project hub on startup.
+    pub show_project_hub_on_start: bool,
 }
 
 impl Default for Behavior {
@@ -182,7 +188,56 @@ impl Default for Behavior {
             default_shell: None,
             auto_suspend_secs: 86400,
             terminal_title_format: Some("{session} - {workspace}".to_string()),
+            projects_dirs: Vec::new(),
+            show_project_hub_on_start: false,
         }
+    }
+}
+
+impl Behavior {
+    /// Resolve project directories: use configured dirs if set, otherwise auto-detect.
+    pub fn resolved_projects_dirs(&self) -> Vec<std::path::PathBuf> {
+        if !self.projects_dirs.is_empty() {
+            return self
+                .projects_dirs
+                .iter()
+                .map(|s| {
+                    let expanded = if s.starts_with('~') {
+                        if let Ok(home) = std::env::var("HOME") {
+                            format!("{}{}", home, &s[1..])
+                        } else {
+                            s.clone()
+                        }
+                    } else {
+                        s.clone()
+                    };
+                    std::path::PathBuf::from(expanded)
+                })
+                .filter(|p| p.is_dir())
+                .collect();
+        }
+
+        // Auto-detect common project directories
+        let home = match std::env::var("HOME") {
+            Ok(h) => std::path::PathBuf::from(h),
+            Err(_) => return Vec::new(),
+        };
+
+        let candidates = [
+            "Developer",
+            "Projects",
+            "repos",
+            "src",
+            "code",
+            "workspace",
+            "work",
+        ];
+
+        candidates
+            .iter()
+            .map(|name| home.join(name))
+            .filter(|p| p.is_dir())
+            .collect()
     }
 }
 
@@ -199,34 +254,42 @@ pub struct PaneDecoration {
 impl PaneDecoration {
     fn defaults() -> Vec<Self> {
         vec![
-            PaneDecoration {
-                process: "claude".to_string(),
-                border_color: Color::Rgb(249, 115, 22), // orange
-            },
-            PaneDecoration {
-                process: "nvim".to_string(),
-                border_color: Color::Rgb(86, 156, 48), // green
-            },
-            PaneDecoration {
-                process: "vim".to_string(),
-                border_color: Color::Rgb(86, 156, 48), // green
-            },
-            PaneDecoration {
-                process: "htop".to_string(),
-                border_color: Color::Rgb(59, 130, 246), // blue
-            },
-            PaneDecoration {
-                process: "btop".to_string(),
-                border_color: Color::Rgb(59, 130, 246), // blue
-            },
-            PaneDecoration {
-                process: "python3".to_string(),
-                border_color: Color::Rgb(250, 204, 21), // yellow
-            },
-            PaneDecoration {
-                process: "node".to_string(),
-                border_color: Color::Rgb(74, 222, 128), // node green
-            },
+            // AI agents
+            PaneDecoration { process: "claude".into(),        border_color: Color::Rgb(249, 115, 22) }, // orange
+            PaneDecoration { process: "codex".into(),         border_color: Color::Rgb(16, 163, 127) }, // openai green
+            PaneDecoration { process: "aider".into(),         border_color: Color::Rgb(0, 191, 255) },  // deep sky blue
+            PaneDecoration { process: "goose".into(),         border_color: Color::Rgb(168, 85, 247) }, // purple
+            PaneDecoration { process: "gemini".into(),        border_color: Color::Rgb(66, 133, 244) }, // google blue
+            // Editors
+            PaneDecoration { process: "nvim".into(),          border_color: Color::Rgb(86, 156, 48) },  // green
+            PaneDecoration { process: "vim".into(),           border_color: Color::Rgb(86, 156, 48) },  // green
+            PaneDecoration { process: "hx".into(),            border_color: Color::Rgb(168, 85, 247) }, // helix purple
+            PaneDecoration { process: "emacs".into(),         border_color: Color::Rgb(126, 92, 171) }, // emacs purple
+            // Monitors
+            PaneDecoration { process: "htop".into(),          border_color: Color::Rgb(59, 130, 246) }, // blue
+            PaneDecoration { process: "btop".into(),          border_color: Color::Rgb(59, 130, 246) }, // blue
+            PaneDecoration { process: "btm".into(),           border_color: Color::Rgb(59, 130, 246) }, // blue
+            // Git
+            PaneDecoration { process: "lazygit".into(),       border_color: Color::Rgb(240, 80, 51) },  // git red-orange
+            PaneDecoration { process: "gitui".into(),         border_color: Color::Rgb(240, 80, 51) },  // git red-orange
+            // Kubernetes
+            PaneDecoration { process: "k9s".into(),           border_color: Color::Rgb(50, 108, 229) }, // k8s blue
+            PaneDecoration { process: "kdash".into(),         border_color: Color::Rgb(50, 108, 229) }, // k8s blue
+            PaneDecoration { process: "kubectl".into(),       border_color: Color::Rgb(50, 108, 229) }, // k8s blue
+            // Docker
+            PaneDecoration { process: "lazydocker".into(),    border_color: Color::Rgb(29, 99, 237) },  // docker blue
+            // Languages / runtimes
+            PaneDecoration { process: "python3".into(),       border_color: Color::Rgb(250, 204, 21) }, // yellow
+            PaneDecoration { process: "python".into(),        border_color: Color::Rgb(250, 204, 21) }, // yellow
+            PaneDecoration { process: "node".into(),          border_color: Color::Rgb(74, 222, 128) }, // node green
+            PaneDecoration { process: "bun".into(),           border_color: Color::Rgb(203, 178, 121) }, // bun tan
+            PaneDecoration { process: "deno".into(),          border_color: Color::Rgb(112, 255, 175) }, // deno mint
+            PaneDecoration { process: "ruby".into(),          border_color: Color::Rgb(204, 52, 45) },  // ruby red
+            PaneDecoration { process: "irb".into(),           border_color: Color::Rgb(204, 52, 45) },  // ruby red
+            // File managers
+            PaneDecoration { process: "yazi".into(),          border_color: Color::Rgb(202, 158, 230) }, // lavender
+            // SSH
+            PaneDecoration { process: "ssh".into(),           border_color: Color::Rgb(148, 163, 184) }, // slate
         ]
     }
 }
@@ -465,6 +528,7 @@ fn default_leader_tree() -> LeaderNode {
         insert_leaf(&mut children, "n", Action::NewWorkspace, "New");
         insert_leaf(&mut children, "c", Action::CloseWorkspace, "Close");
         insert_leaf(&mut children, "r", Action::RenameWorkspace, "Rename");
+        insert_leaf(&mut children, "p", Action::ProjectHub, "Projects");
         for n in 1..=9u8 {
             let ch = (b'0' + n) as char;
             let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
@@ -622,16 +686,9 @@ pub struct TabPickerEntryConfig {
     /// Shell to run the command in (e.g. "/bin/zsh"). When set, the command is
     /// executed as `shell -c "command"` instead of being run directly.
     pub shell: Option<String>,
-}
-
-/// A favorite entry shown at the top of the tab picker.
-#[derive(Clone, Debug)]
-pub struct FavoriteConfig {
-    pub name: String,
-    pub command: String,
-    pub description: Option<String>,
-    /// Shell to run the command in. Required for non-shell commands.
-    pub shell: Option<String>,
+    /// Category to place this entry in (e.g. "editors", "agents", "repls",
+    /// "system", "cluster"). Defaults to "other" if omitted.
+    pub category: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -645,7 +702,6 @@ pub struct Config {
     pub leader: LeaderConfig,
     pub plugins: Vec<crate::plugin::PluginConfig>,
     pub tab_picker_entries: Vec<TabPickerEntryConfig>,
-    pub favorites: Vec<FavoriteConfig>,
 }
 
 impl Default for Config {
@@ -660,7 +716,6 @@ impl Default for Config {
             leader: LeaderConfig::default(),
             plugins: Vec::new(),
             tab_picker_entries: Vec::new(),
-            favorites: Vec::new(),
         }
     }
 }
@@ -805,6 +860,12 @@ impl Config {
             if b.terminal_title_format.is_some() {
                 config.behavior.terminal_title_format = b.terminal_title_format;
             }
+            if let Some(dirs) = b.projects_dirs {
+                config.behavior.projects_dirs = dirs;
+            }
+            if let Some(v) = b.show_project_hub_on_start {
+                config.behavior.show_project_hub_on_start = v;
+            }
         }
 
         // Keys
@@ -883,19 +944,7 @@ impl Config {
                     command: e.command,
                     description: e.description,
                     shell: e.shell,
-                })
-                .collect();
-        }
-
-        // Favorites
-        if let Some(favs) = raw.favorites {
-            config.favorites = favs
-                .into_iter()
-                .map(|f| FavoriteConfig {
-                    name: f.name,
-                    command: f.command,
-                    description: f.description,
-                    shell: f.shell,
+                    category: e.category,
                 })
                 .collect();
         }
@@ -936,7 +985,6 @@ struct RawConfig {
     leader_keys: Option<HashMap<String, String>>,
     plugins: Option<Vec<RawPlugin>>,
     tab_picker_entries: Option<Vec<RawTabPickerEntry>>,
-    favorites: Option<Vec<RawFavorite>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -954,14 +1002,7 @@ struct RawTabPickerEntry {
     command: String,
     description: Option<String>,
     shell: Option<String>,
-}
-
-#[derive(Deserialize, Default)]
-struct RawFavorite {
-    name: String,
-    command: String,
-    description: Option<String>,
-    shell: Option<String>,
+    category: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1006,6 +1047,8 @@ struct RawBehavior {
     default_shell: Option<String>,
     auto_suspend_secs: Option<u64>,
     terminal_title_format: Option<String>,
+    projects_dirs: Option<Vec<String>>,
+    show_project_hub_on_start: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1813,7 +1856,7 @@ min_pane_width = 80
     #[test]
     fn test_decoration_for_no_match() {
         let config = Config::default();
-        assert!(config.decoration_for("emacs").is_none());
+        assert!(config.decoration_for("nano").is_none());
     }
 
     // --- decoration_for_path ---
@@ -1837,7 +1880,7 @@ min_pane_width = 80
     #[test]
     fn test_decoration_for_path_no_match() {
         let config = Config::default();
-        assert!(config.decoration_for_path("/usr/bin/emacs").is_none());
+        assert!(config.decoration_for_path("/usr/bin/nano").is_none());
     }
 
     // --- Action name round-tripping ---

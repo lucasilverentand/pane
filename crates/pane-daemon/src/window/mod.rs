@@ -310,8 +310,17 @@ impl Tab {
                 self.foreground_process = name;
                 self.foreground_process_path = path;
             }
+            Some(pid) if self.command.is_some() => {
+                // Shell tab launched with a command (e.g. tab picker entry).
+                // The shell may have exec'd into the target process, so
+                // fg_pid == shell_pid but the process is no longer the shell.
+                // Check the actual process name to detect this.
+                let (name, path) = process_info_by_pid(pid);
+                self.foreground_process = name;
+                self.foreground_process_path = path;
+            }
             Some(_) => {
-                // fg == shell in a shell tab, no foreground process
+                // fg == shell in a plain shell tab, no foreground process
                 self.foreground_process = None;
                 self.foreground_process_path = None;
             }

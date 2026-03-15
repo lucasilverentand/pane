@@ -3,6 +3,7 @@ pub mod dialog;
 pub mod format;
 pub mod layout_render;
 pub mod palette;
+pub mod project_hub;
 pub mod status_bar;
 pub mod tab_picker;
 pub mod window_view;
@@ -18,7 +19,8 @@ use crate::client::Client;
 pub fn render_client(client: &Client, frame: &mut Frame) {
     let theme = &client.config.theme;
 
-    let show_workspace_bar = !client.render_state.workspaces.is_empty();
+    // Workspace bar shows when hub is active OR daemon workspaces exist
+    let show_workspace_bar = client.hub_active || !client.render_state.workspaces.is_empty();
 
     let (header, body, footer) = if show_workspace_bar {
         let [h, b, f] = Layout::vertical([
@@ -34,17 +36,25 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
         (None, b, f)
     };
 
-    // Workspace bar
+    // Workspace bar — prepend "Hub" as the first workspace
     if let Some(header) = header {
-        let names: Vec<&str> = client
-            .render_state
-            .workspaces
-            .iter()
-            .map(|ws| ws.name.as_str())
-            .collect();
+        let mut names: Vec<String> = vec!["Hub".to_string()];
+        names.extend(
+            client
+                .render_state
+                .workspaces
+                .iter()
+                .map(|ws| ws.name.clone()),
+        );
+        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        let active_idx = if client.hub_active {
+            0
+        } else {
+            client.render_state.active_workspace + 1
+        };
         workspace_bar::render(
-            &names,
-            client.render_state.active_workspace,
+            &name_refs,
+            active_idx,
             theme,
             client.workspace_bar_focused,
             client.hover,
@@ -56,8 +66,12 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
     // Status bar
     status_bar::render_client(client, theme, frame, footer);
 
-    // Render workspace body + cursor
-    if let Some(ws) = client.active_workspace() {
+    // When hub is active, render project hub body instead of terminal panes
+    if client.hub_active {
+        if let Some(ref hub_state) = client.project_hub_state {
+            project_hub::render_body(hub_state, theme, client.hover, frame, body);
+        }
+    } else if let Some(ws) = client.active_workspace() {
         let copy_mode_state = if client.mode == Mode::Copy {
             client.copy_mode_state.as_ref()
         } else {
@@ -207,10 +221,12 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
     match &client.mode {
         Mode::Palette => {
             if let Some(ref palette_state) = client.palette_state {
+                dialog::dim_background(frame, frame.area());
                 palette::render(palette_state, theme, frame, frame.area());
             }
         }
         Mode::Confirm => {
+            dialog::dim_background(frame, frame.area());
             render_confirm_dialog(client, theme, frame, frame.area());
         }
         Mode::Leader => {
@@ -236,6 +252,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
                         };
                         let compact =
                             palette::UnifiedPaletteState::new_compact_hints(children, path);
+                        dialog::dim_background(frame, frame.area());
                         palette::render(&compact, theme, frame, frame.area());
                     }
                 }
@@ -243,22 +260,28 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
         }
         Mode::TabPicker => {
             if let Some(ref tp_state) = client.tab_picker_state {
-                // Render inside the active window's rect
                 let picker_area = active_window_rect(client, body)
                     .unwrap_or(frame.area());
+                dialog::dim_background(frame, frame.area());
                 tab_picker::render(tp_state, theme, client.hover, frame, picker_area);
             }
         }
         Mode::ContextMenu => {
             if let Some(ref cm_state) = client.context_menu_state {
+                dialog::dim_background(frame, frame.area());
                 context_menu::render(cm_state, theme, client.hover, frame, frame.area());
             }
         }
         Mode::Rename => {
+            dialog::dim_background(frame, frame.area());
             render_rename_dialog(client, theme, frame, frame.area());
         }
         Mode::NewWorkspaceInput => {
+            dialog::dim_background(frame, frame.area());
             render_new_workspace_dialog(client, theme, frame, frame.area());
+        }
+        Mode::ProjectHub => {
+            // Legacy: hub is now rendered as workspace body, not overlay
         }
         Mode::Resize => {
             if let Some(ref rs) = client.resize_state {
@@ -289,7 +312,7 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
 
 /// Compute the body area (below workspace bar, above status bar).
 pub fn body_rect(client: &Client, full_area: Rect) -> Rect {
-    let show_workspace_bar = !client.render_state.workspaces.is_empty();
+    let show_workspace_bar = client.hub_active || !client.render_state.workspaces.is_empty();
     if show_workspace_bar {
         let [_h, b, _f] = Layout::vertical([
             Constraint::Length(workspace_bar::HEIGHT),
@@ -337,64 +360,16 @@ fn render_confirm_dialog(
     frame: &mut Frame,
     area: ratatui::layout::Rect,
 ) {
-    use ratatui::{
-        style::{Color, Modifier, Style},
-        text::{Line, Span},
-        widgets::Paragraph,
-    };
-
     let message = client
         .confirm_message
         .as_deref()
         .unwrap_or("Are you sure?");
 
-    let popup_area = dialog::popup_rect(
-        dialog::PopupSize::Percent { width: 40, height: 15 },
-        dialog::PopupAnchor::Center,
-        area,
-    );
-    let inner = dialog::render_popup(frame, popup_area, "confirm", theme);
-
     let hovered = client.hover.and_then(|(hx, hy)| {
-        confirm_dialog_hit_test(area, hx, hy)
+        dialog::confirm_hit_test(area, message, hx, hy)
     });
 
-    let cancel_bg = if matches!(hovered, Some(ConfirmDialogClick::Cancel)) {
-        theme.fg
-    } else {
-        theme.dim
-    };
-    let confirm_bg = if matches!(hovered, Some(ConfirmDialogClick::Confirm)) {
-        theme.fg
-    } else {
-        theme.accent
-    };
-
-    let lines = vec![
-        Line::raw(""),
-        Line::styled(format!("  {}", message), Style::default().fg(Color::White)),
-        Line::raw(""),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                " Cancel ",
-                Style::default()
-                    .fg(Color::White)
-                    .bg(cancel_bg)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                " Confirm ",
-                Style::default()
-                    .fg(Color::White)
-                    .bg(confirm_bg)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-    ];
-    let paragraph = Paragraph::new(lines);
-    frame.render_widget(paragraph, inner);
+    dialog::render_confirm(frame, area, message, hovered, theme);
 }
 
 fn render_rename_dialog(
@@ -789,50 +764,8 @@ fn render_new_workspace_name_stage(
     );
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum ConfirmDialogClick {
-    Cancel,
-    Confirm,
-}
-
-/// Hit-test the confirm dialog buttons. Returns which button was clicked, if any.
-pub fn confirm_dialog_hit_test(
-    area: ratatui::layout::Rect,
-    x: u16,
-    y: u16,
-) -> Option<ConfirmDialogClick> {
-    use ratatui::widgets::{Block, BorderType, Borders};
-
-    let popup_area = dialog::popup_rect(
-        dialog::PopupSize::Percent { width: 40, height: 15 },
-        dialog::PopupAnchor::Center,
-        area,
-    );
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
-    let inner = block.inner(popup_area);
-
-    // Buttons are on line index 3 (0-indexed) of the inner area
-    let button_y = inner.y + 3;
-    if y != button_y {
-        return None;
-    }
-
-    // Layout: "  " (2) + " Cancel " (8) + "  " (2) + " Confirm " (9)
-    let cancel_start = inner.x + 2;
-    let cancel_end = cancel_start + 8;
-    let confirm_start = cancel_end + 2;
-    let confirm_end = confirm_start + 9;
-
-    if x >= cancel_start && x < cancel_end {
-        Some(ConfirmDialogClick::Cancel)
-    } else if x >= confirm_start && x < confirm_end {
-        Some(ConfirmDialogClick::Confirm)
-    } else {
-        None
-    }
-}
+// Re-export from dialog for callers that reference the old name.
+pub use dialog::ConfirmButton as ConfirmDialogClick;
 
 /// Result of hit-testing the directory picker popup.
 pub enum DirPickerClick {

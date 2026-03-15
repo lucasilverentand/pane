@@ -16,6 +16,7 @@ pub enum Mode {
     ContextMenu,
     Resize,
     NewWorkspaceInput,
+    ProjectHub,
 }
 
 pub struct LeaderState {
@@ -71,6 +72,7 @@ mod tests {
             Mode::ContextMenu,
             Mode::Resize,
             Mode::NewWorkspaceInput,
+            Mode::ProjectHub,
         ];
         // Every pair should be different
         for (i, a) in modes.iter().enumerate() {

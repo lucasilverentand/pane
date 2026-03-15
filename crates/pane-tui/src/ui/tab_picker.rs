@@ -1,8 +1,25 @@
-use ratatui::{layout::Rect, Frame};
+use std::collections::HashSet;
+use std::time::Instant;
 
-use pane_protocol::config::{FavoriteConfig, TabPickerEntryConfig, Theme};
+use ratatui::{layout::Rect, style::Style, Frame};
+
+use pane_protocol::config::{TabPickerEntryConfig, Theme};
 
 use super::dialog;
+
+// Animated placeholder: typewriter cycling through example commands.
+const PLACEHOLDER_EXAMPLES: &[&str] = &[
+    "htop",
+    "cargo build",
+    "python3",
+    "vim .",
+    "npm run dev",
+    "docker ps",
+];
+const CHAR_TYPE_MS: u128 = 80;
+const CHAR_DELETE_MS: u128 = 40;
+const HOLD_MS: u128 = 1800;
+const PAUSE_MS: u128 = 300;
 
 /// What the tab picker is being opened for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,25 +36,43 @@ pub struct TabPickerState {
     pub entries: Vec<TabPickerEntry>,
     pub mode: TabPickerMode,
     filtered: Vec<usize>,
+    created_at: Instant,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TabPickerSection {
-    Favorites,
     Shells,
-    Custom,
-    Tools,
-    Recent,
+    Editors,
+    Agents,
+    Repls,
+    System,
+    Cluster,
+    Other,
 }
 
 impl TabPickerSection {
     fn label(&self) -> &'static str {
         match self {
-            Self::Favorites => "Favorites",
             Self::Shells => "Shells",
-            Self::Custom => "Custom",
-            Self::Tools => "Tools",
-            Self::Recent => "Recent",
+            Self::Editors => "Editors",
+            Self::Agents => "Agents",
+            Self::Repls => "REPLs",
+            Self::System => "System Management",
+            Self::Cluster => "Cluster Management",
+            Self::Other => "Other",
+        }
+    }
+
+    /// Parse a category string from config into a section.
+    fn from_category(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "shells" | "shell" => Self::Shells,
+            "editors" | "editor" => Self::Editors,
+            "agents" | "agent" => Self::Agents,
+            "repls" | "repl" | "languages" => Self::Repls,
+            "system" | "system management" => Self::System,
+            "cluster" | "cluster management" => Self::Cluster,
+            _ => Self::Other,
         }
     }
 }
@@ -51,35 +86,82 @@ pub struct TabPickerEntry {
     /// Shell to wrap the command in (e.g. "/bin/zsh"). When set, the command
     /// is executed as `shell -c "command"` rather than directly.
     pub shell: Option<String>,
+    /// Whether this entry is starred (shown in Favorites at the top).
+    pub favorite: bool,
 }
 
 impl TabPickerState {
     pub fn new(
+        system_programs: &[TabPickerEntry],
         custom_entries: &[TabPickerEntryConfig],
-        favorites: &[FavoriteConfig],
+        favorites: &HashSet<String>,
     ) -> Self {
-        Self::with_mode(custom_entries, favorites, TabPickerMode::NewTab)
+        Self::with_mode(system_programs, custom_entries, favorites, TabPickerMode::NewTab)
     }
 
     pub fn with_mode(
+        system_programs: &[TabPickerEntry],
         custom_entries: &[TabPickerEntryConfig],
-        favorites: &[FavoriteConfig],
+        favorites: &HashSet<String>,
         mode: TabPickerMode,
     ) -> Self {
-        let entries = build_entries(custom_entries, favorites);
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-        // Default selection to the first Recent entry if one exists.
-        let selected = entries
-            .iter()
-            .position(|e| e.section == TabPickerSection::Recent)
-            .unwrap_or(0);
+        let entries = build_entries(system_programs, custom_entries, favorites);
+        let mut filtered: Vec<usize> = (0..entries.len()).collect();
+        // Sort favorites to top, preserving order within each group.
+        filtered.sort_by(|&a, &b| entries[b].favorite.cmp(&entries[a].favorite));
+        let selected = 0;
         Self {
             input: String::new(),
             selected,
             entries,
             mode,
             filtered,
+            created_at: Instant::now(),
         }
+    }
+
+    /// Compute the animated placeholder text (typewriter effect).
+    pub fn animated_placeholder(&self) -> String {
+        let elapsed = self.created_at.elapsed().as_millis();
+
+        let cycle_durations: Vec<u128> = PLACEHOLDER_EXAMPLES
+            .iter()
+            .map(|w| {
+                let n = w.chars().count() as u128;
+                n * CHAR_TYPE_MS + HOLD_MS + n * CHAR_DELETE_MS + PAUSE_MS
+            })
+            .collect();
+        let total_cycle: u128 = cycle_durations.iter().sum();
+        if total_cycle == 0 {
+            return String::new();
+        }
+
+        let mut t = elapsed % total_cycle;
+        for (i, &word) in PLACEHOLDER_EXAMPLES.iter().enumerate() {
+            let dur = cycle_durations[i];
+            if t >= dur {
+                t -= dur;
+                continue;
+            }
+            let n = word.chars().count();
+            let type_time = n as u128 * CHAR_TYPE_MS;
+            if t < type_time {
+                let chars = (t / CHAR_TYPE_MS) as usize;
+                return word.chars().take(chars).collect();
+            }
+            t -= type_time;
+            if t < HOLD_MS {
+                return word.to_string();
+            }
+            t -= HOLD_MS;
+            let delete_time = n as u128 * CHAR_DELETE_MS;
+            if t < delete_time {
+                let remaining = n.saturating_sub((t / CHAR_DELETE_MS) as usize);
+                return word.chars().take(remaining).collect();
+            }
+            return String::new();
+        }
+        String::new()
     }
 
     pub fn filtered_entries(&self) -> Vec<(usize, &TabPickerEntry)> {
@@ -110,6 +192,9 @@ impl TabPickerState {
                 .map(|(i, _)| i)
                 .collect();
         }
+        // Favorites float to top, preserving order within each group.
+        self.filtered
+            .sort_by(|&a, &b| self.entries[b].favorite.cmp(&self.entries[a].favorite));
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
         }
@@ -133,6 +218,27 @@ impl TabPickerState {
             let entry = &self.entries[i];
             build_command_string(self.mode, entry.command.as_deref(), entry.shell.as_deref())
         })
+    }
+
+    /// Toggle the favorite star on the selected entry.
+    /// Returns `Some((name, is_favorite))` for persistence, or `None` if nothing is selected.
+    pub fn toggle_favorite(&mut self) -> Option<(String, bool)> {
+        let &orig_idx = self.filtered.get(self.selected)?;
+        let entry = &mut self.entries[orig_idx];
+        entry.favorite = !entry.favorite;
+        let result = (entry.name.clone(), entry.favorite);
+
+        // Re-sort so the entry moves to/from the favorites group.
+        self.filtered
+            .sort_by(|&a, &b| self.entries[b].favorite.cmp(&self.entries[a].favorite));
+        // Keep selection tracking the same entry.
+        self.selected = self
+            .filtered
+            .iter()
+            .position(|&i| i == orig_idx)
+            .unwrap_or(0);
+
+        Some(result)
     }
 }
 
@@ -160,25 +266,171 @@ fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Known programs registry
+// ---------------------------------------------------------------------------
+
+struct KnownProgram {
+    name: &'static str,
+    bins: &'static [&'static str],
+    description: &'static str,
+    section: TabPickerSection,
+    /// Override the command sent to the daemon. When `None`, uses the matched binary name.
+    /// Use this when the binary alone doesn't start the right mode (e.g. `bun` needs `bun repl`).
+    command_override: Option<&'static str>,
+}
+
+const KNOWN_PROGRAMS: &[KnownProgram] = &[
+    // -- Shells --
+    KnownProgram { name: "Bash", bins: &["bash"], description: "Bourne Again Shell", section: TabPickerSection::Shells, command_override: None },
+    KnownProgram { name: "Zsh", bins: &["zsh"], description: "Z Shell", section: TabPickerSection::Shells, command_override: None },
+    KnownProgram { name: "Fish", bins: &["fish"], description: "Friendly Interactive Shell", section: TabPickerSection::Shells, command_override: None },
+    KnownProgram { name: "Nushell", bins: &["nu"], description: "Modern shell written in Rust", section: TabPickerSection::Shells, command_override: None },
+    KnownProgram { name: "Elvish", bins: &["elvish"], description: "Expressive programming shell", section: TabPickerSection::Shells, command_override: None },
+    KnownProgram { name: "PowerShell", bins: &["pwsh"], description: "Cross-platform shell", section: TabPickerSection::Shells, command_override: None },
+    KnownProgram { name: "Tcsh", bins: &["tcsh"], description: "C shell with enhancements", section: TabPickerSection::Shells, command_override: None },
+    KnownProgram { name: "Ksh", bins: &["ksh"], description: "Korn Shell", section: TabPickerSection::Shells, command_override: None },
+    // -- Editors --
+    KnownProgram { name: "Neovim", bins: &["nvim"], description: "Hyperextensible Vim fork", section: TabPickerSection::Editors, command_override: None },
+    KnownProgram { name: "Vim", bins: &["vim"], description: "Vi Improved", section: TabPickerSection::Editors, command_override: None },
+    KnownProgram { name: "Helix", bins: &["hx", "helix"], description: "Post-modern text editor", section: TabPickerSection::Editors, command_override: None },
+    KnownProgram { name: "Nano", bins: &["nano"], description: "Simple text editor", section: TabPickerSection::Editors, command_override: None },
+    KnownProgram { name: "Micro", bins: &["micro"], description: "Modern terminal editor", section: TabPickerSection::Editors, command_override: None },
+    KnownProgram { name: "Emacs", bins: &["emacs"], description: "Extensible text editor", section: TabPickerSection::Editors, command_override: None },
+    KnownProgram { name: "Kakoune", bins: &["kak"], description: "Modal code editor", section: TabPickerSection::Editors, command_override: None },
+    // -- Agents --
+    KnownProgram { name: "Claude Code", bins: &["claude"], description: "Anthropic AI coding agent", section: TabPickerSection::Agents, command_override: None },
+    KnownProgram { name: "Aider", bins: &["aider"], description: "AI pair programming", section: TabPickerSection::Agents, command_override: None },
+    KnownProgram { name: "Codex", bins: &["codex"], description: "OpenAI coding agent", section: TabPickerSection::Agents, command_override: None },
+    KnownProgram { name: "Goose", bins: &["goose"], description: "AI developer agent", section: TabPickerSection::Agents, command_override: None },
+    KnownProgram { name: "Cline", bins: &["cline"], description: "AI coding assistant", section: TabPickerSection::Agents, command_override: None },
+    KnownProgram { name: "Mentat", bins: &["mentat"], description: "AI coding assistant", section: TabPickerSection::Agents, command_override: None },
+    KnownProgram { name: "GPT Engineer", bins: &["gpt-engineer"], description: "AI code generation", section: TabPickerSection::Agents, command_override: None },
+    KnownProgram { name: "Amazon Q", bins: &["q"], description: "AWS AI assistant", section: TabPickerSection::Agents, command_override: None },
+    KnownProgram { name: "Gemini CLI", bins: &["gemini"], description: "Google AI coding agent", section: TabPickerSection::Agents, command_override: None },
+    // -- REPLs --
+    KnownProgram { name: "Python", bins: &["python3", "python"], description: "Python interpreter", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "Node.js", bins: &["node"], description: "JavaScript runtime", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "Bun", bins: &["bun"], description: "JavaScript runtime", section: TabPickerSection::Repls, command_override: Some("bun repl") },
+    KnownProgram { name: "Deno", bins: &["deno"], description: "JavaScript runtime", section: TabPickerSection::Repls, command_override: Some("deno repl") },
+    KnownProgram { name: "Ruby", bins: &["irb"], description: "Ruby REPL", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "Lua", bins: &["lua", "luajit"], description: "Lua interpreter", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "GHCi", bins: &["ghci"], description: "Haskell REPL", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "Julia", bins: &["julia"], description: "Julia REPL", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "R", bins: &["R"], description: "R language", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "Elixir", bins: &["iex"], description: "Elixir REPL", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "Erlang", bins: &["erl"], description: "Erlang shell", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "Scala", bins: &["scala", "amm"], description: "Scala REPL", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "Swift", bins: &["swift"], description: "Swift REPL", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "SQLite", bins: &["sqlite3"], description: "SQLite shell", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "psql", bins: &["psql"], description: "PostgreSQL client", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "MySQL", bins: &["mysql"], description: "MySQL client", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "Redis CLI", bins: &["redis-cli"], description: "Redis client", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "Mongosh", bins: &["mongosh"], description: "MongoDB shell", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "pgcli", bins: &["pgcli"], description: "PostgreSQL with autocomplete", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "mycli", bins: &["mycli"], description: "MySQL with autocomplete", section: TabPickerSection::Repls, command_override: None },
+    KnownProgram { name: "litecli", bins: &["litecli"], description: "SQLite with autocomplete", section: TabPickerSection::Repls, command_override: None },
+    // -- System Management --
+    KnownProgram { name: "Htop", bins: &["htop"], description: "Interactive process viewer", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Btop", bins: &["btop"], description: "Resource monitor", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Top", bins: &["top"], description: "Process viewer", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Glances", bins: &["glances"], description: "System monitor", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Bottom", bins: &["btm"], description: "System monitor", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Zenith", bins: &["zenith"], description: "System monitor", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Bandwhich", bins: &["bandwhich"], description: "Network utilization monitor", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Yazi", bins: &["yazi"], description: "Terminal file manager", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Ranger", bins: &["ranger"], description: "Terminal file manager", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "lf", bins: &["lf"], description: "Terminal file manager", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "nnn", bins: &["nnn"], description: "Terminal file manager", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Midnight Commander", bins: &["mc"], description: "Visual file manager", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Broot", bins: &["broot"], description: "File manager & launcher", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Superfile", bins: &["spf"], description: "Terminal file manager", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Lazygit", bins: &["lazygit"], description: "Git terminal UI", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Tig", bins: &["tig"], description: "Git terminal UI", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "GitUI", bins: &["gitui"], description: "Git terminal UI", section: TabPickerSection::System, command_override: None },
+    KnownProgram { name: "Lazydocker", bins: &["lazydocker"], description: "Docker terminal UI", section: TabPickerSection::System, command_override: None },
+    // -- Cluster Management --
+    KnownProgram { name: "K9s", bins: &["k9s"], description: "Kubernetes cluster TUI", section: TabPickerSection::Cluster, command_override: None },
+    KnownProgram { name: "kdash", bins: &["kdash"], description: "Kubernetes dashboard TUI", section: TabPickerSection::Cluster, command_override: None },
+    KnownProgram { name: "kubectl", bins: &["kubectl"], description: "Kubernetes CLI", section: TabPickerSection::Cluster, command_override: None },
+    KnownProgram { name: "Helm", bins: &["helm"], description: "Kubernetes package manager", section: TabPickerSection::Cluster, command_override: None },
+    KnownProgram { name: "Flux", bins: &["flux"], description: "GitOps toolkit for Kubernetes", section: TabPickerSection::Cluster, command_override: None },
+    KnownProgram { name: "ArgoCD", bins: &["argocd"], description: "GitOps continuous delivery", section: TabPickerSection::Cluster, command_override: None },
+    KnownProgram { name: "Terraform", bins: &["terraform", "tofu"], description: "Infrastructure as code", section: TabPickerSection::Cluster, command_override: None },
+    KnownProgram { name: "Pulumi", bins: &["pulumi"], description: "Infrastructure as code", section: TabPickerSection::Cluster, command_override: None },
+    KnownProgram { name: "Nomad", bins: &["nomad"], description: "Workload orchestrator", section: TabPickerSection::Cluster, command_override: None },
+];
+
+// ---------------------------------------------------------------------------
+// System scanning
+// ---------------------------------------------------------------------------
+
+/// Collect all binary names available on $PATH.
+fn scan_path_binaries() -> HashSet<String> {
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    let mut bins = HashSet::new();
+    for dir in path_var.split(':') {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                bins.insert(name.to_string());
+            }
+        }
+    }
+    bins
+}
+
+/// Scan the system for known interactive programs.
+///
+/// Call once on startup and cache the result — this walks $PATH.
+pub fn scan_system_programs() -> Vec<TabPickerEntry> {
+    let available = scan_path_binaries();
+    let user_shell = default_shell();
+    let default_shell_bin = std::path::Path::new(&user_shell)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+
+    let mut entries = Vec::new();
+    for prog in KNOWN_PROGRAMS {
+        let found_bin = prog.bins.iter().find(|b| available.contains(**b));
+        let Some(&bin) = found_bin else { continue };
+
+        // Skip the user's default shell (already shown as the "Shell" entry).
+        if prog.section == TabPickerSection::Shells && bin == default_shell_bin {
+            continue;
+        }
+
+        let cmd = prog.command_override.map(|s| s.to_string()).unwrap_or_else(|| bin.to_string());
+        entries.push(TabPickerEntry {
+            name: prog.name.to_string(),
+            command: Some(cmd),
+            description: prog.description.to_string(),
+            section: prog.section.clone(),
+            shell: if prog.section == TabPickerSection::Shells {
+                None
+            } else {
+                Some(user_shell.clone())
+            },
+            favorite: false,
+        });
+    }
+    entries
+}
+
+// ---------------------------------------------------------------------------
+// Entry builder
+// ---------------------------------------------------------------------------
+
 fn build_entries(
+    system_programs: &[TabPickerEntry],
     custom_entries: &[TabPickerEntryConfig],
-    favorites: &[FavoriteConfig],
+    favorites: &HashSet<String>,
 ) -> Vec<TabPickerEntry> {
     let mut entries = Vec::new();
     let user_shell = default_shell();
 
-    // -- Favorites --
-    for fav in favorites {
-        entries.push(TabPickerEntry {
-            name: fav.name.clone(),
-            command: Some(fav.command.clone()),
-            description: fav.description.clone().unwrap_or_default(),
-            section: TabPickerSection::Favorites,
-            shell: Some(fav.shell.clone().unwrap_or_else(|| user_shell.clone())),
-        });
-    }
-
-    // -- Shells --
+    // -- Default shell (always present) --
     entries.push(TabPickerEntry {
         name: "Shell".into(),
         command: None,
@@ -191,136 +443,74 @@ fn build_entries(
         ),
         section: TabPickerSection::Shells,
         shell: None,
+        favorite: false,
     });
 
-    for (name, path, desc) in [
-        ("Bash", "/bin/bash", "Bourne Again Shell"),
-        ("Zsh", "/bin/zsh", "Z Shell"),
-        ("Fish", "/usr/local/bin/fish", "Friendly Interactive Shell"),
-        (
-            "Fish (Homebrew)",
-            "/opt/homebrew/bin/fish",
-            "Friendly Interactive Shell",
-        ),
-    ] {
-        if std::path::Path::new(path).exists() {
-            entries.push(TabPickerEntry {
-                name: name.into(),
-                // For shell entries, the command IS the shell — no wrapping needed
-                command: Some(path.into()),
-                description: desc.into(),
-                section: TabPickerSection::Shells,
-                shell: None,
-            });
-        }
-    }
+    // -- System-detected programs --
+    entries.extend(system_programs.iter().cloned());
 
-    // -- Custom entries from config --
+    // -- Custom entries from config (placed in their configured category) --
     for ce in custom_entries {
+        let section = ce
+            .category
+            .as_deref()
+            .map(TabPickerSection::from_category)
+            .unwrap_or(TabPickerSection::Other);
         entries.push(TabPickerEntry {
             name: ce.name.clone(),
             command: Some(ce.command.clone()),
             description: ce.description.clone().unwrap_or_default(),
-            section: TabPickerSection::Custom,
+            section,
             shell: Some(ce.shell.clone().unwrap_or_else(|| user_shell.clone())),
+            favorite: false,
         });
     }
 
-    // -- Tools --
-    for (name, cmd, desc) in [
-        ("Htop", "htop", "Interactive process viewer"),
-        ("Btop", "btop", "Resource monitor"),
-        ("Python", "python3", "Python REPL"),
-        ("Node", "node", "Node.js REPL"),
-    ] {
-        if std::process::Command::new("sh")
-            .args(["-c", &format!("command -v {} >/dev/null 2>&1", cmd)])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-        {
-            entries.push(TabPickerEntry {
-                name: name.into(),
-                command: Some(cmd.into()),
-                description: desc.into(),
-                section: TabPickerSection::Tools,
-                shell: Some(user_shell.clone()),
-            });
-        }
-    }
-
-    // -- Recent commands from shell history --
-    if let Some(recent) = read_recent_commands(5) {
-        for cmd in recent {
-            entries.push(TabPickerEntry {
-                name: cmd.clone(),
-                command: Some(cmd),
-                description: "From history".into(),
-                section: TabPickerSection::Recent,
-                shell: Some(user_shell.clone()),
-            });
+    // -- Apply favorites --
+    for entry in &mut entries {
+        if favorites.contains(&entry.name) {
+            entry.favorite = true;
         }
     }
 
     entries
 }
 
-/// Read the last N unique commands from shell history.
-fn read_recent_commands(count: usize) -> Option<Vec<String>> {
-    let home = std::env::var("HOME")
-        .ok()
-        .map(std::path::PathBuf::from)?;
+// ---------------------------------------------------------------------------
+// Favorites persistence
+// ---------------------------------------------------------------------------
 
-    // Try zsh first, then bash
-    let history_path = {
-        let zsh = home.join(".zsh_history");
-        if zsh.exists() {
-            zsh
-        } else {
-            let bash = home.join(".bash_history");
-            if bash.exists() {
-                bash
-            } else {
-                return None;
-            }
-        }
+fn favorites_path() -> Option<std::path::PathBuf> {
+    std::env::var("HOME").ok().map(|h| {
+        std::path::PathBuf::from(h)
+            .join(".config")
+            .join("pane")
+            .join("favorites")
+    })
+}
+
+/// Load the set of favorited entry names from disk.
+pub fn load_favorites() -> HashSet<String> {
+    let Some(path) = favorites_path() else {
+        return HashSet::new();
     };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return HashSet::new();
+    };
+    content
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
 
-    let content = std::fs::read_to_string(&history_path).ok()?;
-    let mut seen = std::collections::HashSet::new();
-    let mut recent = Vec::new();
-
-    for line in content.lines().rev() {
-        // zsh history format: ": timestamp:0;command"
-        let cmd = if let Some(idx) = line.find(";") {
-            line[idx + 1..].trim()
-        } else {
-            line.trim()
-        };
-
-        if cmd.is_empty() || cmd.len() < 3 {
-            continue;
-        }
-        // Skip common shell builtins
-        if matches!(
-            cmd.split_whitespace().next(),
-            Some("cd" | "ls" | "echo" | "export" | "source" | "exit" | "clear")
-        ) {
-            continue;
-        }
-        if seen.insert(cmd.to_string()) {
-            recent.push(cmd.to_string());
-            if recent.len() >= count {
-                break;
-            }
-        }
-    }
-
-    if recent.is_empty() {
-        None
-    } else {
-        Some(recent)
-    }
+/// Persist the set of favorited entry names to disk.
+pub fn save_favorites(favorites: &HashSet<String>) {
+    let Some(path) = favorites_path() else { return };
+    let mut lines: Vec<&str> = favorites.iter().map(|s| s.as_str()).collect();
+    lines.sort();
+    let content = lines.join("\n") + "\n";
+    let _ = std::fs::write(path, content);
 }
 
 /// Mouse hit-test result for the tab picker.
@@ -329,7 +519,7 @@ pub enum TabPickerClick {
     Item(usize),
 }
 
-/// Compute the popup area for the tab picker (must match render logic).
+/// Compute the popup area for the tab picker.
 fn compute_popup_area(area: Rect) -> Rect {
     dialog::popup_rect(
         dialog::PopupSize::FixedClamped { width: 60, height: 22, pad: 4 },
@@ -353,6 +543,7 @@ pub fn hit_test(state: &TabPickerState, area: Rect, x: u16, y: u16) -> Option<Ta
         return None;
     }
 
+    // List starts after input row + separator row
     let list_area = Rect::new(
         inner.x,
         inner.y + 2,
@@ -387,7 +578,7 @@ pub fn hit_test(state: &TabPickerState, area: Rect, x: u16, y: u16) -> Option<Ta
 
     for (item_idx, (_, entry)) in filtered.iter().enumerate() {
         if show_sections {
-            let section = entry.section.label();
+            let section = if entry.favorite { "★ Favorites" } else { entry.section.label() };
             let need_header = match last_section {
                 None => true,
                 Some(prev) => prev != section,
@@ -428,6 +619,10 @@ pub fn is_inside_popup(area: Rect, x: u16, y: u16) -> bool {
 mod tests {
     use super::*;
 
+    fn empty_favorites() -> HashSet<String> {
+        HashSet::new()
+    }
+
     fn make_custom_entries() -> Vec<TabPickerEntryConfig> {
         vec![
             TabPickerEntryConfig {
@@ -435,39 +630,24 @@ mod tests {
                 command: "mytool".into(),
                 description: Some("A custom tool".into()),
                 shell: None,
+                category: None,
             },
             TabPickerEntryConfig {
                 name: "Editor".into(),
                 command: "vim".into(),
                 description: None,
                 shell: Some("/bin/zsh".into()),
+                category: Some("editors".into()),
             },
         ]
     }
 
-    fn make_favorites() -> Vec<FavoriteConfig> {
-        vec![FavoriteConfig {
-            name: "Dev Server".into(),
-            command: "npm run dev".into(),
-            description: Some("Start dev server".into()),
-            shell: Some("/bin/zsh".into()),
-        }]
-    }
-
     #[test]
     fn test_new_creates_state_with_entries() {
-        let state = TabPickerState::new(&[], &[]);
+        let state = TabPickerState::new(&[], &[], &empty_favorites());
         assert_eq!(state.mode, TabPickerMode::NewTab);
         assert!(state.input.is_empty());
-        // selected defaults to first Recent entry, or 0 if none
-        let has_recents = state.entries.iter().any(|e| e.section == TabPickerSection::Recent);
-        if has_recents {
-            let first_recent = state.entries.iter().position(|e| e.section == TabPickerSection::Recent).unwrap();
-            assert_eq!(state.selected, first_recent);
-        } else {
-            assert_eq!(state.selected, 0);
-        }
-        // Should always have at least "Shell" entry
+        assert_eq!(state.selected, 0);
         assert!(
             state.entries.iter().any(|e| e.name == "Shell"),
             "should contain the default Shell entry"
@@ -476,20 +656,20 @@ mod tests {
 
     #[test]
     fn test_with_mode_split_horizontal() {
-        let state = TabPickerState::with_mode(&[], &[], TabPickerMode::SplitHorizontal);
+        let state = TabPickerState::with_mode(&[], &[], &empty_favorites(), TabPickerMode::SplitHorizontal);
         assert_eq!(state.mode, TabPickerMode::SplitHorizontal);
     }
 
     #[test]
     fn test_with_mode_split_vertical() {
-        let state = TabPickerState::with_mode(&[], &[], TabPickerMode::SplitVertical);
+        let state = TabPickerState::with_mode(&[], &[], &empty_favorites(), TabPickerMode::SplitVertical);
         assert_eq!(state.mode, TabPickerMode::SplitVertical);
     }
 
     #[test]
     fn test_custom_entries_included() {
         let custom = make_custom_entries();
-        let state = TabPickerState::new(&custom, &[]);
+        let state = TabPickerState::new(&[], &custom, &empty_favorites());
         assert!(
             state.entries.iter().any(|e| e.name == "My Tool"),
             "custom entries should be included"
@@ -501,19 +681,27 @@ mod tests {
     }
 
     #[test]
-    fn test_custom_entries_in_custom_section() {
+    fn test_custom_entries_in_other_section() {
         let custom = make_custom_entries();
-        let state = TabPickerState::new(&custom, &[]);
+        let state = TabPickerState::new(&[], &custom, &empty_favorites());
         let my_tool = state.entries.iter().find(|e| e.name == "My Tool").unwrap();
-        assert_eq!(my_tool.section, TabPickerSection::Custom);
+        assert_eq!(my_tool.section, TabPickerSection::Other);
         assert_eq!(my_tool.description, "A custom tool");
         assert_eq!(my_tool.command, Some("mytool".into()));
     }
 
     #[test]
+    fn test_custom_entry_with_category() {
+        let custom = make_custom_entries();
+        let state = TabPickerState::new(&[], &custom, &empty_favorites());
+        let editor = state.entries.iter().find(|e| e.name == "Editor").unwrap();
+        assert_eq!(editor.section, TabPickerSection::Editors);
+    }
+
+    #[test]
     fn test_custom_entry_empty_description() {
         let custom = make_custom_entries();
-        let state = TabPickerState::new(&custom, &[]);
+        let state = TabPickerState::new(&[], &custom, &empty_favorites());
         let editor = state.entries.iter().find(|e| e.name == "Editor").unwrap();
         assert_eq!(editor.description, "");
     }
@@ -521,7 +709,7 @@ mod tests {
     #[test]
     fn test_custom_entry_with_explicit_shell() {
         let custom = make_custom_entries();
-        let state = TabPickerState::new(&custom, &[]);
+        let state = TabPickerState::new(&[], &custom, &empty_favorites());
         let editor = state.entries.iter().find(|e| e.name == "Editor").unwrap();
         assert_eq!(editor.shell, Some("/bin/zsh".into()));
     }
@@ -529,31 +717,42 @@ mod tests {
     #[test]
     fn test_custom_entry_inherits_default_shell() {
         let custom = make_custom_entries();
-        let state = TabPickerState::new(&custom, &[]);
+        let state = TabPickerState::new(&[], &custom, &empty_favorites());
         let my_tool = state.entries.iter().find(|e| e.name == "My Tool").unwrap();
-        // Should have inherited the default shell
         assert!(my_tool.shell.is_some(), "should have a shell set");
     }
 
     #[test]
-    fn test_favorites_shown_first() {
-        let favs = make_favorites();
-        let state = TabPickerState::new(&[], &favs);
-        assert_eq!(state.entries[0].name, "Dev Server");
-        assert_eq!(state.entries[0].section, TabPickerSection::Favorites);
+    fn test_favorites_float_to_top() {
+        let favs: HashSet<String> = ["Shell".to_string()].into_iter().collect();
+        let state = TabPickerState::new(&[], &make_custom_entries(), &favs);
+        // The first entry in the filtered list should be the favorited one
+        let first_filtered = &state.entries[state.filtered[0]];
+        assert!(first_filtered.favorite, "first filtered entry should be a favorite");
+        assert_eq!(first_filtered.name, "Shell");
     }
 
     #[test]
-    fn test_favorites_have_shell() {
-        let favs = make_favorites();
-        let state = TabPickerState::new(&[], &favs);
-        let fav = state.entries.iter().find(|e| e.name == "Dev Server").unwrap();
-        assert_eq!(fav.shell, Some("/bin/zsh".into()));
+    fn test_toggle_favorite() {
+        let mut state = TabPickerState::new(&[], &make_custom_entries(), &empty_favorites());
+        state.selected = 0;
+        let result = state.toggle_favorite();
+        assert!(result.is_some());
+        let (name, is_fav) = result.unwrap();
+        assert!(is_fav);
+        // Toggle back
+        // Find the entry again (it may have moved)
+        let idx = state.filtered.iter().position(|&i| state.entries[i].name == name).unwrap();
+        state.selected = idx;
+        let result = state.toggle_favorite();
+        assert!(result.is_some());
+        let (_, is_fav) = result.unwrap();
+        assert!(!is_fav);
     }
 
     #[test]
     fn test_filtered_entries_all_initially() {
-        let state = TabPickerState::new(&[], &[]);
+        let state = TabPickerState::new(&[], &[], &empty_favorites());
         let filtered = state.filtered_entries();
         assert_eq!(filtered.len(), state.entries.len());
     }
@@ -561,8 +760,7 @@ mod tests {
     #[test]
     fn test_move_down_increments() {
         let state_entries = make_custom_entries();
-        let mut state = TabPickerState::new(&state_entries, &[]);
-        // Reset to 0 so we can test relative movement
+        let mut state = TabPickerState::new(&[], &state_entries, &empty_favorites());
         state.selected = 0;
         state.move_down();
         assert_eq!(state.selected, 1);
@@ -572,9 +770,8 @@ mod tests {
 
     #[test]
     fn test_move_down_clamps_at_end() {
-        let mut state = TabPickerState::new(&[], &[]);
+        let mut state = TabPickerState::new(&[], &[], &empty_favorites());
         let max = state.filtered_entries().len() - 1;
-        // Move past the end
         for _ in 0..max + 5 {
             state.move_down();
         }
@@ -583,7 +780,7 @@ mod tests {
 
     #[test]
     fn test_move_up_decrements() {
-        let mut state = TabPickerState::new(&[], &[]);
+        let mut state = TabPickerState::new(&[], &[], &empty_favorites());
         state.selected = 2;
         state.move_up();
         assert_eq!(state.selected, 1);
@@ -593,7 +790,7 @@ mod tests {
 
     #[test]
     fn test_move_up_clamps_at_zero() {
-        let mut state = TabPickerState::new(&[], &[]);
+        let mut state = TabPickerState::new(&[], &[], &empty_favorites());
         state.selected = 0;
         state.move_up();
         assert_eq!(state.selected, 0);
@@ -606,8 +803,9 @@ mod tests {
             command: "xyz_cmd".into(),
             description: Some("special tool".into()),
             shell: None,
+            category: None,
         }];
-        let mut state = TabPickerState::new(&custom, &[]);
+        let mut state = TabPickerState::new(&[], &custom, &empty_favorites());
         state.input = "UniqueXYZ".to_string();
         state.update_filter();
         let filtered = state.filtered_entries();
@@ -622,8 +820,9 @@ mod tests {
             command: "mst".into(),
             description: None,
             shell: None,
+            category: None,
         }];
-        let mut state = TabPickerState::new(&custom, &[]);
+        let mut state = TabPickerState::new(&[], &custom, &empty_favorites());
         state.input = "myspecialtool".to_string();
         state.update_filter();
         let filtered = state.filtered_entries();
@@ -640,8 +839,9 @@ mod tests {
             command: "foo".into(),
             description: Some("Unique Description Here".into()),
             shell: None,
+            category: None,
         }];
-        let mut state = TabPickerState::new(&custom, &[]);
+        let mut state = TabPickerState::new(&[], &custom, &empty_favorites());
         state.input = "unique description".to_string();
         state.update_filter();
         let filtered = state.filtered_entries();
@@ -658,8 +858,9 @@ mod tests {
             command: "my_unique_command_xyz".into(),
             description: None,
             shell: None,
+            category: None,
         }];
-        let mut state = TabPickerState::new(&custom, &[]);
+        let mut state = TabPickerState::new(&[], &custom, &empty_favorites());
         state.input = "unique_command".to_string();
         state.update_filter();
         let filtered = state.filtered_entries();
@@ -671,7 +872,7 @@ mod tests {
 
     #[test]
     fn test_filter_no_match() {
-        let mut state = TabPickerState::new(&[], &[]);
+        let mut state = TabPickerState::new(&[], &[], &empty_favorites());
         state.input = "zzzzz_no_match_ever".to_string();
         state.update_filter();
         let filtered = state.filtered_entries();
@@ -680,7 +881,7 @@ mod tests {
 
     #[test]
     fn test_filter_clears_restores_all() {
-        let mut state = TabPickerState::new(&[], &[]);
+        let mut state = TabPickerState::new(&[], &[], &empty_favorites());
         let total = state.entries.len();
         state.input = "zzzzz".to_string();
         state.update_filter();
@@ -693,27 +894,23 @@ mod tests {
     #[test]
     fn test_filter_resets_selection_when_out_of_bounds() {
         let custom = vec![
-            TabPickerEntryConfig { name: "A".into(), command: "a".into(), description: None, shell: None },
-            TabPickerEntryConfig { name: "B".into(), command: "b".into(), description: None, shell: None },
+            TabPickerEntryConfig { name: "A".into(), command: "a".into(), description: None, shell: None, category: None },
+            TabPickerEntryConfig { name: "B".into(), command: "b".into(), description: None, shell: None, category: None },
         ];
-        let mut state = TabPickerState::new(&custom, &[]);
-        // Move to a high index
+        let mut state = TabPickerState::new(&[], &custom, &empty_favorites());
         for _ in 0..state.entries.len() {
             state.move_down();
         }
         let prev_selected = state.selected;
-        // Now filter to only 1 result
         state.input = "zzzzz_no_match".to_string();
         state.update_filter();
-        // Selected should be clamped
         assert_eq!(state.selected, 0);
         assert!(prev_selected > 0, "test setup: should have moved down");
     }
 
     #[test]
     fn test_selected_command_shell() {
-        let mut state = TabPickerState::new(&[], &[]);
-        // Select the Shell entry (which has no command → returns just base)
+        let mut state = TabPickerState::new(&[], &[], &empty_favorites());
         let shell_idx = state.entries.iter().position(|e| e.name == "Shell").unwrap();
         state.selected = state.filtered.iter().position(|&i| i == shell_idx).unwrap();
         let cmd = state.selected_command().unwrap();
@@ -727,9 +924,9 @@ mod tests {
             command: "htop".into(),
             description: None,
             shell: Some("/bin/zsh".into()),
+            category: None,
         }];
-        let mut state = TabPickerState::new(&custom, &[]);
-        // Select the custom entry
+        let mut state = TabPickerState::new(&[], &custom, &empty_favorites());
         for (i, entry) in state.entries.iter().enumerate() {
             if entry.name == "Htop" {
                 state.selected = state.filtered.iter().position(|&idx| idx == i).unwrap();
@@ -748,9 +945,9 @@ mod tests {
             command: "vim".into(),
             description: None,
             shell: None,
+            category: None,
         }];
-        let mut state = TabPickerState::with_mode(&custom, &[], TabPickerMode::SplitHorizontal);
-        // Select the custom entry
+        let mut state = TabPickerState::with_mode(&[], &custom, &empty_favorites(), TabPickerMode::SplitHorizontal);
         for (i, entry) in state.entries.iter().enumerate() {
             if entry.name == "Vim" {
                 state.selected = state.filtered.iter().position(|&idx| idx == i).unwrap();
@@ -768,8 +965,9 @@ mod tests {
             command: "vim".into(),
             description: None,
             shell: None,
+            category: None,
         }];
-        let mut state = TabPickerState::with_mode(&custom, &[], TabPickerMode::SplitVertical);
+        let mut state = TabPickerState::with_mode(&[], &custom, &empty_favorites(), TabPickerMode::SplitVertical);
         for (i, entry) in state.entries.iter().enumerate() {
             if entry.name == "Vim" {
                 state.selected = state.filtered.iter().position(|&idx| idx == i).unwrap();
@@ -782,11 +980,13 @@ mod tests {
 
     #[test]
     fn test_section_labels() {
-        assert_eq!(TabPickerSection::Favorites.label(), "Favorites");
         assert_eq!(TabPickerSection::Shells.label(), "Shells");
-        assert_eq!(TabPickerSection::Custom.label(), "Custom");
-        assert_eq!(TabPickerSection::Tools.label(), "Tools");
-        assert_eq!(TabPickerSection::Recent.label(), "Recent");
+        assert_eq!(TabPickerSection::Editors.label(), "Editors");
+        assert_eq!(TabPickerSection::Agents.label(), "Agents");
+        assert_eq!(TabPickerSection::Repls.label(), "REPLs");
+        assert_eq!(TabPickerSection::System.label(), "System Management");
+        assert_eq!(TabPickerSection::Cluster.label(), "Cluster Management");
+        assert_eq!(TabPickerSection::Other.label(), "Other");
     }
 
     #[test]
@@ -832,15 +1032,13 @@ mod tests {
 
     #[test]
     fn test_shell_entries_have_no_shell_wrapping() {
-        let state = TabPickerState::new(&[], &[]);
+        let state = TabPickerState::new(&[], &[], &empty_favorites());
         let shell_entry = state.entries.iter().find(|e| e.name == "Shell").unwrap();
         assert!(shell_entry.shell.is_none(), "default shell entry should not have shell wrapping");
     }
 
     #[test]
-    fn test_initial_selection_recent() {
-        // Build entries with a known Recent entry by using a helper that
-        // bypasses build_entries (which reads real shell history).
+    fn test_favorites_in_filtered_order() {
         let entries = vec![
             TabPickerEntry {
                 name: "Shell".into(),
@@ -848,41 +1046,34 @@ mod tests {
                 description: "Default".into(),
                 section: TabPickerSection::Shells,
                 shell: None,
+                favorite: false,
             },
             TabPickerEntry {
                 name: "htop".into(),
                 command: Some("htop".into()),
                 description: "Process viewer".into(),
-                section: TabPickerSection::Tools,
+                section: TabPickerSection::System,
                 shell: Some("/bin/zsh".into()),
-            },
-            TabPickerEntry {
-                name: "cargo build".into(),
-                command: Some("cargo build".into()),
-                description: "From history".into(),
-                section: TabPickerSection::Recent,
-                shell: Some("/bin/zsh".into()),
+                favorite: true,
             },
         ];
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-        let selected = entries
-            .iter()
-            .position(|e| e.section == TabPickerSection::Recent)
-            .unwrap_or(0);
+        let mut filtered: Vec<usize> = (0..entries.len()).collect();
+        filtered.sort_by(|&a, &b| entries[b].favorite.cmp(&entries[a].favorite));
         let state = TabPickerState {
             input: String::new(),
-            selected,
+            selected: 0,
             entries,
             mode: TabPickerMode::NewTab,
             filtered,
+            created_at: Instant::now(),
         };
-        assert_eq!(state.selected, 2, "should point to first Recent entry");
-        assert_eq!(state.entries[state.selected].section, TabPickerSection::Recent);
+        // htop (favorite) should be first in filtered order
+        assert_eq!(state.entries[state.filtered[0]].name, "htop");
+        assert!(state.entries[state.filtered[0]].favorite);
     }
 
     #[test]
-    fn test_initial_selection_fallback() {
-        // No Recent entries — should default to 0
+    fn test_initial_selection_default() {
         let entries = vec![
             TabPickerEntry {
                 name: "Shell".into(),
@@ -890,73 +1081,15 @@ mod tests {
                 description: "Default".into(),
                 section: TabPickerSection::Shells,
                 shell: None,
+                favorite: false,
             },
             TabPickerEntry {
                 name: "htop".into(),
                 command: Some("htop".into()),
                 description: "Process viewer".into(),
-                section: TabPickerSection::Tools,
+                section: TabPickerSection::System,
                 shell: Some("/bin/zsh".into()),
-            },
-        ];
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-        let selected = entries
-            .iter()
-            .position(|e| e.section == TabPickerSection::Recent)
-            .unwrap_or(0);
-        let state = TabPickerState {
-            input: String::new(),
-            selected,
-            entries,
-            mode: TabPickerMode::NewTab,
-            filtered,
-        };
-        assert_eq!(state.selected, 0, "should fall back to 0 when no recents");
-    }
-
-    #[test]
-    fn test_tools_have_shell_wrapping() {
-        // We can't reliably test this since it depends on installed tools,
-        // but we can verify the build_entries logic with custom entries
-        let state = TabPickerState::new(&[], &[]);
-        for entry in &state.entries {
-            if entry.section == TabPickerSection::Tools {
-                assert!(entry.shell.is_some(), "tool '{}' should have shell wrapping", entry.name);
-            }
-        }
-    }
-
-    #[test]
-    fn test_hit_test_recent_items() {
-        // Create a state with known entries across sections
-        let entries = vec![
-            TabPickerEntry {
-                name: "Shell".into(),
-                command: None,
-                description: "Default".into(),
-                section: TabPickerSection::Shells,
-                shell: None,
-            },
-            TabPickerEntry {
-                name: "htop".into(),
-                command: Some("htop".into()),
-                description: "Process viewer".into(),
-                section: TabPickerSection::Tools,
-                shell: Some("/bin/zsh".into()),
-            },
-            TabPickerEntry {
-                name: "cargo build".into(),
-                command: Some("cargo build".into()),
-                description: "From history".into(),
-                section: TabPickerSection::Recent,
-                shell: Some("/bin/zsh".into()),
-            },
-            TabPickerEntry {
-                name: "git status".into(),
-                command: Some("git status".into()),
-                description: "From history".into(),
-                section: TabPickerSection::Recent,
-                shell: Some("/bin/zsh".into()),
+                favorite: false,
             },
         ];
         let filtered: Vec<usize> = (0..entries.len()).collect();
@@ -966,39 +1099,77 @@ mod tests {
             entries,
             mode: TabPickerMode::NewTab,
             filtered,
+            created_at: Instant::now(),
+        };
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn test_non_shell_entries_have_shell_wrapping() {
+        let state = TabPickerState::new(&[], &[], &empty_favorites());
+        for entry in &state.entries {
+            if entry.section != TabPickerSection::Shells && entry.command.is_some() {
+                assert!(entry.shell.is_some(), "'{}' should have shell wrapping", entry.name);
+            }
+        }
+    }
+
+    #[test]
+    fn test_hit_test_across_sections() {
+        let entries = vec![
+            TabPickerEntry {
+                name: "Shell".into(),
+                command: None,
+                description: "Default".into(),
+                section: TabPickerSection::Shells,
+                shell: None,
+                favorite: false,
+            },
+            TabPickerEntry {
+                name: "htop".into(),
+                command: Some("htop".into()),
+                description: "Process viewer".into(),
+                section: TabPickerSection::System,
+                shell: Some("/bin/zsh".into()),
+                favorite: false,
+            },
+            TabPickerEntry {
+                name: "k9s".into(),
+                command: Some("k9s".into()),
+                description: "Kubernetes TUI".into(),
+                section: TabPickerSection::Cluster,
+                shell: Some("/bin/zsh".into()),
+                favorite: false,
+            },
+        ];
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        let state = TabPickerState {
+            input: String::new(),
+            selected: 0,
+            entries,
+            mode: TabPickerMode::NewTab,
+            filtered,
+            created_at: Instant::now(),
         };
 
-        // Use an area large enough that the popup fits
         let area = Rect::new(0, 0, 80, 30);
         let popup = compute_popup_area(area);
         let inner = crate::ui::dialog::inner_rect(popup);
-
-        // List starts at inner.y + 2 (input + separator)
         let list_y = inner.y + 2;
 
         // With sections visible and no scroll, layout is:
         // row 0: Shells header
         // row 1: Shell
-        // row 2: Tools header
+        // row 2: System Management header
         // row 3: htop
-        // row 4: Recent header
-        // row 5: cargo build (item_idx=2)
-        // row 6: git status (item_idx=3)
+        // row 4: Cluster Management header
+        // row 5: k9s (item_idx=2)
 
-        // Click on "cargo build" (row 5)
         let click = hit_test(&state, area, inner.x + 5, list_y + 5);
         assert_eq!(
             click.as_ref().map(|c| match c { TabPickerClick::Item(i) => *i }),
             Some(2),
-            "clicking on 'cargo build' should return item index 2"
-        );
-
-        // Click on "git status" (row 6)
-        let click = hit_test(&state, area, inner.x + 5, list_y + 6);
-        assert_eq!(
-            click.as_ref().map(|c| match c { TabPickerClick::Item(i) => *i }),
-            Some(3),
-            "clicking on 'git status' should return item index 3"
+            "clicking on 'k9s' should return item index 2"
         );
 
         // Verify the command for item 2
@@ -1008,11 +1179,23 @@ mod tests {
             entries: state.entries.clone(),
             mode: TabPickerMode::NewTab,
             filtered: state.filtered.clone(),
+            created_at: Instant::now(),
         };
         let cmd = state_with_selection.selected_command();
-        assert!(cmd.is_some(), "Recent item should produce a command");
+        assert!(cmd.is_some());
         let cmd = cmd.unwrap();
-        assert!(cmd.contains("cargo build"), "command should contain the history entry, got: {}", cmd);
+        assert!(cmd.contains("k9s"), "command should contain k9s, got: {}", cmd);
+    }
+
+    #[test]
+    fn test_from_category_parser() {
+        assert_eq!(TabPickerSection::from_category("shells"), TabPickerSection::Shells);
+        assert_eq!(TabPickerSection::from_category("Editors"), TabPickerSection::Editors);
+        assert_eq!(TabPickerSection::from_category("AGENTS"), TabPickerSection::Agents);
+        assert_eq!(TabPickerSection::from_category("repls"), TabPickerSection::Repls);
+        assert_eq!(TabPickerSection::from_category("system"), TabPickerSection::System);
+        assert_eq!(TabPickerSection::from_category("cluster"), TabPickerSection::Cluster);
+        assert_eq!(TabPickerSection::from_category("something"), TabPickerSection::Other);
     }
 }
 
@@ -1031,13 +1214,19 @@ pub fn render(state: &TabPickerState, theme: &Theme, hover: Option<(u16, u16)>, 
         return;
     }
 
-    // Filter input
+    // Filter input with animated placeholder
     let input_area = Rect::new(inner.x, inner.y, inner.width, 1);
-    dialog::render_filter_input_placeholder(frame, input_area, &state.input, Some("command"), theme);
+    let placeholder = state.animated_placeholder();
+    let ph = if placeholder.is_empty() { None } else { Some(placeholder.as_str()) };
+    dialog::render_filter_input_placeholder(frame, input_area, &state.input, ph, theme);
 
-    // Separator
-    let sep_area = Rect::new(inner.x, inner.y + 1, inner.width, 1);
-    dialog::render_separator(frame, sep_area);
+    // Junction separator: ├───┤ connecting to the left/right borders
+    let sep_y = inner.y + 1;
+    let border_style = Style::default().fg(theme.accent);
+    let inner_width = popup_area.width.saturating_sub(2) as usize;
+    let sep_str = format!("├{}┤", "─".repeat(inner_width));
+    let buf = frame.buffer_mut();
+    buf.set_string(popup_area.x, sep_y, &sep_str, border_style);
 
     // Build list items with section info
     let filtered = state.filtered_entries();
@@ -1082,14 +1271,19 @@ pub fn render(state: &TabPickerState, theme: &Theme, hover: Option<(u16, u16)>, 
         .collect();
 
     for (idx, (_, entry)) in filtered.iter().enumerate() {
+        let section_label = if show_sections {
+            if entry.favorite {
+                Some("★ Favorites")
+            } else {
+                Some(entry.section.label())
+            }
+        } else {
+            None
+        };
         items.push(dialog::ListItem {
             label: &entry.name,
             description: &entry.description,
-            section: if show_sections {
-                Some(entry.section.label())
-            } else {
-                None
-            },
+            section: section_label,
             hint: hints[idx].as_deref(),
         });
     }

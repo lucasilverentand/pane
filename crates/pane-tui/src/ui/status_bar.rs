@@ -23,7 +23,9 @@ fn format_leader_key(key: &crossterm::event::KeyEvent) -> String {
 
 /// Render the status bar for a daemon-connected client.
 pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Rect) {
-    let (left, right) = match &client.mode {
+    let (left, right) = if client.hub_active && client.mode != Mode::Palette && client.mode != Mode::Confirm {
+        (" Hub".to_string(), "type to search  enter open  esc back ".to_string())
+    } else { match &client.mode {
         Mode::Normal => {
             let vars = build_client_vars(client);
             let left = format_string(&client.config.status_bar.left, &vars);
@@ -97,6 +99,10 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
             String::new(),
             "j/k navigate  enter select  esc cancel ".to_string(),
         ),
+        Mode::ProjectHub => (
+            String::new(),
+            "type to search  enter open  esc cancel ".to_string(),
+        ),
         Mode::Resize => {
             let selected = client.resize_state.as_ref().and_then(|rs| rs.selected);
             match selected {
@@ -121,7 +127,7 @@ pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Re
                 }
             }
         }
-    };
+    } };
 
     // Build plugin segment string
     let plugin_text: String = client
