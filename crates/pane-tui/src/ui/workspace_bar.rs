@@ -13,15 +13,12 @@ pub const HEIGHT: u16 = 3;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceBarClick {
     Tab(usize),
-    NewWorkspace,
 }
 
 struct TabLayout {
     /// (start_x, end_x) for each tab's full span (inclusive of padding).
     /// Hidden tabs have (0, 0).
     tab_ranges: Vec<(u16, u16)>,
-    /// (start_x, end_x) for the + button
-    plus_range: Option<(u16, u16)>,
     /// Number of tabs hidden to the left (before the visible window).
     hidden_left: usize,
     /// Number of tabs hidden to the right (after the visible window).
@@ -62,22 +59,14 @@ fn truncate_name(name: &str, max: usize) -> String {
 }
 
 const SEP_WIDTH: u16 = 3; // " · "
-const PLUS_RESERVE: u16 = 3; // " + "
 const INDICATOR_WIDTH: u16 = 2; // "◂ " or " ▸"
 
 fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
     let n = names.len();
-    let max_x = area.x + area.width;
 
     if n == 0 {
-        let plus_range = if PLUS_RESERVE <= area.width {
-            Some((max_x - PLUS_RESERVE, max_x))
-        } else {
-            None
-        };
         return TabLayout {
             tab_ranges: vec![],
-            plus_range,
             hidden_left: 0,
             hidden_right: 0,
         };
@@ -95,8 +84,7 @@ fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
             SEP_WIDTH * (n as u16 - 1)
         } else {
             0
-        }
-        + PLUS_RESERVE;
+        };
 
     if total <= area.width {
         // Everything fits — lay out left-to-right
@@ -109,10 +97,8 @@ fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
             tab_ranges.push((cursor_x, cursor_x + w));
             cursor_x += w;
         }
-        let plus_range = Some((max_x - PLUS_RESERVE, max_x));
         return TabLayout {
             tab_ranges,
-            plus_range,
             hidden_left: 0,
             hidden_right: 0,
         };
@@ -134,7 +120,7 @@ fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
         if hi < n - 1 {
             w += INDICATOR_WIDTH;
         }
-        w + PLUS_RESERVE
+        w
     };
 
     let mut lo = active;
@@ -172,15 +158,8 @@ fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
         cursor_x += label_widths[i];
     }
 
-    let plus_range = if PLUS_RESERVE <= area.width {
-        Some((max_x - PLUS_RESERVE, max_x))
-    } else {
-        None
-    };
-
     TabLayout {
         tab_ranges,
-        plus_range,
         hidden_left,
         hidden_right,
     }
@@ -213,12 +192,10 @@ pub fn render(
 
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut first_visible = true;
-    let mut content_end = tab_area.x;
 
     // Left overflow indicator
     if layout.hidden_left > 0 {
         spans.push(Span::styled("\u{25C2} ", Style::default().fg(theme.dim)));
-        content_end = tab_area.x + INDICATOR_WIDTH;
     }
 
     for (i, name) in workspace_names.iter().enumerate() {
@@ -252,28 +229,12 @@ pub fn render(
         };
 
         spans.push(Span::styled(label, style));
-        content_end = end;
+        let _ = end;
     }
 
     // Right overflow indicator
     if layout.hidden_right > 0 {
         spans.push(Span::styled(" \u{25B8}", Style::default().fg(theme.dim)));
-        content_end += INDICATOR_WIDTH;
-    }
-
-    // Right-align the + button with padding
-    if let Some((plus_start, _)) = layout.plus_range {
-        let gap = plus_start.saturating_sub(content_end);
-        if gap > 0 {
-            spans.push(Span::raw(" ".repeat(gap as usize)));
-        }
-        let plus_hovered = matches!(hovered, Some(WorkspaceBarClick::NewWorkspace));
-        let plus_style = if plus_hovered {
-            Style::default().fg(theme.fg)
-        } else {
-            Style::default().fg(theme.accent)
-        };
-        spans.push(Span::styled(" + ", plus_style));
     }
 
     let line = Line::from(spans);
@@ -301,13 +262,6 @@ pub fn hit_test(
     }
 
     let layout = compute_layout(workspace_names, active_idx, tab_area);
-
-    // Check + button first
-    if let Some((start, end)) = layout.plus_range {
-        if x >= start && x < end {
-            return Some(WorkspaceBarClick::NewWorkspace);
-        }
-    }
 
     // Check tab bodies
     for (i, (start, end)) in layout.tab_ranges.iter().enumerate() {
@@ -349,17 +303,6 @@ mod tests {
     }
 
     #[test]
-    fn test_hit_test_plus_button() {
-        let ws: Vec<&str> = vec!["a"];
-        let area = Rect::new(0, 0, 80, 1);
-        let padded = padded_tab_area(area);
-        let layout = compute_layout(&ws, 0, padded);
-        let (plus_start, _) = layout.plus_range.unwrap();
-        let click = hit_test(&ws, 0, area, plus_start, area.y);
-        assert_eq!(click, Some(WorkspaceBarClick::NewWorkspace));
-    }
-
-    #[test]
     fn test_hit_test_outside() {
         let ws: Vec<&str> = vec!["a"];
         let area = Rect::new(0, 0, 80, 1);
@@ -386,15 +329,6 @@ mod tests {
         let result = truncate_name(long, 20);
         assert_eq!(result.len(), 20);
         assert!(result.ends_with("..."));
-    }
-
-    #[test]
-    fn test_plus_button_present() {
-        let ws = vec!["a"];
-        let area = Rect::new(0, 0, 80, 1);
-        let padded = padded_tab_area(area);
-        let layout = compute_layout(&ws, 0, padded);
-        assert!(layout.plus_range.is_some());
     }
 
     #[test]
@@ -525,7 +459,6 @@ mod tests {
         let (start, end) = layout.tab_ranges[0];
         assert_eq!(start, 1);
         assert_eq!(end, 3);
-        assert!(layout.plus_range.is_some());
     }
 
     #[test]
@@ -549,7 +482,6 @@ mod tests {
         let padded = padded_tab_area(area);
         let layout = compute_layout(&ws, 0, padded);
         assert!(layout.tab_ranges.is_empty());
-        assert!(layout.plus_range.is_some());
     }
 
     #[test]
@@ -698,18 +630,6 @@ mod tests {
     fn test_truncate_single_char_name() {
         assert_eq!(truncate_name("x", 20), "x");
         assert_eq!(truncate_name("x", 1), "x");
-    }
-
-    #[test]
-    fn test_plus_button_very_narrow() {
-        let ws = vec!["workspace"];
-        let area = Rect::new(0, 0, 6, 1);
-        let padded = padded_tab_area(area);
-        let layout = compute_layout(&ws, 0, padded);
-        if let Some((start, end)) = layout.plus_range {
-            assert!(end <= padded.x + padded.width);
-            assert!(start < end);
-        }
     }
 
     #[test]

@@ -1696,18 +1696,6 @@ impl Client {
                                     )
                                     .await;
                                 }
-                                crate::ui::workspace_bar::WorkspaceBarClick::NewWorkspace => {
-                                    let home = std::env::var("HOME")
-                                        .map(std::path::PathBuf::from)
-                                        .unwrap_or_else(|_| std::path::PathBuf::from("/"));
-                                    self.new_workspace_input = Some(NewWorkspaceInputState {
-                                        stage: NewWorkspaceStage::Directory,
-                                        name: String::new(),
-                                        browser: DirBrowser::new(home),
-                                        last_click: None,
-                                    });
-                                    self.mode = Mode::NewWorkspaceInput;
-                                }
                             }
                             return Ok(());
                         }

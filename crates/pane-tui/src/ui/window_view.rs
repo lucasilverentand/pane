@@ -169,6 +169,15 @@ pub fn render_group_from_snapshot(
 ) {
     let theme = &config.theme;
 
+    // Widget tabs: skip window chrome, render widget directly with its own borders
+    let active_tab = group.tabs.get(group.active_tab);
+    if let Some(TabKind::Widget(ref w)) = active_tab.map(|t| &t.kind) {
+        if let Some(hub) = hub_state {
+            super::project_hub::render_single_widget(hub, w, theme, frame, area);
+        }
+        return;
+    }
+
     // Check if the active pane's foreground process has a decoration
     let decoration_color = group
         .tabs
@@ -243,13 +252,7 @@ pub fn render_group_from_snapshot(
     let content_area = areas[2];
     let search_area = areas.get(3).copied();
 
-    // Content: widget tabs render via project_hub, terminal tabs render via vt100
-    let active_tab = group.tabs.get(group.active_tab);
-    if let Some(TabKind::Widget(ref w)) = active_tab.map(|t| &t.kind) {
-        if let Some(hub) = hub_state {
-            super::project_hub::render_single_widget(hub, w, theme, frame, content_area);
-        }
-    } else if let Some(screen) = screen {
+    if let Some(screen) = screen {
         render_content(screen, cms, frame, content_area);
     }
 
@@ -333,12 +336,9 @@ fn render_tab_bar_from_snapshot(
 ) {
     const SEP: &str = " \u{B7} ";
     const SEP_WIDTH: u16 = 3;
-    const PLUS_TEXT: &str = " + ";
-    const PLUS_RESERVE: u16 = 3;
     const INDICATOR_WIDTH: u16 = 2; // "◂ " or " ▸"
 
     let n = group.tabs.len();
-    let max_x = area.x + area.width;
 
     // Check if hover is on the tab bar row
     let hover_x = hover.and_then(|(hx, hy)| if hy == area.y { Some(hx) } else { None });
@@ -352,8 +352,7 @@ fn render_tab_bar_from_snapshot(
 
     // Check if everything fits
     let total: u16 = label_widths.iter().sum::<u16>()
-        + if n > 1 { SEP_WIDTH * (n as u16 - 1) } else { 0 }
-        + PLUS_RESERVE;
+        + if n > 1 { SEP_WIDTH * (n as u16 - 1) } else { 0 };
 
     let (lo, hi, hidden_left, hidden_right) = if n == 0 || total <= area.width {
         (0, n.saturating_sub(1), 0usize, 0usize)
@@ -374,7 +373,7 @@ fn render_tab_bar_from_snapshot(
             if hi < n - 1 {
                 w += INDICATOR_WIDTH;
             }
-            w + PLUS_RESERVE
+            w
         };
 
         let mut lo = active;
@@ -411,12 +410,6 @@ fn render_tab_bar_from_snapshot(
             cursor_x += label_widths[i];
         }
     }
-
-    let plus_start = if PLUS_RESERVE <= max_x.saturating_sub(area.x) {
-        Some(max_x - PLUS_RESERVE)
-    } else {
-        None
-    };
 
     // Build spans
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -470,18 +463,6 @@ fn render_tab_bar_from_snapshot(
     let line = Line::from(spans);
     let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);
-
-    // Render + button directly to buffer at a fixed position so it never shifts
-    if let Some(ps) = plus_start {
-        let plus_hovered = hover_x.is_some_and(|hx| hx >= ps && hx < ps + PLUS_RESERVE);
-        let plus_style = if plus_hovered {
-            Style::default().fg(theme.fg)
-        } else {
-            Style::default().fg(theme.dim)
-        };
-        let buf = frame.buffer_mut();
-        buf.set_string(ps, area.y, PLUS_TEXT, plus_style);
-    }
 }
 
 /// Render a fold indicator line with 1-cell padding on each side.
