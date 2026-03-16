@@ -65,8 +65,6 @@ pub struct Client {
     pub rename_target: RenameTarget,
     pub new_workspace_input: Option<NewWorkspaceInputState>,
     pub project_hub_state: Option<ProjectHubState>,
-    /// When true, the project hub is shown as the first "workspace" in the bar.
-    pub hub_active: bool,
     /// Channel for sending async events (e.g. git info ready) back to the event loop.
     event_tx: Option<tokio::sync::mpsc::UnboundedSender<ServerEvent>>,
 }
@@ -498,6 +496,7 @@ impl GitCacheEntry {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_refreshing(&self) -> bool {
         matches!(self, GitCacheEntry::Loading | GitCacheEntry::Refreshing(_))
     }
@@ -656,6 +655,7 @@ impl ProjectHubState {
 
     /// Returns true if the selected project's data is being refreshed
     /// (stale cache shown, or fast phase shown while slow phase loads).
+    #[allow(dead_code)]
     pub fn is_refreshing_git_info(&self) -> bool {
         self.filtered
             .get(self.selected)
@@ -1206,9 +1206,16 @@ impl Client {
             rename_target: RenameTarget::Window,
             new_workspace_input: None,
             project_hub_state: None,
-            hub_active: true,
             event_tx: None,
         }
+    }
+
+    /// Returns true if the active workspace is the home workspace.
+    pub fn is_home_active(&self) -> bool {
+        self.render_state
+            .workspaces
+            .get(self.render_state.active_workspace)
+            .is_some_and(|ws| ws.is_home)
     }
 
     /// Connect to a daemon and run the TUI event loop.
@@ -1272,7 +1279,7 @@ impl Client {
         // Initialize the project hub (needs event_tx for async git info fetching)
         client.event_tx = Some(event_tx.clone());
         client.project_hub_state = Some(ProjectHubState::new(&client.config, event_tx.clone()));
-        client.hub_active = true;
+        // Home workspace is always at index 0 in render_state.workspaces
 
         // Start terminal event reader — bridge AppEvent → ServerEvent
         let (app_tx, mut app_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1393,7 +1400,7 @@ impl Client {
 
         // Show hub when no workspaces exist
         if self.render_state.workspaces.is_empty() {
-            self.hub_active = true;
+            self.render_state.active_workspace = 0;
         }
     }
 
@@ -1653,7 +1660,7 @@ impl Client {
                     || self.mode == Mode::Interact
                 {
                     // Check workspace bar clicks (client-side)
-                    let show_workspace_bar = self.hub_active || !self.render_state.workspaces.is_empty();
+                    let show_workspace_bar = self.is_home_active() || !self.render_state.workspaces.is_empty();
                     if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
                         let names: Vec<String> = self.render_state
                             .workspaces
@@ -1674,14 +1681,12 @@ impl Client {
                             self.workspace_bar_focused = true;
                             match click {
                                 crate::ui::workspace_bar::WorkspaceBarClick::Home => {
-                                    self.hub_active = true;
+                                    self.render_state.active_workspace = 0;
                                     if self.project_hub_state.is_none() {
                                         self.project_hub_state = Some(ProjectHubState::new(&self.config, self.event_tx.as_ref().unwrap().clone()));
                                     }
                                 }
                                 crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
-                                    self.hub_active = false;
-
                                     self.render_state.active_workspace = i;
                                     let mut w = writer.lock().await;
                                     let _ = send_request(
@@ -1711,7 +1716,7 @@ impl Client {
                     }
 
                     // Hub sidebar click handling
-                    if self.hub_active {
+                    if self.is_home_active() {
                         let body = crate::ui::body_rect(self, tui.size()?);
                         if let Some(ref mut hub) = self.project_hub_state {
                             // Check GitHub button clicks first
@@ -1780,7 +1785,7 @@ impl Client {
                 let _ = send_request(&mut w, &ClientRequest::MouseUp { x, y }).await;
             }
             AppEvent::MouseScroll { up } => {
-                if self.hub_active {
+                if self.is_home_active() {
                     if let Some(ref mut hub) = self.project_hub_state {
                         if up { hub.move_up(); } else { hub.move_down(); }
                     }
@@ -1806,7 +1811,7 @@ impl Client {
             }
             AppEvent::MouseRightDown { x, y } => {
                 if self.mode == Mode::Normal || self.mode == Mode::Interact {
-                    let show_workspace_bar = self.hub_active || !self.render_state.workspaces.is_empty();
+                    let show_workspace_bar = self.is_home_active() || !self.render_state.workspaces.is_empty();
 
                     if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
                         // Right-click on workspace bar — select the clicked workspace first
@@ -1828,12 +1833,10 @@ impl Client {
                         ) {
                             Some(crate::ui::workspace_bar::WorkspaceBarClick::Home) => {
                                 // Right-click on Home — just select it, don't show close menu
-                                self.hub_active = true;
+                                self.render_state.active_workspace = 0;
                                 return Ok(());
                             }
                             Some(crate::ui::workspace_bar::WorkspaceBarClick::Tab(i)) => {
-                                self.hub_active = false;
-
                                 self.render_state.active_workspace = i;
                                 let mut w = writer.lock().await;
                                 let _ = send_request(
@@ -1884,7 +1887,7 @@ impl Client {
         writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     ) -> Result<()> {
         // Hub workspace: handle keys when hub is active (regardless of mode)
-        if self.hub_active && self.mode != Mode::Palette && self.mode != Mode::Confirm
+        if self.is_home_active() && self.mode != Mode::Palette && self.mode != Mode::Confirm
             && self.mode != Mode::Rename && self.mode != Mode::ContextMenu
             && self.mode != Mode::Leader && self.mode != Mode::NewWorkspaceInput
         {
@@ -2008,7 +2011,7 @@ impl Client {
         if self.workspace_bar_focused {
             match &action {
                 Action::FocusLeft => {
-                    if self.hub_active {
+                    if self.is_home_active() {
                         // Already at leftmost (Hub)
                     } else {
                         let idx = self.render_state.active_workspace;
@@ -2022,7 +2025,7 @@ impl Client {
                             .await;
                         } else {
                             // At first daemon workspace, go to hub
-                            self.hub_active = true;
+                            self.render_state.active_workspace = 0;
                             if self.project_hub_state.is_none() {
                                 self.project_hub_state = Some(ProjectHubState::new(&self.config, self.event_tx.as_ref().unwrap().clone()));
                             }
@@ -2031,16 +2034,14 @@ impl Client {
                     return Ok(());
                 }
                 Action::FocusRight => {
-                    if self.hub_active {
-                        // From hub, go to first daemon workspace if exists
-                        if !self.render_state.workspaces.is_empty() {
-                            self.hub_active = false;
-
-                            self.render_state.active_workspace = 0;
+                    if self.is_home_active() {
+                        // From hub, go to first non-home workspace if exists
+                        if self.render_state.workspaces.len() > 1 {
+                            self.render_state.active_workspace = 1;
                             let mut w = writer.lock().await;
                             let _ = send_request(
                                 &mut w,
-                                &ClientRequest::Command("select-workspace -t 0".to_string()),
+                                &ClientRequest::Command("select-workspace -t 1".to_string()),
                             )
                             .await;
                         }
@@ -2063,7 +2064,7 @@ impl Client {
                     return Ok(());
                 }
                 Action::CloseTab => {
-                    if self.hub_active {
+                    if self.is_home_active() {
                         // Can't close the hub workspace
                         return Ok(());
                     }
@@ -2217,7 +2218,7 @@ impl Client {
                 return Ok(());
             }
             Action::ProjectHub => {
-                self.hub_active = true;
+                self.render_state.active_workspace = 0;
                 self.workspace_bar_focused = false;
                 if self.project_hub_state.is_none() {
                     self.project_hub_state = Some(ProjectHubState::new(&self.config, self.event_tx.as_ref().unwrap().clone()));
@@ -2568,7 +2569,6 @@ impl Client {
             .iter()
             .position(|ws| ws.cwd == dir);
 
-        self.hub_active = false;
         if let Some(idx) = existing {
             self.render_state.active_workspace = idx;
             let mut w = writer.lock().await;
@@ -2601,9 +2601,9 @@ impl Client {
 
         match key.code {
             KeyCode::Esc => {
-                // Switch to first real workspace if one exists
-                if !self.render_state.workspaces.is_empty() {
-                    self.hub_active = false;
+                // Switch to first non-home workspace if one exists
+                if self.render_state.workspaces.len() > 1 {
+                    self.render_state.active_workspace = 1;
                 }
             }
             KeyCode::Up => {
@@ -2616,6 +2616,36 @@ impl Client {
                 if let Some(project) = state.selected_project().cloned() {
                     let dir = project.path.to_string_lossy().to_string();
                     self.open_project(&dir, writer).await?;
+                }
+            }
+            KeyCode::Char(c) if state.input.is_empty() => {
+                match c {
+                    'q' => {
+                        self.should_quit = true;
+                    }
+                    ':' => {
+                        self.palette_state = Some(UnifiedPaletteState::new_full_search(&self.config.keys, &self.config.leader));
+                        self.mode = Mode::Palette;
+                    }
+                    'n' => {
+                        let home = std::env::var("HOME")
+                            .map(std::path::PathBuf::from)
+                            .unwrap_or_else(|_| std::path::PathBuf::from("/"));
+                        self.new_workspace_input = Some(NewWorkspaceInputState {
+                            stage: NewWorkspaceStage::Directory,
+                            name: String::new(),
+                            browser: DirBrowser::new(home),
+                            last_click: None,
+                        });
+                        self.mode = Mode::NewWorkspaceInput;
+                    }
+                    '/' => {
+                        // Focus search — just start typing
+                    }
+                    _ => {
+                        state.input.push(c);
+                        state.update_filter();
+                    }
                 }
             }
             KeyCode::Char(c) => {

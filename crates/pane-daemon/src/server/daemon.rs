@@ -1797,25 +1797,36 @@ mod tests {
 
         attach_and_consume_initial(&mut client).await;
 
-        // First list-panes to register %0 in the IdMap
+        // First list-panes to register pane IDs in the IdMap
         framing::send(
             &mut client,
             &ClientRequest::Command("list-panes".to_string()),
         )
         .await
         .unwrap();
-        let _resp: ServerResponse = tokio::time::timeout(
+        let resp: ServerResponse = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             framing::recv_required(&mut client),
         )
         .await
         .unwrap()
         .unwrap();
+        // Find the shell pane number from list-panes output
+        let shell_pane_id = match &resp {
+            ServerResponse::CommandOutput { output, .. } => {
+                output.lines()
+                    .find(|l| l.contains("[shell]"))
+                    .and_then(|l| l.split(':').next())
+                    .unwrap_or("%0")
+                    .to_string()
+            }
+            _ => "%0".to_string(),
+        };
 
-        // Now select-pane with -T to set a title
+        // Now select-pane with -T to set a title on the shell pane
         framing::send(
             &mut client,
-            &ClientRequest::Command("select-pane -t %0 -T my-title".to_string()),
+            &ClientRequest::Command(format!("select-pane -t {} -T my-title", shell_pane_id)),
         )
         .await
         .unwrap();

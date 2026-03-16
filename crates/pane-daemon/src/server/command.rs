@@ -2,11 +2,12 @@
 use anyhow::{bail, Result};
 use tokio::sync::broadcast;
 
+use pane_protocol::config::HubWidget;
 use pane_protocol::layout::{SplitDirection, TabId};
 use crate::server::id_map::IdMap;
 use pane_protocol::protocol::ServerResponse;
 use crate::server::state::{ServerState, render_state_from_server};
-use crate::window::{TabKind, WindowId};
+use crate::window::{Tab, TabKind, WindowId};
 
 /// How to size a new split.
 #[derive(Clone, Debug, PartialEq)]
@@ -120,6 +121,10 @@ pub enum Command {
 
     // Client commands
     DetachClient,
+
+    // Widget commands (home workspace)
+    AddWidget { widget: String },
+    SetWidget { widget: String },
 
     // Misc commands
     DisplayMessage {
@@ -419,7 +424,11 @@ pub fn execute(
         }
 
         Command::SelectPane { target, title } => {
-            let group_id = resolve_pane_to_group(target, state, id_map)?;
+            let (group_id, pane_id) = resolve_pane_target(Some(target), state, id_map)?;
+            // Switch to the workspace containing this pane
+            if let Some((ws_idx, _)) = state.find_tab_location(pane_id) {
+                state.active_workspace = ws_idx;
+            }
             state.active_workspace_mut().active_group = group_id;
             if let Some(t) = title {
                 let ws = state.active_workspace_mut();
@@ -770,6 +779,38 @@ pub fn execute(
 
         Command::DetachClient => Ok(CommandResult::DetachRequested),
 
+        Command::AddWidget { widget } => {
+            let hw = HubWidget::from_str(widget)
+                .ok_or_else(|| anyhow::anyhow!("unknown widget: {}", widget))?;
+            if !state.active_workspace().is_home {
+                bail!("add-widget only works in the home workspace");
+            }
+            let tab = Tab::new_widget(TabId::new_v4(), hw);
+            let ws = state.active_workspace_mut();
+            if let Some(group) = ws.groups.get_mut(&ws.active_group) {
+                group.add_tab(tab);
+            }
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::SetWidget { widget } => {
+            let hw = HubWidget::from_str(widget)
+                .ok_or_else(|| anyhow::anyhow!("unknown widget: {}", widget))?;
+            if !state.active_workspace().is_home {
+                bail!("set-widget only works in the home workspace");
+            }
+            let ws = state.active_workspace_mut();
+            let active_group_id = ws.active_group;
+            if let Some(group) = ws.groups.get_mut(&active_group_id) {
+                let tab = group.active_tab_mut();
+                tab.kind = TabKind::Widget(hw.clone());
+                tab.title = hw.label().to_string();
+            }
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::LayoutChanged)
+        }
+
         Command::DisplayMessage { message, .. } => {
             // When to_stdout is true, the shim will print this.
             // Here we just expand format variables in the message.
@@ -801,9 +842,12 @@ pub fn execute(
 }
 
 /// Broadcast a layout update to all connected clients.
+/// Also saves the home workspace layout if the home workspace was modified.
 fn broadcast_layout(state: &ServerState, broadcast_tx: &broadcast::Sender<ServerResponse>) {
     let render_state = render_state_from_server(state);
     let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
+    // Persist home layout after any layout change
+    state.save_home_layout();
 }
 
 /// Resolve a window target to a WindowId.
@@ -1036,6 +1080,7 @@ mod tests {
             zoomed_window: None,
             saved_ratios: None,
             floating_windows: Vec::new(),
+            is_home: false,
         };
         let state = ServerState {
             workspaces: vec![workspace],

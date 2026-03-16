@@ -8,6 +8,8 @@ use ratatui::{
 
 use pane_protocol::app::Mode;
 use pane_protocol::config::{Config, Theme};
+use pane_protocol::window_types::TabKind;
+use crate::client::ProjectHubState;
 use crate::copy_mode::CopyModeState;
 use pane_protocol::layout::SplitDirection;
 use crate::window::terminal::{render_screen, render_screen_copy_mode};
@@ -151,6 +153,7 @@ fn render_search_bar(cms: &CopyModeState, theme: &Theme, frame: &mut Frame, area
 
 /// Render a pane group from a snapshot (used by the client).
 /// Receives the active tab's vt100 screen directly instead of accessing the Pane struct.
+/// For widget tabs, pass `hub_state` to render widget content instead of terminal content.
 #[allow(clippy::too_many_arguments)]
 pub fn render_group_from_snapshot(
     group: &pane_protocol::protocol::WindowSnapshot,
@@ -160,6 +163,7 @@ pub fn render_group_from_snapshot(
     copy_mode_state: Option<&CopyModeState>,
     config: &Config,
     hover: Option<(u16, u16)>,
+    hub_state: Option<&ProjectHubState>,
     frame: &mut Frame,
     area: Rect,
 ) {
@@ -239,8 +243,13 @@ pub fn render_group_from_snapshot(
     let content_area = areas[2];
     let search_area = areas.get(3).copied();
 
-    // Content
-    if let Some(screen) = screen {
+    // Content: widget tabs render via project_hub, terminal tabs render via vt100
+    let active_tab = group.tabs.get(group.active_tab);
+    if let Some(TabKind::Widget(ref w)) = active_tab.map(|t| &t.kind) {
+        if let Some(hub) = hub_state {
+            super::project_hub::render_single_widget(hub, w, theme, frame, content_area);
+        }
+    } else if let Some(screen) = screen {
         render_content(screen, cms, frame, content_area);
     }
 

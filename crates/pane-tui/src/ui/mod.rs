@@ -1,5 +1,6 @@
 pub mod context_menu;
 pub mod dialog;
+#[allow(dead_code)]
 pub mod format;
 pub mod layout_render;
 pub mod palette;
@@ -19,8 +20,8 @@ use crate::client::Client;
 pub fn render_client(client: &mut Client, frame: &mut Frame) {
     let theme = &client.config.theme;
 
-    // Workspace bar shows when hub is active OR daemon workspaces exist
-    let show_workspace_bar = client.hub_active || !client.render_state.workspaces.is_empty();
+    // Workspace bar always shows (home workspace always exists)
+    let show_workspace_bar = !client.render_state.workspaces.is_empty();
 
     let (header, body, footer) = if show_workspace_bar {
         let [h, b, f] = Layout::vertical([
@@ -36,7 +37,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
         (None, b, f)
     };
 
-    // Workspace bar with separate Home button
+    // Workspace bar
     if let Some(header) = header {
         let names: Vec<String> = client
             .render_state
@@ -46,12 +47,13 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
             .collect();
         let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
         let active_idx = client.render_state.active_workspace;
+        let is_home = client.is_home_active();
         workspace_bar::render(
             &name_refs,
             active_idx,
             theme,
             client.workspace_bar_focused,
-            client.hub_active,
+            is_home,
             client.hover,
             frame,
             header,
@@ -61,12 +63,15 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
     // Status bar
     status_bar::render_client(client, theme, frame, footer);
 
-    // When hub is active, render project hub body instead of terminal panes
-    if client.hub_active {
-        if let Some(ref mut hub_state) = client.project_hub_state {
-            project_hub::render_body(hub_state, theme, &client.config.behavior.hub_layout, client.hover, frame, body);
-        }
-    } else if let Some(ws) = client.active_workspace() {
+    // Determine if the active workspace is the home workspace
+    let is_home = client.is_home_active();
+    let hub_state_ref = if is_home {
+        client.project_hub_state.as_ref()
+    } else {
+        None
+    };
+
+    if let Some(ws) = client.active_workspace() {
         let copy_mode_state = if client.mode == Mode::Copy {
             client.copy_mode_state.as_ref()
         } else {
@@ -74,9 +79,27 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
         };
         let ws_bar_focused = client.workspace_bar_focused;
 
+        // For home workspace: split body into sidebar + layout area
+        let layout_body = if is_home {
+            let sidebar_width = (body.width / 4)
+                .clamp(28, 40)
+                .min(body.width);
+            let [left, right] = Layout::horizontal([
+                Constraint::Length(sidebar_width),
+                Constraint::Fill(1),
+            ])
+            .areas(body);
+
+            if let Some(ref hub) = client.project_hub_state {
+                project_hub::render_sidebar_only(hub, theme, client.hover, frame, left);
+            }
+            right
+        } else {
+            body
+        };
+
         // Check for zoom mode
         if let Some(zoomed_id) = ws.zoomed_window {
-            // Render only the zoomed window filling the body
             if let Some(group) = ws.groups.iter().find(|g| g.id == zoomed_id) {
                 let pane = group.tabs.get(group.active_tab);
                 let screen = pane.and_then(|p| client.pane_screen(p.id));
@@ -88,19 +111,19 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                     copy_mode_state,
                     &client.config,
                     client.hover,
+                    hub_state_ref,
                     frame,
-                    body,
+                    layout_body,
                 );
 
-                // Cursor for zoomed window
                 if !ws_bar_focused && (client.mode == Mode::Interact || client.mode == Mode::Normal) {
                     if let Some(pane) = group.tabs.get(group.active_tab) {
                         if let Some(screen) = client.pane_screen(pane.id) {
                             if !screen.hide_cursor() {
                                 let (vt_row, vt_col) = screen.cursor_position();
-                                let cursor_x = body.x + 2 + vt_col;
-                                let cursor_y = body.y + 3 + vt_row;
-                                if cursor_x < body.x + body.width && cursor_y < body.y + body.height
+                                let cursor_x = layout_body.x + 2 + vt_col;
+                                let cursor_y = layout_body.y + 3 + vt_row;
+                                if cursor_x < layout_body.x + layout_body.width && cursor_y < layout_body.y + layout_body.height
                                 {
                                     frame.set_cursor_position(ratatui::layout::Position {
                                         x: cursor_x,
@@ -115,7 +138,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
         } else {
             let resolved = ws
                 .layout
-                .resolve_with_folds(body, &ws.folded_windows);
+                .resolve_with_folds(layout_body, &ws.folded_windows);
 
             // First pass: visible panes
             for rp in &resolved {
@@ -132,6 +155,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                             copy_mode_state,
                             &client.config,
                             client.hover,
+                            hub_state_ref,
                             frame,
                             *rect,
                         );
@@ -155,8 +179,8 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                 }
             }
 
-            // Cursor position
-            if !ws_bar_focused && (client.mode == Mode::Interact || client.mode == Mode::Normal) {
+            // Cursor position (only for non-home workspaces with terminal tabs)
+            if !is_home && !ws_bar_focused && (client.mode == Mode::Interact || client.mode == Mode::Normal) {
                 if let Some(group) = ws.groups.iter().find(|g| g.id == ws.active_group) {
                     if let Some(pane) = group.tabs.get(group.active_tab) {
                         if let Some(screen) = client.pane_screen(pane.id) {
@@ -205,6 +229,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                     copy_mode_state,
                     &client.config,
                     client.hover,
+                    hub_state_ref,
                     frame,
                     fw_rect,
                 );
@@ -307,7 +332,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
 
 /// Compute the body area (below workspace bar, above status bar).
 pub fn body_rect(client: &Client, full_area: Rect) -> Rect {
-    let show_workspace_bar = client.hub_active || !client.render_state.workspaces.is_empty();
+    let show_workspace_bar = !client.render_state.workspaces.is_empty();
     if show_workspace_bar {
         let [_h, b, _f] = Layout::vertical([
             Constraint::Length(workspace_bar::HEIGHT),

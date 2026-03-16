@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use ratatui::style::Color;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Action enum — all bindable actions
@@ -163,7 +163,7 @@ impl Theme {
 // ---------------------------------------------------------------------------
 
 /// A widget that can be displayed in the project hub detail panel.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HubWidget {
     /// Project name, path, branch, and working tree status.
     ProjectInfo,
@@ -200,6 +200,27 @@ pub enum HubWidget {
 }
 
 impl HubWidget {
+    pub fn label(&self) -> &str {
+        match self {
+            Self::ProjectInfo => "Info",
+            Self::RecentCommits => "Commits",
+            Self::ChangedFiles => "Changes",
+            Self::Branches => "Branches",
+            Self::Stashes => "Stashes",
+            Self::Tags => "Tags",
+            Self::GitGraph => "Graph",
+            Self::Contributors => "Contributors",
+            Self::Todos => "TODOs",
+            Self::Readme => "README",
+            Self::Languages => "Languages",
+            Self::DiskUsage => "Disk",
+            Self::CiStatus => "CI",
+            Self::OpenIssues => "Issues",
+            Self::QuickActions => "Actions",
+            Self::RunningProcesses => "Processes",
+        }
+    }
+
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "project_info" => Some(Self::ProjectInfo),
@@ -257,7 +278,9 @@ impl Default for HubLayout {
         Self {
             rows: vec![
                 vec![HubWidget::ProjectInfo],
+                vec![HubWidget::QuickActions],
                 vec![HubWidget::RecentCommits, HubWidget::ChangedFiles],
+                vec![HubWidget::Branches, HubWidget::Tags],
             ],
         }
     }

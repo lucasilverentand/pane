@@ -1,8 +1,6 @@
-use std::collections::HashMap;
-
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -11,163 +9,129 @@ use ratatui::{
 use pane_protocol::app::Mode;
 use crate::client::Client;
 use pane_protocol::config::Theme;
-use crate::ui::format::format_string;
-
-fn format_leader_key(key: &crossterm::event::KeyEvent) -> String {
-    use crossterm::event::KeyCode;
-    match key.code {
-        KeyCode::Char(c) => c.to_string(),
-        _ => "?".to_string(),
-    }
-}
 
 /// Render the status bar for a daemon-connected client.
+/// Uses a unified button-style bar for all modes and workspaces.
 pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Rect) {
-    let (left, right) = if client.hub_active && client.mode != Mode::Palette && client.mode != Mode::Confirm {
-        (" Hub".to_string(), "type to search  enter open  esc back ".to_string())
-    } else { match &client.mode {
-        Mode::Normal => {
-            let vars = build_client_vars(client);
-            let left = format_string(&client.config.status_bar.left, &vars);
-            let right = if client.workspace_bar_focused {
-                "h/l switch  d close  n new  j exit bar ".to_string()
-            } else {
-                format_string(&client.config.status_bar.right, &vars)
-            };
-            (left, right)
-        }
-        Mode::Interact => {
-            let vars = build_client_vars(client);
-            let left = format_string(&client.config.status_bar.left, &vars);
-            let right = format_string(&client.config.status_bar.right, &vars);
-            (left, right)
-        }
-        Mode::Scroll => {
-            let title = client_pane_title(client);
-            let right = "j/k up/down  u/d page  g/G top/end  esc quit ".to_string();
-            (title, right)
-        }
-        Mode::Copy => {
-            let title = client_pane_title(client);
-            (
-                title,
-                "hjkl move  v select  y yank  / search  esc quit ".to_string(),
-            )
-        }
-        Mode::Palette => (
-            String::new(),
-            "type to filter  enter run  esc cancel ".to_string(),
-        ),
-        Mode::Confirm => (String::new(), "enter/y confirm  esc/n cancel ".to_string()),
-        Mode::Leader => {
-            let path_str = if let Some(ref ls) = client.leader_state {
-                let keys: Vec<String> = ls.path.iter().map(format_leader_key).collect();
-                if keys.is_empty() {
-                    "⎵".to_string()
-                } else {
-                    format!("⎵ {}", keys.join(" "))
-                }
-            } else {
-                "⎵".to_string()
-            };
-            (path_str, "esc cancel ".to_string())
-        }
-        Mode::TabPicker => (
-            String::new(),
-            "type to filter  enter spawn  esc cancel ".to_string(),
-        ),
-        Mode::Rename => (
-            String::new(),
-            "enter confirm  esc cancel ".to_string(),
-        ),
+    let is_home = client.is_home_active();
+
+    let buttons: &[(&str, &str)] = match &client.mode {
+        Mode::Normal if client.workspace_bar_focused => &[
+            ("h/l", "switch"),
+            ("d", "close"),
+            ("n", "new"),
+            ("j", "exit bar"),
+        ],
+        Mode::Normal if is_home => &[
+            ("/", "search"),
+            ("Enter", "open"),
+            ("n", "new"),
+            (":", "commands"),
+            ("q", "quit"),
+        ],
+        Mode::Normal => &[
+            ("\u{2423}", "leader"),
+            (":", "commands"),
+            ("t", "new tab"),
+            ("-", "split"),
+            ("n", "new ws"),
+            ("q", "quit"),
+        ],
+        Mode::Interact => &[
+            ("^\u{2423}", "normal"),
+            ("\u{2423}", "leader"),
+            (":", "commands"),
+        ],
+        Mode::Scroll => &[
+            ("j/k", "up/down"),
+            ("u/d", "page"),
+            ("g/G", "top/end"),
+            ("Esc", "quit"),
+        ],
+        Mode::Copy => &[
+            ("hjkl", "move"),
+            ("v", "select"),
+            ("y", "yank"),
+            ("/", "search"),
+            ("Esc", "quit"),
+        ],
+        Mode::Palette => &[
+            ("type", "filter"),
+            ("Enter", "run"),
+            ("Esc", "cancel"),
+        ],
+        Mode::Confirm => &[
+            ("Enter/y", "confirm"),
+            ("Esc/n", "cancel"),
+        ],
+        Mode::Leader => &[
+            ("Esc", "cancel"),
+        ],
+        Mode::TabPicker => &[
+            ("type", "filter"),
+            ("Enter", "spawn"),
+            ("Esc", "cancel"),
+        ],
+        Mode::Rename => &[
+            ("Enter", "confirm"),
+            ("Esc", "cancel"),
+        ],
         Mode::NewWorkspaceInput => {
-            let hint = if let Some(ref nw) = client.new_workspace_input {
+            if let Some(ref nw) = client.new_workspace_input {
                 match nw.stage {
-                    crate::client::NewWorkspaceStage::Directory => {
-                        "enter select  tab complete  \u{2192} open  esc cancel "
-                    }
-                    crate::client::NewWorkspaceStage::Name => {
-                        "enter create  esc back "
-                    }
+                    crate::client::NewWorkspaceStage::Directory => &[
+                        ("Enter", "select"),
+                        ("Tab", "complete"),
+                        ("\u{2192}", "open"),
+                        ("Esc", "cancel"),
+                    ],
+                    crate::client::NewWorkspaceStage::Name => &[
+                        ("Enter", "create"),
+                        ("Esc", "back"),
+                    ],
                 }
             } else {
-                "esc cancel "
-            };
-            (String::new(), hint.to_string())
+                &[("Esc", "cancel")]
+            }
         }
-        Mode::ContextMenu => (
-            String::new(),
-            "j/k navigate  enter select  esc cancel ".to_string(),
-        ),
-        Mode::ProjectHub => (
-            String::new(),
-            "type to search  enter open  esc cancel ".to_string(),
-        ),
+        Mode::ContextMenu => &[
+            ("j/k", "navigate"),
+            ("Enter", "select"),
+            ("Esc", "cancel"),
+        ],
+        Mode::ProjectHub => &[
+            ("type", "search"),
+            ("Enter", "open"),
+            ("Esc", "cancel"),
+        ],
         Mode::Resize => {
             let selected = client.resize_state.as_ref().and_then(|rs| rs.selected);
             match selected {
-                None => (
-                    " RESIZE".to_string(),
-                    "hjkl select border  = equalize  esc quit ".to_string(),
-                ),
-                Some(b) => {
-                    let label = match b {
-                        pane_protocol::app::ResizeBorder::Left => "LEFT",
-                        pane_protocol::app::ResizeBorder::Right => "RIGHT",
-                        pane_protocol::app::ResizeBorder::Top => "TOP",
-                        pane_protocol::app::ResizeBorder::Bottom => "BOTTOM",
-                    };
-                    let hint = match b {
-                        pane_protocol::app::ResizeBorder::Left
-                        | pane_protocol::app::ResizeBorder::Right => "h/l move  esc quit ",
-                        pane_protocol::app::ResizeBorder::Top
-                        | pane_protocol::app::ResizeBorder::Bottom => "j/k move  esc quit ",
-                    };
-                    (format!(" RESIZE [{}]", label), hint.to_string())
-                }
+                None => &[
+                    ("hjkl", "select border"),
+                    ("=", "equalize"),
+                    ("Esc", "quit"),
+                ],
+                Some(b) => match b {
+                    pane_protocol::app::ResizeBorder::Left
+                    | pane_protocol::app::ResizeBorder::Right => &[
+                        ("h/l", "move"),
+                        ("Esc", "quit"),
+                    ],
+                    pane_protocol::app::ResizeBorder::Top
+                    | pane_protocol::app::ResizeBorder::Bottom => &[
+                        ("j/k", "move"),
+                        ("Esc", "quit"),
+                    ],
+                },
             }
         }
-    } };
+    };
 
-    // Build plugin segment string
-    let plugin_text: String = client
-        .plugin_segments
-        .iter()
-        .flat_map(|segs| segs.iter())
-        .map(|s| s.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" │ ");
-
-    let left_len = left.len();
-    let right_len = right.len();
-    let plugin_len = if plugin_text.is_empty() {
-        0
-    } else {
-        plugin_text.len() + 2
-    }; // " │ " prefix
-    let padding = (area.width as usize).saturating_sub(left_len + plugin_len + right_len);
-
-    let mut spans = vec![Span::styled(
-        left,
-        Style::default()
-            .fg(theme.accent)
-            .add_modifier(Modifier::BOLD),
-    )];
-    if !plugin_text.is_empty() {
-        spans.push(Span::styled(
-            format!(" │ {}", plugin_text),
-            Style::default().fg(theme.accent),
-        ));
-    }
-    spans.push(Span::raw(" ".repeat(padding)));
-    spans.push(Span::styled(right, Style::default().fg(theme.dim)));
-
-    let line = Line::from(spans);
-
-    let paragraph = Paragraph::new(line);
-    frame.render_widget(paragraph, area);
+    render_button_bar(buttons, theme, frame, area);
 }
 
+#[allow(dead_code)]
 fn client_pane_title(client: &Client) -> String {
     if let Some(ws) = client.active_workspace() {
         if let Some(group) = ws.groups.iter().find(|g| g.id == ws.active_group) {
@@ -179,101 +143,31 @@ fn client_pane_title(client: &Client) -> String {
     String::new()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Render a styled button bar with key-label pairs.
+fn render_button_bar(buttons: &[(&str, &str)], theme: &Theme, frame: &mut Frame, area: Rect) {
+    let key_style = Style::default()
+        .fg(Color::Black)
+        .bg(theme.accent)
+        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default().fg(theme.dim);
+    let sep_style = Style::default().fg(theme.dim);
 
-    #[test]
-    fn format_leader_key_lowercase() {
-        let key = crossterm::event::KeyEvent {
-            code: crossterm::event::KeyCode::Char('a'),
-            modifiers: crossterm::event::KeyModifiers::NONE,
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        };
-        assert_eq!(format_leader_key(&key), "a");
+    let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
+    for (i, (key, label)) in buttons.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" \u{b7} ", sep_style));
+        }
+        spans.push(Span::styled(format!(" {} ", key), key_style));
+        spans.push(Span::styled(format!(" {}", label), label_style));
     }
 
-    #[test]
-    fn format_leader_key_uppercase() {
-        let key = crossterm::event::KeyEvent {
-            code: crossterm::event::KeyCode::Char('A'),
-            modifiers: crossterm::event::KeyModifiers::NONE,
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        };
-        assert_eq!(format_leader_key(&key), "A");
-    }
-
-    #[test]
-    fn format_leader_key_with_shift() {
-        let key = crossterm::event::KeyEvent {
-            code: crossterm::event::KeyCode::Char('b'),
-            modifiers: crossterm::event::KeyModifiers::SHIFT,
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        };
-        assert_eq!(format_leader_key(&key), "b");
-    }
-
-    #[test]
-    fn format_leader_key_non_char() {
-        let key = crossterm::event::KeyEvent {
-            code: crossterm::event::KeyCode::Enter,
-            modifiers: crossterm::event::KeyModifiers::NONE,
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        };
-        assert_eq!(format_leader_key(&key), "?");
-    }
-
-    #[test]
-    fn format_leader_key_special_char() {
-        let key = crossterm::event::KeyEvent {
-            code: crossterm::event::KeyCode::Char('/'),
-            modifiers: crossterm::event::KeyModifiers::NONE,
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        };
-        assert_eq!(format_leader_key(&key), "/");
-    }
-
-    #[test]
-    fn format_leader_key_esc() {
-        let key = crossterm::event::KeyEvent {
-            code: crossterm::event::KeyCode::Esc,
-            modifiers: crossterm::event::KeyModifiers::NONE,
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        };
-        assert_eq!(format_leader_key(&key), "?");
-    }
-
-    #[test]
-    fn format_leader_key_tab() {
-        let key = crossterm::event::KeyEvent {
-            code: crossterm::event::KeyCode::Tab,
-            modifiers: crossterm::event::KeyModifiers::NONE,
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        };
-        assert_eq!(format_leader_key(&key), "?");
-    }
-
-    #[test]
-    fn format_leader_key_digit() {
-        let key = crossterm::event::KeyEvent {
-            code: crossterm::event::KeyCode::Char('5'),
-            modifiers: crossterm::event::KeyModifiers::NONE,
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        };
-        assert_eq!(format_leader_key(&key), "5");
-    }
+    let line = Line::from(spans);
+    frame.render_widget(Paragraph::new(line), area);
 }
 
-fn build_client_vars(client: &Client) -> HashMap<String, String> {
-    let mut vars = HashMap::new();
+#[allow(dead_code)]
+fn build_client_vars(client: &Client) -> std::collections::HashMap<String, String> {
+    let mut vars = std::collections::HashMap::new();
 
     let title = client_pane_title(client);
     vars.insert("pane_title".to_string(), title);

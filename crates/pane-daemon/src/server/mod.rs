@@ -3,6 +3,7 @@ pub mod command_parser;
 pub mod control;
 pub mod daemon;
 pub mod id_map;
+pub mod persistence;
 pub mod state;
 pub mod tmux_shim;
 

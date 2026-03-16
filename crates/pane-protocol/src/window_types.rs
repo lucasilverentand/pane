@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::config::HubWidget;
+
 pub type WindowId = uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -8,6 +10,7 @@ pub enum TabKind {
     Agent,
     Nvim,
     DevServer,
+    Widget(HubWidget),
 }
 
 impl TabKind {
@@ -17,6 +20,7 @@ impl TabKind {
             TabKind::Agent => "claude",
             TabKind::Nvim => "nvim",
             TabKind::DevServer => "server",
+            TabKind::Widget(w) => w.label(),
         }
     }
 }

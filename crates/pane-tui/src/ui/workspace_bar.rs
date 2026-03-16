@@ -187,8 +187,8 @@ fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
     }
 }
 
-/// Width of the home button box (including borders): " 󰋜 Home " = 8 + 2 borders = 10
-const HOME_WIDTH: u16 = 10;
+/// Width of the home button box (including borders): " 󰋜  Home " = 9 + 2 borders = 11
+const HOME_WIDTH: u16 = 11;
 /// Gap between home button and workspace bar
 const HOME_GAP: u16 = 1;
 
@@ -245,7 +245,7 @@ pub fn render(
         } else {
             Style::default().fg(theme.dim)
         };
-        let label = Line::from(Span::styled(" \u{f015} Home", home_style));
+        let label = Line::from(Span::styled(" \u{f015}  Home", home_style));
         let label_y = home_inner.y + home_inner.height / 2;
         frame.render_widget(
             Paragraph::new(label),
@@ -426,8 +426,8 @@ fn hit_test_bar(
 mod tests {
     use super::*;
 
-    // Home button takes HOME_WIDTH (10) + HOME_GAP (1) = 11 columns from the left.
-    // The workspace bar area starts at x = 9 for a full-width area starting at 0.
+    // Home button takes HOME_WIDTH (11) + HOME_GAP (1) = 12 columns from the left.
+    // The workspace bar area starts after that for a full-width area starting at 0.
     // Within that bar, padded_tab_area insets by border (if any) + 1 cell each side.
 
     // Helper: compute the bar-only area (after home button) for a given full area.
@@ -882,8 +882,8 @@ mod tests {
     #[test]
     fn test_home_button_not_clickable_in_narrow_area() {
         let ws = vec!["a"];
-        // Too narrow for home + bar (need > HOME_WIDTH + HOME_GAP + 4 = 15)
-        let area = Rect::new(0, 0, 14, 1);
+        // Too narrow for home + bar (need > HOME_WIDTH + HOME_GAP + 4 = 16)
+        let area = Rect::new(0, 0, 15, 1);
         let click = hit_test(&ws, 0, area, 2, 0);
         // Should fall through to bar-only mode, no Home click
         assert_ne!(click, Some(WorkspaceBarClick::Home));
@@ -893,9 +893,9 @@ mod tests {
     fn test_home_vs_bar_boundary() {
         let ws = vec!["test"];
         let area = Rect::new(0, 0, 80, 1);
-        // x=9 is last pixel of home button (HOME_WIDTH=10, x=[0,10))
-        assert_eq!(hit_test(&ws, 0, area, 9, 0), Some(WorkspaceBarClick::Home));
-        // x=10 is in the gap
-        assert_ne!(hit_test(&ws, 0, area, 10, 0), Some(WorkspaceBarClick::Home));
+        // x=10 is last pixel of home button (HOME_WIDTH=11, x=[0,11))
+        assert_eq!(hit_test(&ws, 0, area, 10, 0), Some(WorkspaceBarClick::Home));
+        // x=11 is in the gap
+        assert_ne!(hit_test(&ws, 0, area, 11, 0), Some(WorkspaceBarClick::Home));
     }
 }

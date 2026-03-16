@@ -31,6 +31,8 @@ pub struct Workspace {
     pub saved_ratios: Option<LayoutNode>,
     /// Floating windows rendered above the tiled layout.
     pub floating_windows: Vec<FloatingWindow>,
+    /// Whether this is the home (project hub) workspace.
+    pub is_home: bool,
 }
 
 impl Workspace {
@@ -50,6 +52,7 @@ impl Workspace {
             zoomed_window: None,
             saved_ratios: None,
             floating_windows: Vec::new(),
+            is_home: false,
         }
     }
 

@@ -3,6 +3,7 @@ pub mod pty;
 // Re-export shared types from pane-protocol
 pub use pane_protocol::window_types::{TabKind, WindowId};
 
+use pane_protocol::config::HubWidget;
 use pane_protocol::event::AppEvent;
 use pane_protocol::layout::TabId;
 use portable_pty::PtySize;
@@ -204,6 +205,9 @@ impl Tab {
                     Box::leak(cmd_str.to_string().into_boxed_str());
                 (shell_leaked, vec!["-ic", cmd_leaked])
             }
+            TabKind::Widget(_) => {
+                anyhow::bail!("widget tabs do not have a PTY");
+            }
         };
 
         let title = match &command {
@@ -252,6 +256,26 @@ impl Tab {
             title: format!("{}: {}", kind.label(), error_msg),
             vt,
             exited: true,
+            command: None,
+            cwd: PathBuf::from("/"),
+            scroll_offset: 0,
+            foreground_process: None,
+            foreground_process_path: None,
+            shell_pid: None,
+            pty_writer: None,
+            pty_master: None,
+        }
+    }
+
+    /// Create a widget tab (no PTY) for the home workspace.
+    pub fn new_widget(id: TabId, widget: HubWidget) -> Self {
+        let title = widget.label().to_string();
+        Self {
+            id,
+            kind: TabKind::Widget(widget),
+            title,
+            vt: vt100::Parser::new(1, 1, 0),
+            exited: false,
             command: None,
             cwd: PathBuf::from("/"),
             scroll_offset: 0,

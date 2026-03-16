@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
-use pane_protocol::config::Config;
+use pane_protocol::config::{Config, HubWidget};
 use pane_protocol::event::AppEvent;
-use pane_protocol::layout::{ResolvedPane, Side, SplitDirection, TabId};
+use pane_protocol::layout::{LayoutNode, ResolvedPane, Side, SplitDirection, TabId};
 use pane_protocol::system_stats::SystemStats;
 use crate::window::{Tab, TabKind, Window, WindowId};
 use crate::workspace::Workspace;
@@ -136,6 +136,103 @@ fn repo_name_from_url(url: &str) -> Option<String> {
     }
 }
 
+/// Build the home workspace from the hub layout config.
+/// Each widget in the layout gets its own window with a single widget tab.
+fn build_home_workspace(config: &Config) -> Workspace {
+    let rows = &config.behavior.hub_layout.rows;
+    let home_cwd = std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/"));
+
+    // Collect (WindowId, Window, HubWidget-row-index) for layout building
+    let mut row_nodes: Vec<LayoutNode> = Vec::new();
+    let mut groups = std::collections::HashMap::new();
+    let mut first_group_id = None;
+
+    for row in rows {
+        if row.is_empty() {
+            continue;
+        }
+
+        if row.len() == 1 {
+            let gid = WindowId::new_v4();
+            let tab = Tab::new_widget(TabId::new_v4(), row[0].clone());
+            let window = Window::new(gid, tab);
+            groups.insert(gid, window);
+            if first_group_id.is_none() {
+                first_group_id = Some(gid);
+            }
+            row_nodes.push(LayoutNode::Leaf(gid));
+        } else {
+            // Multiple widgets in a row → horizontal split chain
+            let mut leaves: Vec<LayoutNode> = Vec::new();
+            for widget in row {
+                let gid = WindowId::new_v4();
+                let tab = Tab::new_widget(TabId::new_v4(), widget.clone());
+                let window = Window::new(gid, tab);
+                groups.insert(gid, window);
+                if first_group_id.is_none() {
+                    first_group_id = Some(gid);
+                }
+                leaves.push(LayoutNode::Leaf(gid));
+            }
+            // Chain leaves into balanced horizontal splits
+            let node = chain_splits(leaves, SplitDirection::Horizontal);
+            row_nodes.push(node);
+        }
+    }
+
+    // Stack rows vertically
+    let layout = if row_nodes.is_empty() {
+        // Fallback: single ProjectInfo widget
+        let gid = WindowId::new_v4();
+        let tab = Tab::new_widget(TabId::new_v4(), HubWidget::ProjectInfo);
+        let window = Window::new(gid, tab);
+        groups.insert(gid, window);
+        first_group_id = Some(gid);
+        LayoutNode::Leaf(gid)
+    } else {
+        chain_splits(row_nodes, SplitDirection::Vertical)
+    };
+
+    let active_group = first_group_id.unwrap();
+    Workspace {
+        name: "Home".to_string(),
+        cwd: home_cwd,
+        layout,
+        groups,
+        active_group,
+        folded_windows: std::collections::HashSet::new(),
+        sync_panes: false,
+        zoomed_window: None,
+        saved_ratios: None,
+        floating_windows: Vec::new(),
+        is_home: true,
+    }
+}
+
+/// Chain a list of layout nodes into a balanced binary split tree.
+fn chain_splits(nodes: Vec<LayoutNode>, direction: SplitDirection) -> LayoutNode {
+    assert!(!nodes.is_empty());
+    if nodes.len() == 1 {
+        return nodes.into_iter().next().unwrap();
+    }
+    // Build a right-leaning chain with equal ratios
+    let n = nodes.len();
+    let mut iter = nodes.into_iter();
+    let mut result = iter.next().unwrap();
+    for (i, node) in iter.enumerate() {
+        let ratio = 1.0 / (n - i) as f64;
+        result = LayoutNode::Split {
+            direction: direction.clone(),
+            ratio,
+            first: Box::new(result),
+            second: Box::new(node),
+        };
+    }
+    result
+}
+
 impl ServerState {
     /// Build tmux env vars for a new pane, incrementing the pane counter.
     pub fn next_tmux_env(&mut self) -> crate::window::pty::TmuxEnv {
@@ -205,16 +302,18 @@ impl ServerState {
         None
     }
 
-    /// Create a new server state with no workspaces.
-    /// Workspaces are created on demand when the user opens a project.
+    /// Create a new server state with the home workspace at index 0.
+    /// Tries to restore a saved home layout first, falls back to building from config.
     pub fn new(
         event_tx: &mpsc::UnboundedSender<AppEvent>,
         cols: u16,
         rows: u16,
         config: Config,
     ) -> Self {
+        let home = crate::server::persistence::load_home_layout()
+            .unwrap_or_else(|| build_home_workspace(&config));
         Self {
-            workspaces: Vec::new(),
+            workspaces: vec![home],
             active_workspace: 0,
             config,
             system_stats: SystemStats::default(),
@@ -222,6 +321,13 @@ impl ServerState {
             last_size: (cols.saturating_add(2), rows.saturating_add(3)),
             next_pane_number: 0,
             drag_state: None,
+        }
+    }
+
+    /// Save the home workspace layout to disk (if it exists).
+    pub fn save_home_layout(&self) {
+        if let Some(home) = self.workspaces.iter().find(|w| w.is_home) {
+            crate::server::persistence::save_home_layout(home);
         }
     }
 
@@ -244,23 +350,38 @@ impl ServerState {
 
         let location = self.find_tab_location(pane_id);
         if let Some((ws_idx, group_id)) = location {
+            // Never remove tabs from the home workspace via PTY exit
+            if self.workspaces[ws_idx].is_home {
+                return false;
+            }
             let ws = &self.workspaces[ws_idx];
             if let Some(group) = ws.groups.get(&group_id) {
                 if group.tab_count() <= 1 {
                     let group_ids = ws.layout.group_ids();
-                    if group_ids.len() <= 1 && self.workspaces.len() <= 1 {
-                        return true; // should_quit
+                    let has_home = self.workspaces.iter().any(|w| w.is_home);
+                    let non_home_count = self.workspaces.len() - if has_home { 1 } else { 0 };
+                    if group_ids.len() <= 1 && non_home_count <= 1 {
+                        if has_home {
+                            // Remove this workspace, fall back to home
+                            self.workspaces.remove(ws_idx);
+                            self.active_workspace = 0;
+                            return false;
+                        }
+                        return true; // should_quit (no home workspace)
                     }
                     let ws = &mut self.workspaces[ws_idx];
                     if let Some(new_focus) = ws.layout.close_pane(group_id) {
                         ws.groups.remove(&group_id);
                         ws.prune_folded_windows();
                         ws.active_group = new_focus;
-                    } else if self.workspaces.len() > 1 {
+                    } else if non_home_count > 1 {
                         self.workspaces.remove(ws_idx);
                         if self.active_workspace >= self.workspaces.len() {
                             self.active_workspace = self.workspaces.len() - 1;
                         }
+                    } else if has_home {
+                        self.workspaces.remove(ws_idx);
+                        self.active_workspace = 0;
                     } else {
                         return true; // should_quit
                     }
@@ -434,21 +555,30 @@ impl ServerState {
         Ok(())
     }
 
-    /// Close the active workspace. Returns true if this was the last workspace
-    /// (caller should shut down the server).
     /// Close the active workspace. Returns true if there are no workspaces left
     /// (the client should show the project hub).
+    /// Cannot close the home workspace.
     pub fn close_workspace(&mut self) -> bool {
         if self.workspaces.is_empty() {
             return true;
         }
+        // Don't close the home workspace
+        if self.workspaces[self.active_workspace].is_home {
+            return false;
+        }
         self.workspaces.remove(self.active_workspace);
         if self.workspaces.is_empty() {
             self.active_workspace = 0;
-            return true;
+            // In production, home workspace always exists, so this shouldn't happen.
+            // But tests might construct states without a home workspace.
+            return false;
         }
         if self.active_workspace >= self.workspaces.len() {
             self.active_workspace = self.workspaces.len() - 1;
+        }
+        // If only home remains, switch to it
+        if self.workspaces.len() == 1 && self.workspaces[0].is_home {
+            self.active_workspace = 0;
         }
         false
     }
@@ -532,11 +662,7 @@ impl ServerState {
     }
 
     pub fn workspace_bar_height(&self) -> u16 {
-        if self.workspaces.is_empty() {
-            0
-        } else {
-            3
-        }
+        3 // Always show workspace bar (home workspace always exists)
     }
 
     /// Compute the PTY cols/rows for the active window based on the resolved layout.
@@ -638,6 +764,7 @@ mod tests {
             zoomed_window: None,
             saved_ratios: None,
             floating_windows: Vec::new(),
+            is_home: false,
         };
         let state = ServerState {
             workspaces: vec![workspace],
@@ -1038,22 +1165,24 @@ mod tests {
         let mut state =
             ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
+        // home + 1 regular = 2; add 2 more = 4 total
         state.new_workspace(80, 24, None).unwrap();
         state.new_workspace(80, 24, None).unwrap();
-        assert_eq!(state.workspaces.len(), 3);
-        // active_workspace is 2 (last created)
-        assert_eq!(state.active_workspace, 2);
+        assert_eq!(state.workspaces.len(), 4);
+        // active_workspace is 3 (last created)
+        assert_eq!(state.active_workspace, 3);
 
         assert!(!state.close_workspace());
-        assert_eq!(state.workspaces.len(), 2);
-        assert_eq!(state.active_workspace, 1);
+        assert_eq!(state.workspaces.len(), 3);
+        assert_eq!(state.active_workspace, 2);
     }
 
     #[test]
-    fn test_close_workspace_single_returns_true() {
+    fn test_close_workspace_single_non_home() {
+        // make_test_state creates a single non-home workspace (no home)
         let (mut state, _rx) = make_test_state();
-        assert!(state.close_workspace());
-        assert_eq!(state.workspaces.len(), 0); // workspace removed, hub shown
+        assert!(!state.close_workspace());
+        assert_eq!(state.workspaces.len(), 0);
     }
 
     #[test]
@@ -1102,8 +1231,11 @@ mod tests {
         let state =
             ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
-        assert_eq!(state.workspaces.len(), 1);
-        assert_eq!(state.active_workspace, 0);
+        // home workspace + 1 regular workspace = 2
+        assert_eq!(state.workspaces.len(), 2);
+        assert!(state.workspaces[0].is_home);
+        assert!(!state.workspaces[1].is_home);
+        assert_eq!(state.active_workspace, 1);
     }
 
     #[tokio::test]
@@ -1122,9 +1254,11 @@ mod tests {
         let mut state =
             ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
-        // Closing last workspace returns true (show hub) and removes it
-        assert!(state.close_workspace());
-        assert_eq!(state.workspaces.len(), 0);
+        // Active workspace is 1 (the regular one). Closing it leaves only home.
+        assert!(!state.close_workspace());
+        assert_eq!(state.workspaces.len(), 1);
+        assert!(state.workspaces[0].is_home);
+        assert_eq!(state.active_workspace, 0);
     }
 
     #[tokio::test]
@@ -1134,8 +1268,9 @@ mod tests {
             ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
         state.new_workspace(80, 24, None).unwrap();
-        assert_eq!(state.workspaces.len(), 2);
-        assert_eq!(state.active_workspace, 1);
+        // home + 2 regular = 3
+        assert_eq!(state.workspaces.len(), 3);
+        assert_eq!(state.active_workspace, 2);
     }
 
     #[tokio::test]
@@ -1287,10 +1422,12 @@ mod tests {
     }
 
     #[test]
-    fn test_workspace_bar_height_empty_workspaces() {
+    fn test_workspace_bar_height_always_three() {
         let (mut state, _rx) = make_test_state();
+        // Always 3, even if manually cleared (home workspace should always exist)
+        assert_eq!(state.workspace_bar_height(), 3);
         state.workspaces.clear();
-        assert_eq!(state.workspace_bar_height(), 0);
+        assert_eq!(state.workspace_bar_height(), 3);
     }
 
     // ---- focus_group unfolds ----
@@ -1479,6 +1616,7 @@ pub fn render_state_from_server(state: &ServerState) -> RenderState {
                         height: fw.height,
                     })
                     .collect(),
+                is_home: ws.is_home,
             }
         })
         .collect();

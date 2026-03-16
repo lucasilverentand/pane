@@ -67,7 +67,110 @@ pub fn sidebar_hit_test(
     }
 }
 
+/// Render a single widget into a given area. Used by window_view for widget tabs.
+pub fn render_single_widget(
+    hub_state: &ProjectHubState,
+    widget: &HubWidget,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let project = match hub_state.selected_project() {
+        Some(p) => p,
+        None => {
+            let msg = Line::from(Span::styled(
+                "  select a project",
+                Style::default().fg(theme.dim),
+            ));
+            frame.render_widget(
+                Paragraph::new(msg),
+                Rect::new(area.x, area.y + area.height / 2, area.width, 1),
+            );
+            return;
+        }
+    };
+
+    let git_info = hub_state.selected_git_info();
+
+    if git_info.is_none() && hub_state.is_loading_git_info() {
+        let msg = Line::from(Span::styled(
+            "  loading...",
+            Style::default().fg(theme.dim),
+        ));
+        frame.render_widget(
+            Paragraph::new(msg),
+            Rect::new(area.x, area.y + area.height / 2, area.width, 1),
+        );
+        return;
+    }
+
+    let mut buttons = Vec::new();
+    match widget {
+        HubWidget::ProjectInfo => {
+            render_widget_project_info(project, git_info, theme, frame, area);
+        }
+        HubWidget::RecentCommits => {
+            render_widget_recent_commits(git_info, theme, frame, area);
+        }
+        HubWidget::ChangedFiles => {
+            render_widget_changed_files(git_info, theme, frame, area);
+        }
+        HubWidget::Branches => {
+            render_widget_branches(git_info, theme, frame, area);
+        }
+        HubWidget::Stashes => {
+            render_widget_stashes(git_info, theme, frame, area);
+        }
+        HubWidget::Tags => {
+            render_widget_tags(git_info, theme, frame, area);
+        }
+        HubWidget::GitGraph => {
+            render_widget_git_graph(git_info, theme, frame, area);
+        }
+        HubWidget::Contributors => {
+            render_widget_contributors(git_info, theme, frame, area);
+        }
+        HubWidget::Todos => {
+            render_widget_todos(git_info, theme, frame, area);
+        }
+        HubWidget::Readme => {
+            render_widget_readme(git_info, theme, frame, area);
+        }
+        HubWidget::Languages => {
+            render_widget_languages(git_info, theme, frame, area);
+        }
+        HubWidget::DiskUsage => {
+            render_widget_disk_usage(git_info, theme, frame, area);
+        }
+        HubWidget::CiStatus => {
+            render_widget_ci_status(git_info, theme, frame, area);
+        }
+        HubWidget::OpenIssues => {
+            render_widget_open_issues(git_info, theme, frame, area);
+        }
+        HubWidget::QuickActions => {
+            render_widget_quick_actions(git_info, theme, &mut buttons, frame, area);
+        }
+        HubWidget::RunningProcesses => {
+            render_widget_running_processes(git_info, theme, frame, area);
+        }
+    }
+}
+
+/// Render the project hub sidebar only (for the home workspace layout).
+pub fn render_sidebar_only(
+    state: &ProjectHubState,
+    theme: &Theme,
+    hover: Option<(u16, u16)>,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    render_sidebar(state, theme, hover, frame, area);
+}
+
 /// Render the project hub as a full workspace body: left sidebar + right widget panel.
+/// Kept for reference — the home workspace now uses render_single_widget per window.
+#[allow(dead_code)]
 pub fn render_body(
     state: &mut ProjectHubState,
     theme: &Theme,
@@ -233,6 +336,7 @@ fn render_sidebar(
 // Widget grid layout
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn render_widgets(
     state: &ProjectHubState,
     theme: &Theme,

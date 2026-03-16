@@ -54,6 +54,8 @@ pub fn parse(input: &str) -> Result<Command> {
         "maximize-focused" | "maximize" => Ok(Command::MaximizeFocused),
         "toggle-zoom" | "zoom" => Ok(Command::ToggleZoom),
         "toggle-fold" | "fold" => Ok(Command::ToggleFold),
+        "add-widget" => parse_add_widget(args),
+        "set-widget" => parse_set_widget(args),
         _ => bail!("unknown command: {}", cmd_name),
     }
 }
@@ -541,6 +543,24 @@ fn parse_move_tab(args: &[String]) -> Result<Command> {
 fn parse_paste_buffer(args: &[String]) -> Result<Command> {
     let text = args.join(" ");
     Ok(Command::PasteBuffer { text })
+}
+
+fn parse_add_widget(args: &[String]) -> Result<Command> {
+    if args.is_empty() {
+        bail!("add-widget requires a widget name");
+    }
+    Ok(Command::AddWidget {
+        widget: args[0].clone(),
+    })
+}
+
+fn parse_set_widget(args: &[String]) -> Result<Command> {
+    if args.is_empty() {
+        bail!("set-widget requires a widget name");
+    }
+    Ok(Command::SetWidget {
+        widget: args[0].clone(),
+    })
 }
 
 #[cfg(test)]
