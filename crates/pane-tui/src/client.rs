@@ -1680,13 +1680,11 @@ impl Client {
                         ) {
                             self.workspace_bar_focused = true;
                             match click {
-                                crate::ui::workspace_bar::WorkspaceBarClick::Home => {
-                                    self.render_state.active_workspace = 0;
-                                    if self.project_hub_state.is_none() {
+                                crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
+                                    // Ensure hub state exists when switching to home
+                                    if i == 0 && self.project_hub_state.is_none() {
                                         self.project_hub_state = Some(ProjectHubState::new(&self.config, self.event_tx.as_ref().unwrap().clone()));
                                     }
-                                }
-                                crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
                                     self.render_state.active_workspace = i;
                                     let mut w = writer.lock().await;
                                     let _ = send_request(
@@ -1831,13 +1829,12 @@ impl Client {
                             x,
                             y,
                         ) {
-                            Some(crate::ui::workspace_bar::WorkspaceBarClick::Home) => {
-                                // Right-click on Home — just select it, don't show close menu
-                                self.render_state.active_workspace = 0;
-                                return Ok(());
-                            }
                             Some(crate::ui::workspace_bar::WorkspaceBarClick::Tab(i)) => {
                                 self.render_state.active_workspace = i;
+                                // Right-click on home — just select, no close menu
+                                if self.render_state.workspaces.get(i).is_some_and(|ws| ws.is_home) {
+                                    return Ok(());
+                                }
                                 let mut w = writer.lock().await;
                                 let _ = send_request(
                                     &mut w,

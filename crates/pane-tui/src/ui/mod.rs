@@ -47,13 +47,11 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
             .collect();
         let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
         let active_idx = client.render_state.active_workspace;
-        let is_home = client.is_home_active();
         workspace_bar::render(
             &name_refs,
             active_idx,
             theme,
             client.workspace_bar_focused,
-            is_home,
             client.hover,
             frame,
             header,
