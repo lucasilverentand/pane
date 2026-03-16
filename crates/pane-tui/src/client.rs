@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
@@ -66,6 +67,8 @@ pub struct Client {
     pub project_hub_state: Option<ProjectHubState>,
     /// When true, the project hub is shown as the first "workspace" in the bar.
     pub hub_active: bool,
+    /// Channel for sending async events (e.g. git info ready) back to the event loop.
+    event_tx: Option<tokio::sync::mpsc::UnboundedSender<ServerEvent>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -344,7 +347,7 @@ pub struct ProjectEntry {
 }
 
 /// Cached git info for a project.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProjectGitInfo {
     pub branch: String,
     pub commits: Vec<GitCommit>,
@@ -354,14 +357,157 @@ pub struct ProjectGitInfo {
     pub untracked_count: usize,
     pub ahead: usize,
     pub behind: usize,
+    /// Git remote origin URL (e.g. "git@github.com:user/repo.git" or "https://github.com/user/repo.git").
+    pub remote_url: Option<String>,
+    // Unit 1: Branches, Stashes, Tags
+    pub branches: Vec<BranchInfo>,
+    pub stashes: Vec<StashInfo>,
+    pub tags: Vec<TagInfo>,
+    // Unit 2: Git Graph, Contributors
+    pub graph_lines: Vec<String>,
+    pub contributors: Vec<ContributorInfo>,
+    // Unit 3: Todos, Readme
+    pub todos: Vec<TodoItem>,
+    pub readme_lines: Vec<String>,
+    // Unit 4: Languages, Disk Usage
+    pub languages: Vec<LanguageInfo>,
+    pub disk_usage: Option<DiskUsageInfo>,
+    // Unit 5: CI Status, Open Issues
+    pub ci_runs: Vec<CiRun>,
+    pub gh_issues: Vec<GhIssue>,
+    pub gh_available: bool,
+    // Unit 6: Running Processes
+    pub processes: Vec<ProcessInfo>,
 }
 
-#[derive(Clone, Debug)]
+impl ProjectGitInfo {
+    /// Derive GitHub web URL from the remote origin URL.
+    /// Supports both SSH (git@github.com:user/repo.git) and HTTPS formats.
+    pub fn github_url(&self) -> Option<String> {
+        let url = self.remote_url.as_deref()?;
+        // SSH: git@github.com:user/repo.git
+        if let Some(rest) = url.strip_prefix("git@github.com:") {
+            let repo = rest.strip_suffix(".git").unwrap_or(rest);
+            return Some(format!("https://github.com/{}", repo));
+        }
+        // HTTPS: https://github.com/user/repo.git
+        if url.starts_with("https://github.com/") {
+            let repo = url.strip_suffix(".git").unwrap_or(url);
+            return Some(repo.to_string());
+        }
+        None
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GitCommit {
     pub hash: String,
     pub message: String,
     pub author: String,
     pub age: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BranchInfo {
+    pub name: String,
+    pub is_current: bool,
+    pub last_commit_date: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StashInfo {
+    pub id: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TagInfo {
+    pub name: String,
+    pub date: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ContributorInfo {
+    pub name: String,
+    pub email: String,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TodoItem {
+    pub file: String,
+    pub line_num: String,
+    pub kind: String,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LanguageInfo {
+    pub extension: String,
+    pub file_count: usize,
+    pub percentage: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DiskUsageInfo {
+    pub total: String,
+    pub git_size: String,
+    pub build_size: Option<String>,
+    pub build_dir_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CiRun {
+    pub name: String,
+    pub status: String,
+    pub conclusion: String,
+    pub branch: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GhIssue {
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    pub labels: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProcessInfo {
+    pub pid: String,
+    pub cpu: String,
+    pub command: String,
+}
+
+/// Cache entry state for a project's git info.
+pub enum GitCacheEntry {
+    /// First load, no data yet.
+    Loading,
+    /// Has data (possibly stale or partial), background refresh in progress.
+    Refreshing(ProjectGitInfo),
+    /// Fully loaded and up-to-date.
+    Ready(ProjectGitInfo),
+}
+
+impl GitCacheEntry {
+    pub fn info(&self) -> Option<&ProjectGitInfo> {
+        match self {
+            GitCacheEntry::Loading => None,
+            GitCacheEntry::Refreshing(info) | GitCacheEntry::Ready(info) => Some(info),
+        }
+    }
+
+    pub fn is_refreshing(&self) -> bool {
+        matches!(self, GitCacheEntry::Loading | GitCacheEntry::Refreshing(_))
+    }
+}
+
+/// A clickable GitHub link button in the quick actions widget.
+#[derive(Clone, Debug)]
+pub struct HubButton {
+    pub rect: ratatui::layout::Rect,
+    pub url_suffix: String,
 }
 
 pub struct ProjectHubState {
@@ -376,13 +522,19 @@ pub struct ProjectHubState {
     /// Scroll offset.
     pub scroll_offset: usize,
     /// Cached git info keyed by project index.
-    pub git_cache: HashMap<usize, ProjectGitInfo>,
+    pub git_cache: HashMap<usize, GitCacheEntry>,
     /// Which project index we last fetched git info for.
     pub last_git_fetch: Option<usize>,
+    /// Track last click for double-click detection: (selected index, timestamp).
+    pub last_click: Option<(usize, std::time::Instant)>,
+    /// Clickable button rects set during render.
+    pub buttons: Vec<HubButton>,
+    /// Channel for sending async results back to the event loop.
+    event_tx: tokio::sync::mpsc::UnboundedSender<ServerEvent>,
 }
 
 impl ProjectHubState {
-    pub fn new(config: &config::Config) -> Self {
+    fn new(config: &config::Config, event_tx: tokio::sync::mpsc::UnboundedSender<ServerEvent>) -> Self {
         let dirs = config.behavior.resolved_projects_dirs();
 
         let mut projects = Vec::new();
@@ -424,6 +576,9 @@ impl ProjectHubState {
             scroll_offset: 0,
             git_cache: HashMap::new(),
             last_git_fetch: None,
+            last_click: None,
+            buttons: Vec::new(),
+            event_tx,
         };
         state.ensure_git_info();
         state
@@ -446,6 +601,12 @@ impl ProjectHubState {
             self.selected = self.filtered.len().saturating_sub(1);
         }
         self.scroll_offset = 0;
+        // Reset last_git_fetch so ensure_git_info re-evaluates
+        let new_project_idx = self.filtered.get(self.selected).copied();
+        if new_project_idx != self.last_git_fetch {
+            self.last_git_fetch = None;
+        }
+        self.ensure_git_info();
     }
 
     pub fn move_up(&mut self) {
@@ -462,20 +623,47 @@ impl ProjectHubState {
         }
     }
 
+    /// Select a specific filtered index.
+    pub fn select(&mut self, idx: usize) {
+        if idx < self.filtered.len() {
+            self.selected = idx;
+            self.ensure_git_info();
+        }
+    }
+
     pub fn selected_project(&self) -> Option<&ProjectEntry> {
         self.filtered
             .get(self.selected)
             .and_then(|&i| self.all_projects.get(i))
     }
 
-    /// Get git info for the currently selected project (if cached).
+    /// Get git info for the currently selected project (if any data is available).
+    /// Returns data for both `Refreshing` and `Ready` states.
     pub fn selected_git_info(&self) -> Option<&ProjectGitInfo> {
         self.filtered
             .get(self.selected)
             .and_then(|&i| self.git_cache.get(&i))
+            .and_then(|entry| entry.info())
     }
 
-    /// Fetch git info for the selected project if not already cached.
+    /// Returns true if the selected project has no data yet (first load).
+    pub fn is_loading_git_info(&self) -> bool {
+        self.filtered
+            .get(self.selected)
+            .and_then(|&i| self.git_cache.get(&i))
+            .is_some_and(|entry| matches!(entry, GitCacheEntry::Loading))
+    }
+
+    /// Returns true if the selected project's data is being refreshed
+    /// (stale cache shown, or fast phase shown while slow phase loads).
+    pub fn is_refreshing_git_info(&self) -> bool {
+        self.filtered
+            .get(self.selected)
+            .and_then(|&i| self.git_cache.get(&i))
+            .is_some_and(|entry| entry.is_refreshing())
+    }
+
+    /// Kick off an async fetch of git info for the selected project if not already cached.
     pub fn ensure_git_info(&mut self) {
         let project_idx = match self.filtered.get(self.selected) {
             Some(&i) => i,
@@ -488,28 +676,134 @@ impl ProjectHubState {
         if self.git_cache.contains_key(&project_idx) {
             return;
         }
-        let path = &self.all_projects[project_idx].path;
-        let info = fetch_git_info(path);
-        self.git_cache.insert(project_idx, info);
+
+        let path = self.all_projects[project_idx].path.clone();
+        let tx = self.event_tx.clone();
+
+        // Check disk cache — returns data + freshness
+        if let Some((info, fresh)) = load_disk_cache(&path) {
+            if fresh {
+                self.git_cache.insert(project_idx, GitCacheEntry::Ready(info));
+                return;
+            }
+            // Stale cache: show old data immediately, refresh in background
+            self.git_cache.insert(project_idx, GitCacheEntry::Refreshing(info));
+            tokio::task::spawn_blocking(move || {
+                let full = fetch_git_info(&path);
+                save_disk_cache(&path, &full);
+                let _ = tx.send(ServerEvent::GitInfoReady {
+                    project_idx,
+                    info: full,
+                    refreshing: false,
+                });
+            });
+            return;
+        }
+
+        // No disk cache: progressive load (fast phase → slow phase)
+        self.git_cache.insert(project_idx, GitCacheEntry::Loading);
+        tokio::task::spawn_blocking(move || {
+            let fast = fetch_git_info_fast(&path);
+            let _ = tx.send(ServerEvent::GitInfoReady {
+                project_idx,
+                info: fast.clone(),
+                refreshing: true,
+            });
+            let full = fetch_git_info_slow(&path, fast);
+            save_disk_cache(&path, &full);
+            let _ = tx.send(ServerEvent::GitInfoReady {
+                project_idx,
+                info: full,
+                refreshing: false,
+            });
+        });
     }
 }
 
-fn fetch_git_info(path: &std::path::Path) -> ProjectGitInfo {
-    let run = |args: &[&str]| -> String {
-        std::process::Command::new("git")
-            .args(args)
-            .current_dir(path)
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default()
+/// Disk cache TTL for project git info (seconds).
+const GIT_CACHE_TTL_SECS: u64 = 30;
+
+#[derive(Serialize, Deserialize)]
+struct CachedGitInfo {
+    cached_at: u64,
+    info: ProjectGitInfo,
+}
+
+fn git_cache_path(project_path: &std::path::Path) -> std::path::PathBuf {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    project_path.hash(&mut hasher);
+    let hash = hasher.finish();
+    let cache_dir = dirs::cache_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join("pane")
+        .join("hub");
+    cache_dir.join(format!("{:016x}.json", hash))
+}
+
+/// Returns `Some((info, is_fresh))` if a disk cache entry exists.
+/// `is_fresh` is true if the entry is within the TTL.
+fn load_disk_cache(project_path: &std::path::Path) -> Option<(ProjectGitInfo, bool)> {
+    let path = git_cache_path(project_path);
+    let content = std::fs::read_to_string(&path).ok()?;
+    let cached: CachedGitInfo = serde_json::from_str(&content).ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let fresh = now - cached.cached_at <= GIT_CACHE_TTL_SECS;
+    Some((cached.info, fresh))
+}
+
+fn save_disk_cache(project_path: &std::path::Path, info: &ProjectGitInfo) {
+    let path = git_cache_path(project_path);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let cached = CachedGitInfo {
+        cached_at: now,
+        info: info.clone(),
     };
+    if let Ok(json) = serde_json::to_string(&cached) {
+        let _ = std::fs::write(&path, json);
+    }
+}
 
-    // Branch
-    let branch = run(&["rev-parse", "--abbrev-ref", "HEAD"]);
+fn git_run(path: &std::path::Path, args: &[&str]) -> String {
+    std::process::Command::new("git")
+        .args(args)
+        .current_dir(path)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
 
-    // Recent commits
-    let log_output = run(&[
+fn git_run_sh(path: &std::path::Path, cmd: &str) -> String {
+    std::process::Command::new("sh")
+        .args(["-c", cmd])
+        .current_dir(path)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+/// Fast phase: cheap local git operations (~50ms).
+/// Returns a partial ProjectGitInfo with slow fields defaulted.
+fn fetch_git_info_fast(path: &std::path::Path) -> ProjectGitInfo {
+    let branch = git_run(path, &["rev-parse", "--abbrev-ref", "HEAD"]);
+
+    // Remote URL (fast — reads local config)
+    let remote_raw = git_run(path, &["remote", "get-url", "origin"]);
+    let remote_url = if remote_raw.is_empty() { None } else { Some(remote_raw) };
+
+    let log_output = git_run(path, &[
         "log", "--oneline", "--format=%h\t%s\t%an\t%ar", "-15",
     ]);
     let commits: Vec<GitCommit> = log_output
@@ -526,8 +820,7 @@ fn fetch_git_info(path: &std::path::Path) -> ProjectGitInfo {
         })
         .collect();
 
-    // Status
-    let status_output = run(&["status", "--porcelain=v1"]);
+    let status_output = git_run(path, &["status", "--porcelain=v1"]);
     let status_lines: Vec<String> = status_output
         .lines()
         .filter(|l| !l.is_empty())
@@ -555,8 +848,7 @@ fn fetch_git_info(path: &std::path::Path) -> ProjectGitInfo {
         }
     }
 
-    // Ahead/behind
-    let ab_output = run(&["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]);
+    let ab_output = git_run(path, &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]);
     let (ahead, behind) = if let Some((a, b)) = ab_output.split_once('\t') {
         (
             a.trim().parse::<usize>().unwrap_or(0),
@@ -564,6 +856,50 @@ fn fetch_git_info(path: &std::path::Path) -> ProjectGitInfo {
         )
     } else {
         (0, 0)
+    };
+
+    let branch_output = git_run(path, &[
+        "branch",
+        "--format=%(HEAD)\t%(refname:short)\t%(committerdate:relative)",
+    ]);
+    let branches: Vec<BranchInfo> = branch_output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            let parts: Vec<&str> = line.splitn(3, '\t').collect();
+            BranchInfo {
+                is_current: parts.first().map(|s| s.trim() == "*").unwrap_or(false),
+                name: parts.get(1).unwrap_or(&"").to_string(),
+                last_commit_date: parts.get(2).unwrap_or(&"").to_string(),
+            }
+        })
+        .collect();
+
+    let stash_output = git_run(path, &["stash", "list", "--format=%gd\t%gs"]);
+    let stashes: Vec<StashInfo> = stash_output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            let (id, message) = line.split_once('\t').unwrap_or((line, ""));
+            StashInfo {
+                id: id.to_string(),
+                message: message.to_string(),
+            }
+        })
+        .collect();
+
+    let readme_lines: Vec<String> = {
+        let readme_path = path.join("README.md");
+        if readme_path.exists() {
+            std::fs::read_to_string(&readme_path)
+                .unwrap_or_default()
+                .lines()
+                .take(50)
+                .map(|l| l.to_string())
+                .collect()
+        } else {
+            Vec::new()
+        }
     };
 
     ProjectGitInfo {
@@ -575,7 +911,250 @@ fn fetch_git_info(path: &std::path::Path) -> ProjectGitInfo {
         untracked_count,
         ahead,
         behind,
+        branches,
+        stashes,
+        remote_url,
+        readme_lines,
+        ..Default::default()
     }
+}
+
+/// Slow phase: expensive operations (tree traversal, network, grep).
+/// Takes the fast result and fills in the remaining fields.
+fn fetch_git_info_slow(path: &std::path::Path, fast: ProjectGitInfo) -> ProjectGitInfo {
+    let tag_output = git_run_sh(path, "git tag -l --sort=-creatordate --format='%(refname:short)\t%(creatordate:relative)' | head -20");
+    let tags: Vec<TagInfo> = tag_output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            let (name, date) = line.split_once('\t').unwrap_or((line, ""));
+            TagInfo {
+                name: name.to_string(),
+                date: date.to_string(),
+            }
+        })
+        .collect();
+
+    let graph_output = git_run(path, &[
+        "log", "--oneline", "--graph", "--all", "-20", "--color=never",
+    ]);
+    let graph_lines: Vec<String> = graph_output
+        .lines()
+        .map(|l| l.to_string())
+        .collect();
+
+    let contrib_output = git_run_sh(path, "git shortlog -sne --all | head -20");
+    let contributors: Vec<ContributorInfo> = contrib_output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter_map(|line| {
+            let line = line.trim();
+            let (count_str, rest) = line.split_once('\t')?;
+            let count = count_str.trim().parse::<usize>().ok()?;
+            let (name, email) = if let Some(start) = rest.find('<') {
+                let name = rest[..start].trim().to_string();
+                let email = rest[start..].trim_matches(|c| c == '<' || c == '>').to_string();
+                (name, email)
+            } else {
+                (rest.trim().to_string(), String::new())
+            };
+            Some(ContributorInfo { name, email, count })
+        })
+        .collect();
+
+    let todo_output = git_run_sh(path,
+        "grep -rn 'TODO\\|FIXME\\|HACK' \
+         --include='*.rs' --include='*.ts' --include='*.js' \
+         --include='*.py' --include='*.go' --include='*.swift' \
+         --max-count=50 2>/dev/null | head -50"
+    );
+    let todos: Vec<TodoItem> = todo_output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, ':');
+            let file = parts.next()?.to_string();
+            let line_num = parts.next()?.to_string();
+            let text = parts.next().unwrap_or("").to_string();
+            let kind = if text.contains("FIXME") {
+                "FIXME"
+            } else if text.contains("HACK") {
+                "HACK"
+            } else {
+                "TODO"
+            }
+            .to_string();
+            let text = text.trim().to_string();
+            Some(TodoItem {
+                file,
+                line_num,
+                kind,
+                text,
+            })
+        })
+        .collect();
+
+    let ls_files = git_run(path, &["ls-files"]);
+    let languages: Vec<LanguageInfo> = {
+        let mut ext_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut total_files = 0usize;
+        for file in ls_files.lines().filter(|l| !l.is_empty()) {
+            total_files += 1;
+            let ext = std::path::Path::new(file)
+                .extension()
+                .map(|e| e.to_string_lossy().to_string())
+                .unwrap_or_else(|| "(none)".to_string());
+            *ext_counts.entry(ext).or_insert(0) += 1;
+        }
+        let mut langs: Vec<LanguageInfo> = ext_counts
+            .into_iter()
+            .map(|(extension, file_count)| {
+                let percentage = if total_files > 0 {
+                    (file_count as f32 / total_files as f32) * 100.0
+                } else {
+                    0.0
+                };
+                LanguageInfo {
+                    extension,
+                    file_count,
+                    percentage,
+                }
+            })
+            .collect();
+        langs.sort_by(|a, b| b.file_count.cmp(&a.file_count));
+        langs.truncate(15);
+        langs
+    };
+
+    let disk_usage: Option<DiskUsageInfo> = {
+        let du_total = git_run_sh(path, "du -sh . 2>/dev/null | cut -f1");
+        let du_git = git_run_sh(path, "du -sh .git 2>/dev/null | cut -f1");
+        let (build_size, build_dir_name) = if path.join("target").exists() {
+            (
+                Some(git_run_sh(path, "du -sh target 2>/dev/null | cut -f1")),
+                Some("target".to_string()),
+            )
+        } else if path.join("node_modules").exists() {
+            (
+                Some(git_run_sh(path, "du -sh node_modules 2>/dev/null | cut -f1")),
+                Some("node_modules".to_string()),
+            )
+        } else if path.join("build").exists() {
+            (
+                Some(git_run_sh(path, "du -sh build 2>/dev/null | cut -f1")),
+                Some("build".to_string()),
+            )
+        } else {
+            (None, None)
+        };
+        if !du_total.is_empty() {
+            Some(DiskUsageInfo {
+                total: du_total,
+                git_size: du_git,
+                build_size,
+                build_dir_name,
+            })
+        } else {
+            None
+        }
+    };
+
+    let gh_available = std::process::Command::new("sh")
+        .args(["-c", "command -v gh >/dev/null 2>&1"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    let (ci_runs, gh_issues) = if gh_available {
+        let ci_json = git_run_sh(path,
+            "gh run list --limit 10 --json status,name,conclusion,headBranch,createdAt 2>/dev/null"
+        );
+        let ci_runs: Vec<CiRun> = serde_json::from_str::<Vec<serde_json::Value>>(&ci_json)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|v| CiRun {
+                name: v["name"].as_str().unwrap_or("").to_string(),
+                status: v["status"].as_str().unwrap_or("").to_string(),
+                conclusion: v["conclusion"].as_str().unwrap_or("").to_string(),
+                branch: v["headBranch"].as_str().unwrap_or("").to_string(),
+                created_at: v["createdAt"].as_str().unwrap_or("").to_string(),
+            })
+            .collect();
+
+        let issue_json = git_run_sh(path,
+            "gh issue list --limit 10 --json number,title,author,labels 2>/dev/null"
+        );
+        let gh_issues: Vec<GhIssue> = serde_json::from_str::<Vec<serde_json::Value>>(&issue_json)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|v| {
+                let author = v["author"]["login"].as_str().unwrap_or("").to_string();
+                let labels: Vec<String> = v["labels"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|l| l["name"].as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                GhIssue {
+                    number: v["number"].as_u64().unwrap_or(0),
+                    title: v["title"].as_str().unwrap_or("").to_string(),
+                    author,
+                    labels,
+                }
+            })
+            .collect();
+
+        (ci_runs, gh_issues)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+
+    let processes: Vec<ProcessInfo> = {
+        let path_str = path.to_string_lossy().to_string();
+        let ps_output = git_run_sh(path, "ps -eo pid,pcpu,command 2>/dev/null");
+        ps_output
+            .lines()
+            .skip(1)
+            .filter(|l| l.contains(&path_str))
+            .filter_map(|line| {
+                let line = line.trim();
+                let mut parts = line.splitn(3, char::is_whitespace);
+                let pid = parts.next()?.trim().to_string();
+                let rest = parts.next().unwrap_or("").trim_start();
+                let mut rest_parts = rest.splitn(2, char::is_whitespace);
+                let cpu = rest_parts.next()?.trim().to_string();
+                let command = rest_parts.next().unwrap_or("").trim().to_string();
+                if command.is_empty() {
+                    return None;
+                }
+                Some(ProcessInfo { pid, cpu, command })
+            })
+            .collect()
+    };
+
+    ProjectGitInfo {
+        tags,
+        graph_lines,
+        contributors,
+        todos,
+        languages,
+        disk_usage,
+        ci_runs,
+        gh_issues,
+        gh_available,
+        processes,
+        // Carry forward the fast fields
+        ..fast
+    }
+}
+
+/// Full fetch (both phases). Used for background refresh of stale cache.
+fn fetch_git_info(path: &std::path::Path) -> ProjectGitInfo {
+    let fast = fetch_git_info_fast(path);
+    fetch_git_info_slow(path, fast)
 }
 
 /// Query zoxide for directories matching the input (up to 10 results).
@@ -628,6 +1207,7 @@ impl Client {
             new_workspace_input: None,
             project_hub_state: None,
             hub_active: true,
+            event_tx: None,
         }
     }
 
@@ -667,10 +1247,6 @@ impl Client {
             client.apply_layout(render_state);
         }
 
-        // Always initialize the project hub (it's a permanent workspace)
-        client.project_hub_state = Some(ProjectHubState::new(&client.config));
-        client.hub_active = true;
-
         // Set up TUI
         let mut tui = Tui::new()?;
         tui.enter()?;
@@ -692,6 +1268,11 @@ impl Client {
 
         // Event loop
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<ServerEvent>();
+
+        // Initialize the project hub (needs event_tx for async git info fetching)
+        client.event_tx = Some(event_tx.clone());
+        client.project_hub_state = Some(ProjectHubState::new(&client.config, event_tx.clone()));
+        client.hub_active = true;
 
         // Start terminal event reader — bridge AppEvent → ServerEvent
         let (app_tx, mut app_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -738,7 +1319,7 @@ impl Client {
         loop {
             if client.needs_redraw {
                 client.needs_redraw = false;
-                tui.draw(|frame| ui::render_client(&client, frame))?;
+                tui.draw(|frame| ui::render_client(&mut client, frame))?;
             }
 
             if let Some(event) = event_rx.recv().await {
@@ -809,6 +1390,11 @@ impl Client {
         self.screens.retain(|id, _| live_pane_ids.contains(id));
         self.render_state = render_state;
         self.render_state.active_workspace = preserved_ws;
+
+        // Show hub when no workspaces exist
+        if self.render_state.workspaces.is_empty() {
+            self.hub_active = true;
+        }
     }
 
     async fn handle_event(
@@ -834,6 +1420,17 @@ impl Client {
             }
             ServerEvent::Disconnected => {
                 self.should_quit = true;
+            }
+            ServerEvent::GitInfoReady { project_idx, info, refreshing } => {
+                if let Some(ref mut hub) = self.project_hub_state {
+                    let entry = if refreshing {
+                        GitCacheEntry::Refreshing(info)
+                    } else {
+                        GitCacheEntry::Ready(info)
+                    };
+                    hub.git_cache.insert(project_idx, entry);
+                }
+                self.needs_redraw = true;
             }
         }
         Ok(())
@@ -1058,19 +1655,13 @@ impl Client {
                     // Check workspace bar clicks (client-side)
                     let show_workspace_bar = self.hub_active || !self.render_state.workspaces.is_empty();
                     if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
-                        let mut names: Vec<String> = vec!["Hub".to_string()];
-                        names.extend(
-                            self.render_state
-                                .workspaces
-                                .iter()
-                                .map(|ws| ws.name.clone()),
-                        );
+                        let names: Vec<String> = self.render_state
+                            .workspaces
+                            .iter()
+                            .map(|ws| ws.name.clone())
+                            .collect();
                         let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-                        let active_idx = if self.hub_active {
-                            0
-                        } else {
-                            self.render_state.active_workspace + 1
-                        };
+                        let active_idx = self.render_state.active_workspace;
                         let bar_area =
                             Rect::new(0, 0, tui.size()?.width, crate::ui::workspace_bar::HEIGHT);
                         if let Some(click) = crate::ui::workspace_bar::hit_test(
@@ -1082,28 +1673,25 @@ impl Client {
                         ) {
                             self.workspace_bar_focused = true;
                             match click {
-                                crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
-                                    if i == 0 {
-                                        // Hub workspace
-                                        self.hub_active = true;
-                                        if self.project_hub_state.is_none() {
-                                            self.project_hub_state = Some(ProjectHubState::new(&self.config));
-                                        }
-                                    } else {
-                                        // Real daemon workspace (offset by -1)
-                                        self.hub_active = false;
-                                        let daemon_idx = i - 1;
-                                        self.render_state.active_workspace = daemon_idx;
-                                        let mut w = writer.lock().await;
-                                        let _ = send_request(
-                                            &mut w,
-                                            &ClientRequest::Command(format!(
-                                                "select-workspace -t {}",
-                                                daemon_idx
-                                            )),
-                                        )
-                                        .await;
+                                crate::ui::workspace_bar::WorkspaceBarClick::Home => {
+                                    self.hub_active = true;
+                                    if self.project_hub_state.is_none() {
+                                        self.project_hub_state = Some(ProjectHubState::new(&self.config, self.event_tx.as_ref().unwrap().clone()));
                                     }
+                                }
+                                crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
+                                    self.hub_active = false;
+
+                                    self.render_state.active_workspace = i;
+                                    let mut w = writer.lock().await;
+                                    let _ = send_request(
+                                        &mut w,
+                                        &ClientRequest::Command(format!(
+                                            "select-workspace -t {}",
+                                            i
+                                        )),
+                                    )
+                                    .await;
                                 }
                                 crate::ui::workspace_bar::WorkspaceBarClick::NewWorkspace => {
                                     let home = std::env::var("HOME")
@@ -1122,14 +1710,58 @@ impl Client {
                         }
                     }
 
+                    // Hub sidebar click handling
+                    if self.hub_active {
+                        let body = crate::ui::body_rect(self, tui.size()?);
+                        if let Some(ref mut hub) = self.project_hub_state {
+                            // Check GitHub button clicks first
+                            let button_url = hub.buttons.iter().find(|btn| {
+                                x >= btn.rect.x && x < btn.rect.x + btn.rect.width
+                                    && y >= btn.rect.y && y < btn.rect.y + btn.rect.height
+                            }).and_then(|btn| {
+                                hub.selected_git_info()
+                                    .and_then(|g| g.github_url())
+                                    .map(|base| format!("{}{}", base, btn.url_suffix))
+                            });
+                            if let Some(url) = button_url {
+                                let _ = std::process::Command::new("open")
+                                    .arg(&url)
+                                    .spawn();
+                                self.workspace_bar_focused = false;
+                                return Ok(());
+                            }
+
+                            if let Some(idx) = crate::ui::project_hub::sidebar_hit_test(hub, body, x, y) {
+                                let now = std::time::Instant::now();
+                                let is_double = hub.last_click
+                                    .map(|(prev_idx, prev_time)| {
+                                        prev_idx == idx && now.duration_since(prev_time).as_millis() < 400
+                                    })
+                                    .unwrap_or(false);
+
+                                if is_double {
+                                    // Double click — open as workspace
+                                    hub.last_click = None;
+                                    if let Some(project) = hub.selected_project().cloned() {
+                                        let dir = project.path.to_string_lossy().to_string();
+                                        self.open_project(&dir, writer).await?;
+                                    }
+                                } else {
+                                    // Single click — select
+                                    hub.select(idx);
+                                    hub.last_click = Some((idx, now));
+                                }
+                            } else {
+                                hub.last_click = None;
+                            }
+                        }
+                        self.workspace_bar_focused = false;
+                        return Ok(());
+                    }
+
                     // Check if click hit a tab bar + button (open picker client-side)
                     if self.hit_test_tab_bar_plus(tui, x, y) {
-                        self.tab_picker_state = Some(TabPickerState::new(
-                            &self.system_programs,
-                            &self.config.tab_picker_entries,
-                            &self.favorites,
-                        ));
-                        self.mode = Mode::TabPicker;
+                        self.open_tab_picker(crate::ui::tab_picker::TabPickerMode::NewTab);
                         return Ok(());
                     }
 
@@ -1178,44 +1810,39 @@ impl Client {
 
                     if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
                         // Right-click on workspace bar — select the clicked workspace first
-                        let mut names: Vec<String> = vec!["Hub".to_string()];
-                        names.extend(
-                            self.render_state
-                                .workspaces
-                                .iter()
-                                .map(|ws| ws.name.clone()),
-                        );
+                        let names: Vec<String> = self.render_state
+                            .workspaces
+                            .iter()
+                            .map(|ws| ws.name.clone())
+                            .collect();
                         let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-                        let active_idx = if self.hub_active {
-                            0
-                        } else {
-                            self.render_state.active_workspace + 1
-                        };
+                        let active_idx = self.render_state.active_workspace;
                         let bar_area =
                             Rect::new(0, 0, tui.size()?.width, crate::ui::workspace_bar::HEIGHT);
-                        if let Some(crate::ui::workspace_bar::WorkspaceBarClick::Tab(i)) =
-                            crate::ui::workspace_bar::hit_test(
-                                &name_refs,
-                                active_idx,
-                                bar_area,
-                                x,
-                                y,
-                            )
-                        {
-                            if i == 0 {
-                                // Right-click on Hub — just select it, don't show close menu
+                        match crate::ui::workspace_bar::hit_test(
+                            &name_refs,
+                            active_idx,
+                            bar_area,
+                            x,
+                            y,
+                        ) {
+                            Some(crate::ui::workspace_bar::WorkspaceBarClick::Home) => {
+                                // Right-click on Home — just select it, don't show close menu
                                 self.hub_active = true;
                                 return Ok(());
                             }
-                            let daemon_idx = i - 1;
-                            self.hub_active = false;
-                            self.render_state.active_workspace = daemon_idx;
-                            let mut w = writer.lock().await;
-                            let _ = send_request(
-                                &mut w,
-                                &ClientRequest::Command(format!("select-workspace -t {}", daemon_idx)),
-                            )
-                            .await;
+                            Some(crate::ui::workspace_bar::WorkspaceBarClick::Tab(i)) => {
+                                self.hub_active = false;
+
+                                self.render_state.active_workspace = i;
+                                let mut w = writer.lock().await;
+                                let _ = send_request(
+                                    &mut w,
+                                    &ClientRequest::Command(format!("select-workspace -t {}", i)),
+                                )
+                                .await;
+                            }
+                            _ => {}
                         }
                         self.context_menu_state =
                             Some(crate::ui::context_menu::workspace_bar_menu(x, y));
@@ -1259,7 +1886,7 @@ impl Client {
         // Hub workspace: handle keys when hub is active (regardless of mode)
         if self.hub_active && self.mode != Mode::Palette && self.mode != Mode::Confirm
             && self.mode != Mode::Rename && self.mode != Mode::ContextMenu
-            && self.mode != Mode::Leader
+            && self.mode != Mode::Leader && self.mode != Mode::NewWorkspaceInput
         {
             return self.handle_project_hub_key(key, writer).await;
         }
@@ -1397,7 +2024,7 @@ impl Client {
                             // At first daemon workspace, go to hub
                             self.hub_active = true;
                             if self.project_hub_state.is_none() {
-                                self.project_hub_state = Some(ProjectHubState::new(&self.config));
+                                self.project_hub_state = Some(ProjectHubState::new(&self.config, self.event_tx.as_ref().unwrap().clone()));
                             }
                         }
                     }
@@ -1408,6 +2035,7 @@ impl Client {
                         // From hub, go to first daemon workspace if exists
                         if !self.render_state.workspaces.is_empty() {
                             self.hub_active = false;
+
                             self.render_state.active_workspace = 0;
                             let mut w = writer.lock().await;
                             let _ = send_request(
@@ -1536,31 +2164,15 @@ impl Client {
                 return Ok(());
             }
             Action::NewTab => {
-                self.tab_picker_state = Some(TabPickerState::new(
-                    &self.system_programs,
-                    &self.config.tab_picker_entries,
-                    &self.favorites,
-                ));
-                self.mode = Mode::TabPicker;
+                self.open_tab_picker(crate::ui::tab_picker::TabPickerMode::NewTab);
                 return Ok(());
             }
             Action::SplitHorizontal => {
-                self.tab_picker_state = Some(TabPickerState::with_mode(
-                    &self.system_programs,
-                    &self.config.tab_picker_entries,
-                    &self.favorites,
-                    crate::ui::tab_picker::TabPickerMode::SplitHorizontal,
-                ));
-                self.mode = Mode::TabPicker;
+                self.open_tab_picker(crate::ui::tab_picker::TabPickerMode::SplitHorizontal);
                 return Ok(());
             }
             Action::SplitVertical => {
-                self.tab_picker_state = Some(TabPickerState::with_mode(
-                    &self.system_programs,
-                    &self.config.tab_picker_entries,
-                    &self.favorites,
-                    crate::ui::tab_picker::TabPickerMode::SplitVertical,
-                ));
+                self.open_tab_picker(crate::ui::tab_picker::TabPickerMode::SplitVertical);
                 self.mode = Mode::TabPicker;
                 return Ok(());
             }
@@ -1608,7 +2220,7 @@ impl Client {
                 self.hub_active = true;
                 self.workspace_bar_focused = false;
                 if self.project_hub_state.is_none() {
-                    self.project_hub_state = Some(ProjectHubState::new(&self.config));
+                    self.project_hub_state = Some(ProjectHubState::new(&self.config, self.event_tx.as_ref().unwrap().clone()));
                 }
                 return Ok(());
             }
@@ -1942,6 +2554,38 @@ impl Client {
         Ok(())
     }
 
+    /// Open a project by path: switch to an existing workspace if one matches,
+    /// otherwise create a new workspace at that path.
+    async fn open_project(
+        &mut self,
+        dir: &str,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        // Check if a workspace already exists for this path
+        let existing = self
+            .render_state
+            .workspaces
+            .iter()
+            .position(|ws| ws.cwd == dir);
+
+        self.hub_active = false;
+        if let Some(idx) = existing {
+            self.render_state.active_workspace = idx;
+            let mut w = writer.lock().await;
+            let _ = send_request(
+                &mut w,
+                &ClientRequest::Command(format!("select-workspace -t {}", idx)),
+            )
+            .await;
+        } else {
+            self.render_state.active_workspace = self.render_state.workspaces.len();
+            let cmd = format!("new-workspace -c \"{}\"", dir);
+            let mut w = writer.lock().await;
+            let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
+        }
+        Ok(())
+    }
+
     async fn handle_project_hub_key(
         &mut self,
         key: KeyEvent,
@@ -1971,15 +2615,7 @@ impl Client {
             KeyCode::Enter => {
                 if let Some(project) = state.selected_project().cloned() {
                     let dir = project.path.to_string_lossy().to_string();
-                    let name = project.name.clone();
-
-                    self.hub_active = false;
-                    self.render_state.active_workspace = self.render_state.workspaces.len();
-                    let cmd = format!("new-workspace -c \"{}\"", dir);
-                    let mut w = writer.lock().await;
-                    let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
-                    let rename_cmd = format!("rename-workspace {}", name);
-                    let _ = send_request(&mut w, &ClientRequest::Command(rename_cmd)).await;
+                    self.open_project(&dir, writer).await?;
                 }
             }
             KeyCode::Char(c) => {
@@ -2281,6 +2917,34 @@ impl Client {
             .get(self.render_state.active_workspace)
     }
 
+    /// Get the current workspace CWD, if any.
+    fn current_cwd(&self) -> Option<&str> {
+        self.active_workspace()
+            .map(|ws| ws.cwd.as_str())
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Scan project scripts for the current workspace and return entries.
+    fn current_project_scripts(&self) -> Vec<crate::ui::tab_picker::TabPickerEntry> {
+        self.current_cwd()
+            .map(|cwd| {
+                crate::ui::tab_picker::scan_project_scripts(std::path::Path::new(cwd))
+            })
+            .unwrap_or_default()
+    }
+
+    fn open_tab_picker(&mut self, mode: crate::ui::tab_picker::TabPickerMode) {
+        let scripts = self.current_project_scripts();
+        self.tab_picker_state = Some(TabPickerState::with_scripts(
+            &self.system_programs,
+            &self.config.tab_picker_entries,
+            &self.favorites,
+            mode,
+            &scripts,
+        ));
+        self.mode = Mode::TabPicker;
+    }
+
     pub fn pane_screen(&self, pane_id: TabId) -> Option<&vt100::Screen> {
         self.screens.get(&pane_id).map(|p| p.screen())
     }
@@ -2426,6 +3090,7 @@ enum ServerEvent {
     Terminal(crate::event::AppEvent),
     Server(ServerResponse),
     Disconnected,
+    GitInfoReady { project_idx: usize, info: ProjectGitInfo, refreshing: bool },
 }
 
 // Implement From so the event loop channel works
@@ -2508,15 +3173,30 @@ fn action_to_command(action: &Action) -> Option<String> {
 }
 
 /// Suggest a workspace name from a directory: git repo name, then folder name.
+/// Converts kebab-case/snake_case to Title Case.
 fn auto_workspace_name_suggestion(dir: &std::path::Path) -> String {
-    // Try git repo name
-    if let Some(name) = git_repo_name_for_dir(dir) {
-        return name;
-    }
-    // Fall back to folder name
-    dir.file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_default()
+    let raw = git_repo_name_for_dir(dir)
+        .or_else(|| dir.file_name().map(|f| f.to_string_lossy().to_string()))
+        .unwrap_or_default();
+    titlecase_name(&raw)
+}
+
+/// Convert a kebab-case or snake_case name to Title Case.
+fn titlecase_name(name: &str) -> String {
+    name.split(|c: char| c == '-' || c == '_')
+        .filter(|s| !s.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(c) => {
+                    let upper: String = c.to_uppercase().collect();
+                    format!("{}{}", upper, chars.as_str())
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn print_detach_summary(state: &RenderState) {

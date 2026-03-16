@@ -208,13 +208,19 @@ pub fn execute(
                 };
                 let resolved = if expanded.is_absolute() {
                     expanded
-                } else {
+                } else if !state.workspaces.is_empty() {
                     state.active_workspace().cwd.join(&expanded)
+                } else {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")).join(&expanded)
                 };
                 resolved.canonicalize().unwrap_or(resolved)
             });
 
-            let (cols, rows) = state.active_window_pty_size();
+            let (cols, rows) = if state.workspaces.is_empty() {
+                state.last_size
+            } else {
+                state.active_window_pty_size()
+            };
             state.new_workspace(cols, rows, ws_cwd)?;
             if let Some(wname) = window_name {
                 let ws = state.active_workspace_mut();
@@ -236,6 +242,11 @@ pub fn execute(
                 pane_id: Some(pane_n),
                 window_id: Some(win_n),
             })
+        }
+
+        // All commands below require at least one workspace.
+        _ if state.workspaces.is_empty() => {
+            bail!("no workspace — open a project first");
         }
 
         Command::NewWindow {
@@ -500,10 +511,7 @@ pub fn execute(
         }
 
         Command::CloseWorkspace => {
-            if state.close_workspace() {
-                let _ = broadcast_tx.send(ServerResponse::SessionEnded);
-                return Ok(CommandResult::SessionEnded);
-            }
+            state.close_workspace();
             let (w, h) = state.last_size;
             state.resize_all_tabs(w, h);
             broadcast_layout(state, broadcast_tx);
@@ -1123,7 +1131,7 @@ mod tests {
     /// Helper: create a minimal ServerState + Window for expand_format tests.
     fn make_test_state_and_group() -> (ServerState, crate::window::Window) {
         let (event_tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let state = ServerState::new(
+        let state = ServerState::new_with_workspace(
             &event_tx,
             120,
             40,
@@ -1258,11 +1266,12 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_close_workspace_single_ends_session() {
+    fn test_execute_close_workspace_single_goes_to_hub() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let cmd = Command::CloseWorkspace;
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
-        assert!(matches!(result, CommandResult::SessionEnded));
+        assert!(matches!(result, CommandResult::LayoutChanged));
+        assert_eq!(state.workspaces.len(), 0);
     }
 
     #[test]
@@ -1962,17 +1971,16 @@ mod tests {
     // ---- CloseWorkspace when only one exists ----
 
     #[test]
-    fn test_execute_close_workspace_only_one_ends_session() {
+    fn test_execute_close_workspace_only_one_goes_to_hub() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         assert_eq!(state.workspaces.len(), 1);
         let cmd = Command::CloseWorkspace;
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(
-            matches!(result, CommandResult::SessionEnded),
-            "closing the only workspace should end the session"
+            matches!(result, CommandResult::LayoutChanged),
+            "closing the only workspace should return to hub"
         );
-        // Workspace is still there (caller handles shutdown)
-        assert_eq!(state.workspaces.len(), 1);
+        assert_eq!(state.workspaces.len(), 0);
     }
 
     // ---- ToggleFold ----

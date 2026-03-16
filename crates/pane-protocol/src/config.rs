@@ -162,6 +162,107 @@ impl Theme {
 // Behavior
 // ---------------------------------------------------------------------------
 
+/// A widget that can be displayed in the project hub detail panel.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum HubWidget {
+    /// Project name, path, branch, and working tree status.
+    ProjectInfo,
+    /// Recent git commits.
+    RecentCommits,
+    /// Changed files from git status.
+    ChangedFiles,
+    /// All local branches with current branch highlighted.
+    Branches,
+    /// Git stash list.
+    Stashes,
+    /// Recent tags.
+    Tags,
+    /// ASCII git graph (--oneline --graph --all).
+    GitGraph,
+    /// Top contributors by commit count.
+    Contributors,
+    /// TODO/FIXME/HACK comments found in source files.
+    Todos,
+    /// First ~50 lines of README.md.
+    Readme,
+    /// File count by language/extension.
+    Languages,
+    /// Disk usage breakdown (total, .git, build dir).
+    DiskUsage,
+    /// Recent CI runs from GitHub Actions (requires `gh`).
+    CiStatus,
+    /// Open issues from GitHub (requires `gh`).
+    OpenIssues,
+    /// Keyboard shortcut cheat sheet.
+    QuickActions,
+    /// Processes running in the project directory.
+    RunningProcesses,
+}
+
+impl HubWidget {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "project_info" => Some(Self::ProjectInfo),
+            "recent_commits" => Some(Self::RecentCommits),
+            "changed_files" => Some(Self::ChangedFiles),
+            "branches" => Some(Self::Branches),
+            "stashes" => Some(Self::Stashes),
+            "tags" => Some(Self::Tags),
+            "git_graph" => Some(Self::GitGraph),
+            "contributors" => Some(Self::Contributors),
+            "todos" => Some(Self::Todos),
+            "readme" => Some(Self::Readme),
+            "languages" => Some(Self::Languages),
+            "disk_usage" => Some(Self::DiskUsage),
+            "ci_status" => Some(Self::CiStatus),
+            "open_issues" => Some(Self::OpenIssues),
+            "quick_actions" => Some(Self::QuickActions),
+            "running_processes" => Some(Self::RunningProcesses),
+            _ => None,
+        }
+    }
+
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::ProjectInfo,
+            Self::RecentCommits,
+            Self::ChangedFiles,
+            Self::Branches,
+            Self::Stashes,
+            Self::Tags,
+            Self::GitGraph,
+            Self::Contributors,
+            Self::Todos,
+            Self::Readme,
+            Self::Languages,
+            Self::DiskUsage,
+            Self::CiStatus,
+            Self::OpenIssues,
+            Self::QuickActions,
+            Self::RunningProcesses,
+        ]
+    }
+}
+
+/// Layout configuration for the hub detail panel.
+/// Each inner Vec is a row of widgets displayed side-by-side.
+/// Rows are stacked vertically.
+#[derive(Clone, Debug)]
+pub struct HubLayout {
+    pub rows: Vec<Vec<HubWidget>>,
+}
+
+impl Default for HubLayout {
+    fn default() -> Self {
+        Self {
+            rows: vec![
+                vec![HubWidget::ProjectInfo],
+                vec![HubWidget::RecentCommits, HubWidget::ChangedFiles],
+            ],
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Behavior {
     pub fold_bar_size: u16,
@@ -177,6 +278,8 @@ pub struct Behavior {
     pub projects_dirs: Vec<String>,
     /// Whether to show the project hub on startup.
     pub show_project_hub_on_start: bool,
+    /// Widget layout for the hub detail panel.
+    pub hub_layout: HubLayout,
 }
 
 impl Default for Behavior {
@@ -190,6 +293,7 @@ impl Default for Behavior {
             terminal_title_format: Some("{session} - {workspace}".to_string()),
             projects_dirs: Vec::new(),
             show_project_hub_on_start: false,
+            hub_layout: HubLayout::default(),
         }
     }
 }
@@ -866,6 +970,25 @@ impl Config {
             if let Some(v) = b.show_project_hub_on_start {
                 config.behavior.show_project_hub_on_start = v;
             }
+            if let Some(raw_layout) = b.hub_layout {
+                let rows: Vec<Vec<HubWidget>> = raw_layout
+                    .into_iter()
+                    .filter_map(|row| {
+                        let widgets: Vec<HubWidget> = row
+                            .iter()
+                            .filter_map(|s| HubWidget::from_str(s))
+                            .collect();
+                        if widgets.is_empty() {
+                            None
+                        } else {
+                            Some(widgets)
+                        }
+                    })
+                    .collect();
+                if !rows.is_empty() {
+                    config.behavior.hub_layout = HubLayout { rows };
+                }
+            }
         }
 
         // Keys
@@ -1049,6 +1172,9 @@ struct RawBehavior {
     terminal_title_format: Option<String>,
     projects_dirs: Option<Vec<String>>,
     show_project_hub_on_start: Option<bool>,
+    /// Widget layout: array of arrays of widget names.
+    /// e.g. `[["project_info"], ["recent_commits", "changed_files"]]`
+    hub_layout: Option<Vec<Vec<String>>>,
 }
 
 #[derive(Deserialize, Default)]

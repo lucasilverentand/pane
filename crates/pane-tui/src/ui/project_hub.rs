@@ -6,26 +6,86 @@ use ratatui::{
     Frame,
 };
 
-use crate::client::ProjectHubState;
-use pane_protocol::config::Theme;
+use crate::client::{ProjectGitInfo, ProjectHubState};
+use pane_protocol::config::{HubLayout, HubWidget, Theme};
 
 const SIDEBAR_MIN_WIDTH: u16 = 28;
 const SIDEBAR_MAX_WIDTH: u16 = 40;
 
-/// Render the project hub as a full workspace body: left sidebar + right detail panel.
-pub fn render_body(
+/// Hit test the project sidebar. Returns the filtered index of the project clicked.
+pub fn sidebar_hit_test(
     state: &ProjectHubState,
+    area: Rect,
+    x: u16,
+    y: u16,
+) -> Option<usize> {
+    if area.height < 4 || area.width < 20 {
+        return None;
+    }
+
+    let sidebar_width = (area.width / 3)
+        .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+        .min(area.width);
+    let sidebar_area = Rect::new(area.x, area.y, sidebar_width, area.height);
+
+    // Compute inner area (inside border)
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(sidebar_area);
+
+    if x < inner.x || x >= inner.x + inner.width || y < inner.y || y >= inner.y + inner.height {
+        return None;
+    }
+
+    // List starts after search input (1 line) + separator (1 line)
+    let list_start_y = inner.y + 2;
+    if y < list_start_y {
+        return None;
+    }
+
+    let list_height = (inner.y + inner.height).saturating_sub(list_start_y) as usize;
+    if list_height == 0 || state.filtered.is_empty() {
+        return None;
+    }
+
+    // Compute scroll offset (same logic as render_sidebar)
+    let mut scroll = state.scroll_offset;
+    if state.selected >= scroll + list_height {
+        scroll = state.selected + 1 - list_height;
+    }
+    if state.selected < scroll {
+        scroll = state.selected;
+    }
+
+    let visual_row = (y - list_start_y) as usize;
+    let filtered_idx = scroll + visual_row;
+    if filtered_idx < state.filtered.len() {
+        Some(filtered_idx)
+    } else {
+        None
+    }
+}
+
+/// Render the project hub as a full workspace body: left sidebar + right widget panel.
+pub fn render_body(
+    state: &mut ProjectHubState,
     theme: &Theme,
+    layout: &HubLayout,
     hover: Option<(u16, u16)>,
     frame: &mut Frame,
     area: Rect,
 ) {
+    let mut buttons = Vec::new();
+
     if area.height < 4 || area.width < 20 {
+        state.buttons = buttons;
         return;
     }
 
-    // Split into left sidebar and right detail panel
-    let sidebar_width = (area.width / 3).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH).min(area.width);
+    let sidebar_width = (area.width / 3)
+        .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+        .min(area.width);
     let [left, right] = Layout::horizontal([
         Constraint::Length(sidebar_width),
         Constraint::Fill(1),
@@ -33,7 +93,8 @@ pub fn render_body(
     .areas(area);
 
     render_sidebar(state, theme, hover, frame, left);
-    render_detail(state, theme, frame, right);
+    render_widgets(state, theme, layout, &mut buttons, frame, right);
+    state.buttons = buttons;
 }
 
 fn render_sidebar(
@@ -49,7 +110,9 @@ fn render_sidebar(
         .border_style(Style::default().fg(theme.accent))
         .title(Span::styled(
             " projects ",
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -166,20 +229,19 @@ fn render_sidebar(
     }
 }
 
-fn render_detail(
+// ---------------------------------------------------------------------------
+// Widget grid layout
+// ---------------------------------------------------------------------------
+
+fn render_widgets(
     state: &ProjectHubState,
     theme: &Theme,
+    layout: &HubLayout,
+    buttons: &mut Vec<crate::client::HubButton>,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = Block::default()
-        .borders(Borders::TOP | Borders::RIGHT | Borders::BOTTOM)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.border_inactive));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height < 3 || inner.width < 10 {
+    if area.height < 3 || area.width < 10 {
         return;
     }
 
@@ -192,157 +254,321 @@ fn render_detail(
             ));
             frame.render_widget(
                 Paragraph::new(msg),
-                Rect::new(inner.x, inner.y + inner.height / 2, inner.width, 1),
+                Rect::new(area.x, area.y + area.height / 2, area.width, 1),
             );
             return;
         }
     };
 
-    let home_dir = std::env::var("HOME").unwrap_or_default();
+    let git_info = state.selected_git_info();
+    let refreshing = state.is_refreshing_git_info();
+
+    // Show loading indicator only when we have no data at all
+    if git_info.is_none() && state.is_loading_git_info() {
+        let msg = Line::from(Span::styled(
+            "  loading...",
+            Style::default().fg(theme.dim),
+        ));
+        frame.render_widget(
+            Paragraph::new(msg),
+            Rect::new(area.x, area.y + area.height / 2, area.width, 1),
+        );
+        return;
+    }
+
+    // Show "updating..." indicator in top-right when refreshing with stale/partial data
+    if refreshing && area.width > 14 {
+        let label = " updating... ";
+        let label_width = label.len() as u16;
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                label,
+                Style::default().fg(theme.dim),
+            )),
+            Rect::new(
+                area.x + area.width - label_width,
+                area.y,
+                label_width,
+                1,
+            ),
+        );
+    }
+
+    let row_count = layout.rows.len();
+
+    // Split area vertically into rows, each getting equal space
+    let row_constraints: Vec<Constraint> = layout
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            // Give ProjectInfo/QuickActions rows a smaller fixed height, others fill
+            if row.len() == 1 && row[0] == HubWidget::ProjectInfo {
+                // ProjectInfo needs ~6 lines + 2 border = 8
+                Constraint::Length(8)
+            } else if row.len() == 1 && row[0] == HubWidget::QuickActions {
+                Constraint::Length(6)
+            } else if i == row_count - 1 {
+                Constraint::Fill(1)
+            } else {
+                Constraint::Fill(1)
+            }
+        })
+        .collect();
+
+    let row_areas = Layout::vertical(row_constraints).split(area);
+
+    for (row_idx, widgets) in layout.rows.iter().enumerate() {
+        let row_area = row_areas[row_idx];
+        if row_area.height < 3 {
+            continue;
+        }
+
+        // Split row horizontally into columns
+        let col_constraints: Vec<Constraint> =
+            widgets.iter().map(|_| Constraint::Fill(1)).collect();
+        let col_areas = Layout::horizontal(col_constraints).split(row_area);
+
+        for (col_idx, widget) in widgets.iter().enumerate() {
+            let cell = col_areas[col_idx];
+            if cell.width < 6 {
+                continue;
+            }
+            match widget {
+                HubWidget::ProjectInfo => {
+                    render_widget_project_info(project, git_info, theme, frame, cell);
+                }
+                HubWidget::RecentCommits => {
+                    render_widget_recent_commits(git_info, theme, frame, cell);
+                }
+                HubWidget::ChangedFiles => {
+                    render_widget_changed_files(git_info, theme, frame, cell);
+                }
+                HubWidget::Branches => {
+                    render_widget_branches(git_info, theme, frame, cell);
+                }
+                HubWidget::Stashes => {
+                    render_widget_stashes(git_info, theme, frame, cell);
+                }
+                HubWidget::Tags => {
+                    render_widget_tags(git_info, theme, frame, cell);
+                }
+                HubWidget::GitGraph => {
+                    render_widget_git_graph(git_info, theme, frame, cell);
+                }
+                HubWidget::Contributors => {
+                    render_widget_contributors(git_info, theme, frame, cell);
+                }
+                HubWidget::Todos => {
+                    render_widget_todos(git_info, theme, frame, cell);
+                }
+                HubWidget::Readme => {
+                    render_widget_readme(git_info, theme, frame, cell);
+                }
+                HubWidget::Languages => {
+                    render_widget_languages(git_info, theme, frame, cell);
+                }
+                HubWidget::DiskUsage => {
+                    render_widget_disk_usage(git_info, theme, frame, cell);
+                }
+                HubWidget::CiStatus => {
+                    render_widget_ci_status(git_info, theme, frame, cell);
+                }
+                HubWidget::OpenIssues => {
+                    render_widget_open_issues(git_info, theme, frame, cell);
+                }
+                HubWidget::QuickActions => {
+                    render_widget_quick_actions(git_info, theme, buttons, frame, cell);
+                }
+                HubWidget::RunningProcesses => {
+                    render_widget_running_processes(git_info, theme, frame, cell);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Individual widget renderers — each draws inside a bordered box
+// ---------------------------------------------------------------------------
+
+fn render_widget_project_info(
+    project: &crate::client::ProjectEntry,
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border_inactive))
+        .title(Span::styled(
+            " project ",
+            Style::default().fg(theme.dim),
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 2 || inner.width < 8 {
+        return;
+    }
+
     let dim_style = Style::default().fg(theme.dim);
     let accent_style = Style::default().fg(theme.accent);
     let bold_style = Style::default()
         .fg(theme.fg)
         .add_modifier(Modifier::BOLD);
-    let fg_style = Style::default().fg(theme.fg);
-    let max_w = inner.width as usize;
-
-    let mut row = inner.y;
     let pad = " ";
 
-    // ── Project name (large) ──
-    let name_line = Line::from(vec![
-        Span::raw(pad),
-        Span::styled(&project.name, bold_style),
-    ]);
+    let home_dir = std::env::var("HOME").unwrap_or_default();
+    let mut row = inner.y;
+
+    // Project name
     frame.render_widget(
-        Paragraph::new(name_line),
+        Paragraph::new(Line::from(vec![
+            Span::raw(pad),
+            Span::styled(&project.name, bold_style),
+        ])),
         Rect::new(inner.x, row, inner.width, 1),
     );
     row += 1;
 
     // Path
-    let path_display = {
-        let p = project.path.to_string_lossy();
-        if !home_dir.is_empty() && p.starts_with(&home_dir) {
-            format!("~{}", &p[home_dir.len()..])
-        } else {
-            p.to_string()
-        }
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw(pad),
-            Span::styled(&path_display, dim_style),
-        ])),
-        Rect::new(inner.x, row, inner.width, 1),
-    );
-    row += 2;
-
-    // ── Git info ──
-    let git_info = match state.selected_git_info() {
-        Some(info) => info,
-        None => return,
-    };
-
-    if git_info.branch.is_empty() {
-        return;
+    if row < inner.y + inner.height {
+        let path_display = {
+            let p = project.path.to_string_lossy();
+            if !home_dir.is_empty() && p.starts_with(&home_dir) {
+                format!("~{}", &p[home_dir.len()..])
+            } else {
+                p.to_string()
+            }
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(pad),
+                Span::styled(path_display, dim_style),
+            ])),
+            Rect::new(inner.x, row, inner.width, 1),
+        );
+        row += 1;
     }
 
-    // Branch + sync status
-    let mut branch_spans = vec![
-        Span::raw(pad),
-        Span::styled("branch ", dim_style),
-        Span::styled(&git_info.branch, accent_style),
-    ];
-    if git_info.ahead > 0 || git_info.behind > 0 {
-        let mut sync_parts = Vec::new();
-        if git_info.ahead > 0 {
-            sync_parts.push(format!("{}↑", git_info.ahead));
+    // Git info
+    if let Some(git) = git_info {
+        if !git.branch.is_empty() && row + 1 < inner.y + inner.height {
+            row += 1; // gap
+
+            // Branch + sync status
+            let mut branch_spans = vec![
+                Span::raw(pad),
+                Span::styled("branch ", dim_style),
+                Span::styled(&git.branch, accent_style),
+            ];
+            if git.ahead > 0 || git.behind > 0 {
+                let mut sync_parts = Vec::new();
+                if git.ahead > 0 {
+                    sync_parts.push(format!("{}↑", git.ahead));
+                }
+                if git.behind > 0 {
+                    sync_parts.push(format!("{}↓", git.behind));
+                }
+                branch_spans.push(Span::styled(
+                    format!("  {}", sync_parts.join(" ")),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+            frame.render_widget(
+                Paragraph::new(Line::from(branch_spans)),
+                Rect::new(inner.x, row, inner.width, 1),
+            );
+            row += 1;
+
+            // Working tree status summary
+            if row < inner.y + inner.height {
+                let mut status_parts: Vec<Span> = vec![Span::raw(pad)];
+                let has_changes = git.staged_count > 0
+                    || git.dirty_count > 0
+                    || git.untracked_count > 0;
+                if has_changes {
+                    if git.staged_count > 0 {
+                        status_parts.push(Span::styled(
+                            format!("{} staged", git.staged_count),
+                            Style::default().fg(Color::Green),
+                        ));
+                        status_parts.push(Span::styled("  ", dim_style));
+                    }
+                    if git.dirty_count > 0 {
+                        status_parts.push(Span::styled(
+                            format!("{} modified", git.dirty_count),
+                            Style::default().fg(Color::Yellow),
+                        ));
+                        status_parts.push(Span::styled("  ", dim_style));
+                    }
+                    if git.untracked_count > 0 {
+                        status_parts.push(Span::styled(
+                            format!("{} untracked", git.untracked_count),
+                            Style::default().fg(Color::Red),
+                        ));
+                    }
+                } else {
+                    status_parts
+                        .push(Span::styled("clean", Style::default().fg(Color::Green)));
+                }
+                frame.render_widget(
+                    Paragraph::new(Line::from(status_parts)),
+                    Rect::new(inner.x, row, inner.width, 1),
+                );
+            }
         }
-        if git_info.behind > 0 {
-            sync_parts.push(format!("{}↓", git_info.behind));
-        }
-        branch_spans.push(Span::styled(
-            format!("  {}", sync_parts.join(" ")),
-            Style::default().fg(Color::Yellow),
+    }
+}
+
+fn render_widget_recent_commits(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border_inactive))
+        .title(Span::styled(
+            " recent commits ",
+            Style::default().fg(theme.dim),
         ));
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(branch_spans)),
-        Rect::new(inner.x, row, inner.width, 1),
-    );
-    row += 1;
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    // Working tree status summary
-    let mut status_parts: Vec<Span> = vec![Span::raw(pad)];
-    let has_changes = git_info.staged_count > 0
-        || git_info.dirty_count > 0
-        || git_info.untracked_count > 0;
-    if has_changes {
-        if git_info.staged_count > 0 {
-            status_parts.push(Span::styled(
-                format!("{} staged", git_info.staged_count),
-                Style::default().fg(Color::Green),
-            ));
-            status_parts.push(Span::styled("  ", dim_style));
-        }
-        if git_info.dirty_count > 0 {
-            status_parts.push(Span::styled(
-                format!("{} modified", git_info.dirty_count),
-                Style::default().fg(Color::Yellow),
-            ));
-            status_parts.push(Span::styled("  ", dim_style));
-        }
-        if git_info.untracked_count > 0 {
-            status_parts.push(Span::styled(
-                format!("{} untracked", git_info.untracked_count),
-                Style::default().fg(Color::Red),
-            ));
-        }
-    } else {
-        status_parts.push(Span::styled("clean", Style::default().fg(Color::Green)));
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(status_parts)),
-        Rect::new(inner.x, row, inner.width, 1),
-    );
-    row += 2;
-
-    // ── Recent commits ──
-    if git_info.commits.is_empty() {
+    if inner.height < 1 || inner.width < 10 {
         return;
     }
 
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw(pad),
-            Span::styled("recent commits", dim_style),
-        ])),
-        Rect::new(inner.x, row, inner.width, 1),
-    );
-    row += 1;
-
-    // Separator under heading
-    let sep = "─".repeat((inner.width as usize).saturating_sub(2));
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw(pad),
-            Span::styled(sep, Style::default().fg(theme.border_inactive)),
-        ])),
-        Rect::new(inner.x, row, inner.width, 1),
-    );
-    row += 1;
-
-    let remaining = (inner.y + inner.height).saturating_sub(row) as usize;
-    let commit_count = git_info.commits.len().min(remaining);
-
-    for commit in git_info.commits.iter().take(commit_count) {
-        if row >= inner.y + inner.height {
-            break;
+    let git = match git_info {
+        Some(g) if !g.branch.is_empty() && !g.commits.is_empty() => g,
+        _ => {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    " no commits",
+                    Style::default().fg(theme.dim),
+                ))),
+                Rect::new(inner.x, inner.y, inner.width, 1),
+            );
+            return;
         }
+    };
 
-        // hash + message + author + age on one line
+    let dim_style = Style::default().fg(theme.dim);
+    let fg_style = Style::default().fg(theme.fg);
+    let max_w = inner.width as usize;
+    let pad = " ";
+
+    let visible = (inner.height as usize).min(git.commits.len());
+
+    for (i, commit) in git.commits.iter().take(visible).enumerate() {
+        let row = inner.y + i as u16;
+
         let hash_w = 8;
         let suffix = format!("{}  {}", commit.author, commit.age);
         let suffix_w = suffix.len() + 2;
@@ -365,92 +591,940 @@ fn render_detail(
             Span::styled(format!("{}  ", commit.author), dim_style),
             Span::styled(&commit.age, dim_style),
         ]);
+        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+    }
+
+    if git.commits.len() > visible {
+        let more = git.commits.len() - visible;
+        let row = inner.y + inner.height - 1;
         frame.render_widget(
-            Paragraph::new(line),
+            Paragraph::new(Line::from(vec![
+                Span::raw(pad),
+                Span::styled(format!("+{} more", more), dim_style),
+            ])),
+            Rect::new(inner.x, row, inner.width, 1),
+        );
+    }
+}
+
+fn render_widget_changed_files(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border_inactive))
+        .title(Span::styled(
+            " changed files ",
+            Style::default().fg(theme.dim),
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let git = match git_info {
+        Some(g) if !g.status_lines.is_empty() => g,
+        _ => {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    " no changes",
+                    Style::default().fg(theme.dim),
+                ))),
+                Rect::new(inner.x, inner.y, inner.width, 1),
+            );
+            return;
+        }
+    };
+
+    let dim_style = Style::default().fg(theme.dim);
+    let fg_style = Style::default().fg(theme.fg);
+    let max_w = inner.width as usize;
+    let pad = " ";
+
+    let visible = (inner.height as usize).min(git.status_lines.len());
+
+    for (i, status_line) in git.status_lines.iter().take(visible).enumerate() {
+        let row = inner.y + i as u16;
+
+        let (indicator, file) = if status_line.len() >= 3 {
+            (&status_line[..2], status_line[3..].trim())
+        } else {
+            (status_line.as_str(), "")
+        };
+
+        let indicator_color = match indicator.trim() {
+            "M" | "MM" => Color::Yellow,
+            "A" | "AM" => Color::Green,
+            "D" => Color::Red,
+            "R" | "RM" => Color::Cyan,
+            "??" => Color::DarkGray,
+            _ => Color::Yellow,
+        };
+
+        let file_display = if file.len() + 5 > max_w {
+            format!("…{}", &file[file.len() + 6 - max_w..])
+        } else {
+            file.to_string()
+        };
+
+        let line = Line::from(vec![
+            Span::raw(pad),
+            Span::styled(
+                format!("{:<2}", indicator),
+                Style::default().fg(indicator_color),
+            ),
+            Span::styled(format!(" {}", file_display), fg_style),
+        ]);
+        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+    }
+
+    if git.status_lines.len() > visible {
+        let more = git.status_lines.len() - visible;
+        let row = inner.y + inner.height - 1;
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(pad),
+                Span::styled(format!("+{} more", more), dim_style),
+            ])),
+            Rect::new(inner.x, row, inner.width, 1),
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unit 1: Branches, Stashes, Tags
+// ---------------------------------------------------------------------------
+
+fn render_widget_branches(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = widget_block(" branches ", theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let git = match git_info {
+        Some(g) if !g.branches.is_empty() => g,
+        _ => {
+            render_empty_placeholder("no branches", theme, frame, inner);
+            return;
+        }
+    };
+
+    let dim_style = Style::default().fg(theme.dim);
+    let fg_style = Style::default().fg(theme.fg);
+    let accent_bold = Style::default()
+        .fg(theme.accent)
+        .add_modifier(Modifier::BOLD);
+    let pad = " ";
+
+    let visible = (inner.height as usize).min(git.branches.len());
+    for (i, branch) in git.branches.iter().take(visible).enumerate() {
+        let row = inner.y + i as u16;
+        let name_style = if branch.is_current {
+            accent_bold
+        } else {
+            fg_style
+        };
+        let prefix = if branch.is_current { "* " } else { "  " };
+        let line = Line::from(vec![
+            Span::raw(pad),
+            Span::styled(prefix, name_style),
+            Span::styled(&branch.name, name_style),
+            Span::styled(format!("  {}", branch.last_commit_date), dim_style),
+        ]);
+        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+    }
+
+    render_overflow(git.branches.len(), visible, theme, frame, inner);
+}
+
+fn render_widget_stashes(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = widget_block(" stashes ", theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let git = match git_info {
+        Some(g) if !g.stashes.is_empty() => g,
+        _ => {
+            render_empty_placeholder("no stashes", theme, frame, inner);
+            return;
+        }
+    };
+
+    let fg_style = Style::default().fg(theme.fg);
+    let pad = " ";
+
+    let visible = (inner.height as usize).min(git.stashes.len());
+    for (i, stash) in git.stashes.iter().take(visible).enumerate() {
+        let row = inner.y + i as u16;
+        let line = Line::from(vec![
+            Span::raw(pad),
+            Span::styled(&stash.id, Style::default().fg(Color::Yellow)),
+            Span::styled(format!(" {}", stash.message), fg_style),
+        ]);
+        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+    }
+
+    render_overflow(git.stashes.len(), visible, theme, frame, inner);
+}
+
+fn render_widget_tags(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = widget_block(" tags ", theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let git = match git_info {
+        Some(g) if !g.tags.is_empty() => g,
+        _ => {
+            render_empty_placeholder("no tags", theme, frame, inner);
+            return;
+        }
+    };
+
+    let accent_style = Style::default().fg(theme.accent);
+    let dim_style = Style::default().fg(theme.dim);
+    let pad = " ";
+
+    let visible = (inner.height as usize).min(git.tags.len());
+    for (i, tag) in git.tags.iter().take(visible).enumerate() {
+        let row = inner.y + i as u16;
+        let line = Line::from(vec![
+            Span::raw(pad),
+            Span::styled(&tag.name, accent_style),
+            Span::styled(format!("  {}", tag.date), dim_style),
+        ]);
+        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+    }
+
+    render_overflow(git.tags.len(), visible, theme, frame, inner);
+}
+
+// ---------------------------------------------------------------------------
+// Unit 2: Git Graph, Contributors
+// ---------------------------------------------------------------------------
+
+fn render_widget_git_graph(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = widget_block(" git graph ", theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let git = match git_info {
+        Some(g) if !g.graph_lines.is_empty() => g,
+        _ => {
+            render_empty_placeholder("no graph", theme, frame, inner);
+            return;
+        }
+    };
+
+    let fg_style = Style::default().fg(theme.fg);
+    let accent_style = Style::default().fg(theme.accent);
+    let max_w = inner.width as usize;
+
+    let visible = (inner.height as usize).min(git.graph_lines.len());
+    for (i, gline) in git.graph_lines.iter().take(visible).enumerate() {
+        let row = inner.y + i as u16;
+        // Colorize graph chars vs text
+        let mut spans: Vec<Span> = Vec::new();
+        spans.push(Span::raw(" "));
+        let display = if gline.len() > max_w.saturating_sub(1) {
+            &gline[..max_w.saturating_sub(1)]
+        } else {
+            gline.as_str()
+        };
+        for ch in display.chars() {
+            match ch {
+                '*' | '|' | '/' | '\\' | '_' => {
+                    spans.push(Span::styled(ch.to_string(), accent_style));
+                }
+                _ => {
+                    spans.push(Span::styled(ch.to_string(), fg_style));
+                }
+            }
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect::new(inner.x, row, inner.width, 1),
+        );
+    }
+}
+
+fn render_widget_contributors(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = widget_block(" contributors ", theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let git = match git_info {
+        Some(g) if !g.contributors.is_empty() => g,
+        _ => {
+            render_empty_placeholder("no contributors", theme, frame, inner);
+            return;
+        }
+    };
+
+    let fg_style = Style::default().fg(theme.fg);
+    let dim_style = Style::default().fg(theme.dim);
+    let count_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let pad = " ";
+
+    let visible = (inner.height as usize).min(git.contributors.len());
+    for (i, contrib) in git.contributors.iter().take(visible).enumerate() {
+        let row = inner.y + i as u16;
+        let mut spans = vec![
+            Span::raw(pad),
+            Span::styled(format!("{:>5}", contrib.count), count_style),
+            Span::styled(format!("  {}", contrib.name), fg_style),
+        ];
+        if !contrib.email.is_empty() {
+            spans.push(Span::styled(format!("  <{}>", contrib.email), dim_style));
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect::new(inner.x, row, inner.width, 1),
+        );
+    }
+
+    render_overflow(git.contributors.len(), visible, theme, frame, inner);
+}
+
+// ---------------------------------------------------------------------------
+// Unit 3: Todos, Readme
+// ---------------------------------------------------------------------------
+
+fn render_widget_todos(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = widget_block(" todos ", theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let git = match git_info {
+        Some(g) if !g.todos.is_empty() => g,
+        _ => {
+            render_empty_placeholder("no TODOs found", theme, frame, inner);
+            return;
+        }
+    };
+
+    let fg_style = Style::default().fg(theme.fg);
+    let dim_style = Style::default().fg(theme.dim);
+    let pad = " ";
+
+    let visible = (inner.height as usize).min(git.todos.len());
+    for (i, todo) in git.todos.iter().take(visible).enumerate() {
+        let row = inner.y + i as u16;
+        let kind_color = match todo.kind.as_str() {
+            "FIXME" => Color::Red,
+            "HACK" => Color::Cyan,
+            _ => Color::Yellow,
+        };
+        let max_w = inner.width as usize;
+        let loc = format!("{}:{}", todo.file, todo.line_num);
+        let loc_display = if loc.len() > max_w / 3 {
+            format!("…{}", &loc[loc.len().saturating_sub(max_w / 3)..])
+        } else {
+            loc
+        };
+        let line = Line::from(vec![
+            Span::raw(pad),
+            Span::styled(
+                format!("{:<5}", todo.kind),
+                Style::default().fg(kind_color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!(" {}", loc_display), dim_style),
+            Span::styled(
+                format!(
+                    " {}",
+                    truncate_str(&todo.text, max_w.saturating_sub(8 + loc_display.len()))
+                ),
+                fg_style,
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+    }
+
+    render_overflow(git.todos.len(), visible, theme, frame, inner);
+}
+
+fn render_widget_readme(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = widget_block(" readme ", theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let git = match git_info {
+        Some(g) if !g.readme_lines.is_empty() => g,
+        _ => {
+            render_empty_placeholder("no README.md", theme, frame, inner);
+            return;
+        }
+    };
+
+    let fg_style = Style::default().fg(theme.fg);
+    let bold_style = Style::default()
+        .fg(theme.fg)
+        .add_modifier(Modifier::BOLD);
+
+    let visible = (inner.height as usize).min(git.readme_lines.len());
+    for (i, line_text) in git.readme_lines.iter().take(visible).enumerate() {
+        let row = inner.y + i as u16;
+        let style = if i == 0 { bold_style } else { fg_style };
+        let display = truncate_str(line_text, inner.width as usize - 1);
+        let line = Line::from(vec![Span::raw(" "), Span::styled(display, style)]);
+        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+    }
+
+    render_overflow(git.readme_lines.len(), visible, theme, frame, inner);
+}
+
+// ---------------------------------------------------------------------------
+// Unit 4: Languages, Disk Usage
+// ---------------------------------------------------------------------------
+
+fn render_widget_languages(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = widget_block(" languages ", theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let git = match git_info {
+        Some(g) if !g.languages.is_empty() => g,
+        _ => {
+            render_empty_placeholder("no files tracked", theme, frame, inner);
+            return;
+        }
+    };
+
+    let fg_style = Style::default().fg(theme.fg);
+    let dim_style = Style::default().fg(theme.dim);
+    let accent_style = Style::default().fg(theme.accent);
+    let pad = " ";
+    let bar_max = 20usize.min(inner.width as usize / 3);
+
+    let visible = (inner.height as usize).min(git.languages.len());
+    for (i, lang) in git.languages.iter().take(visible).enumerate() {
+        let row = inner.y + i as u16;
+        let filled = ((lang.percentage / 100.0) * bar_max as f32).round() as usize;
+        let bar: String = "\u{2588}"
+            .repeat(filled)
+            + &"\u{2591}".repeat(bar_max.saturating_sub(filled));
+        let line = Line::from(vec![
+            Span::raw(pad),
+            Span::styled(format!("{:<8}", lang.extension), fg_style),
+            Span::styled(format!("{:>4} ", lang.file_count), dim_style),
+            Span::styled(bar, accent_style),
+            Span::styled(format!(" {:.0}%", lang.percentage), dim_style),
+        ]);
+        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+    }
+
+    render_overflow(git.languages.len(), visible, theme, frame, inner);
+}
+
+fn render_widget_disk_usage(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = widget_block(" disk usage ", theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let du = match git_info.and_then(|g| g.disk_usage.as_ref()) {
+        Some(du) => du,
+        None => {
+            render_empty_placeholder("unavailable", theme, frame, inner);
+            return;
+        }
+    };
+
+    let fg_style = Style::default().fg(theme.fg);
+    let dim_style = Style::default().fg(theme.dim);
+    let pad = " ";
+    let mut row = inner.y;
+
+    let size_line = |label: &str, size: &str, style: Style| -> Line<'_> {
+        Line::from(vec![
+            Span::raw(pad.to_string()),
+            Span::styled(format!("{:<14}", label), dim_style),
+            Span::styled(size.to_string(), style),
+        ])
+    };
+
+    frame.render_widget(
+        Paragraph::new(size_line("total", &du.total, fg_style)),
+        Rect::new(inner.x, row, inner.width, 1),
+    );
+    row += 1;
+
+    if row < inner.y + inner.height {
+        frame.render_widget(
+            Paragraph::new(size_line(".git", &du.git_size, fg_style)),
             Rect::new(inner.x, row, inner.width, 1),
         );
         row += 1;
     }
 
-    // ── Changed files ──
-    if !git_info.status_lines.is_empty() && row + 2 < inner.y + inner.height {
-        row += 1; // gap
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::raw(pad),
-                Span::styled("changed files", dim_style),
-            ])),
-            Rect::new(inner.x, row, inner.width, 1),
-        );
-        row += 1;
-
-        let sep = "─".repeat((inner.width as usize).saturating_sub(2));
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::raw(pad),
-                Span::styled(sep, Style::default().fg(theme.border_inactive)),
-            ])),
-            Rect::new(inner.x, row, inner.width, 1),
-        );
-        row += 1;
-
-        let remaining = (inner.y + inner.height).saturating_sub(row) as usize;
-        let file_count = git_info.status_lines.len().min(remaining);
-
-        for status_line in git_info.status_lines.iter().take(file_count) {
-            if row >= inner.y + inner.height {
-                break;
-            }
-            let (indicator, file) = if status_line.len() >= 3 {
-                (&status_line[..2], status_line[3..].trim())
+    if let (Some(size), Some(name)) = (&du.build_size, &du.build_dir_name) {
+        if row < inner.y + inner.height {
+            // Highlight build dir in yellow if it's large (> 100M or G)
+            let large = size.contains('G') || {
+                size.trim_end_matches('M')
+                    .parse::<f32>()
+                    .map(|v| v > 100.0)
+                    .unwrap_or(false)
+            };
+            let style = if large {
+                Style::default().fg(Color::Yellow)
             } else {
-                (status_line.as_str(), "")
+                fg_style
             };
-
-            let indicator_color = match indicator.trim() {
-                "M" | "MM" => Color::Yellow,
-                "A" | "AM" => Color::Green,
-                "D" => Color::Red,
-                "R" | "RM" => Color::Cyan,
-                "??" => Color::DarkGray,
-                _ => Color::Yellow,
-            };
-
-            let file_display = if file.len() + 5 > max_w {
-                format!("…{}", &file[file.len() + 6 - max_w..])
-            } else {
-                file.to_string()
-            };
-
-            let line = Line::from(vec![
-                Span::raw(pad),
-                Span::styled(
-                    format!("{:<2}", indicator),
-                    Style::default().fg(indicator_color),
-                ),
-                Span::styled(format!(" {}", file_display), fg_style),
-            ]);
             frame.render_widget(
-                Paragraph::new(line),
+                Paragraph::new(size_line(name, size, style)),
                 Rect::new(inner.x, row, inner.width, 1),
             );
-            row += 1;
         }
+    }
+}
 
-        if git_info.status_lines.len() > file_count {
-            if row < inner.y + inner.height {
-                let more = git_info.status_lines.len() - file_count;
-                frame.render_widget(
-                    Paragraph::new(Line::from(vec![
-                        Span::raw(pad),
-                        Span::styled(
-                            format!("  +{} more", more),
-                            dim_style,
-                        ),
-                    ])),
-                    Rect::new(inner.x, row, inner.width, 1),
-                );
-            }
+// ---------------------------------------------------------------------------
+// Unit 5: CI Status, Open Issues
+// ---------------------------------------------------------------------------
+
+fn render_widget_ci_status(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = widget_block(" ci status ", theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let git = match git_info {
+        Some(g) => g,
+        None => {
+            render_empty_placeholder("no data", theme, frame, inner);
+            return;
         }
+    };
+
+    if !git.gh_available {
+        render_empty_placeholder("gh CLI not available", theme, frame, inner);
+        return;
+    }
+
+    if git.ci_runs.is_empty() {
+        render_empty_placeholder("no CI runs", theme, frame, inner);
+        return;
+    }
+
+    let fg_style = Style::default().fg(theme.fg);
+    let dim_style = Style::default().fg(theme.dim);
+    let pad = " ";
+
+    let visible = (inner.height as usize).min(git.ci_runs.len());
+    for (i, run) in git.ci_runs.iter().take(visible).enumerate() {
+        let row = inner.y + i as u16;
+        let (icon, icon_color) = match (run.status.as_str(), run.conclusion.as_str()) {
+            ("completed", "success") => ("✓", Color::Green),
+            ("completed", "failure") | ("completed", "cancelled") => ("✗", Color::Red),
+            ("in_progress", _) | ("queued", _) | ("waiting", _) => ("●", Color::Yellow),
+            _ => ("?", Color::DarkGray),
+        };
+
+        let time_display = format_relative_time(&run.created_at);
+        let max_name = inner
+            .width
+            .saturating_sub(6 + run.branch.len() as u16 + time_display.len() as u16)
+            as usize;
+        let name_display = truncate_str(&run.name, max_name);
+
+        let line = Line::from(vec![
+            Span::raw(pad),
+            Span::styled(icon, Style::default().fg(icon_color)),
+            Span::styled(format!(" {}", name_display), fg_style),
+            Span::styled(format!("  {}", run.branch), dim_style),
+            Span::styled(format!("  {}", time_display), dim_style),
+        ]);
+        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+    }
+
+    render_overflow(git.ci_runs.len(), visible, theme, frame, inner);
+}
+
+fn render_widget_open_issues(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = widget_block(" open issues ", theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let git = match git_info {
+        Some(g) => g,
+        None => {
+            render_empty_placeholder("no data", theme, frame, inner);
+            return;
+        }
+    };
+
+    if !git.gh_available {
+        render_empty_placeholder("gh CLI not available", theme, frame, inner);
+        return;
+    }
+
+    if git.gh_issues.is_empty() {
+        render_empty_placeholder("no open issues", theme, frame, inner);
+        return;
+    }
+
+    let fg_style = Style::default().fg(theme.fg);
+    let dim_style = Style::default().fg(theme.dim);
+    let accent_style = Style::default().fg(theme.accent);
+    let pad = " ";
+
+    let visible = (inner.height as usize).min(git.gh_issues.len());
+    for (i, issue) in git.gh_issues.iter().take(visible).enumerate() {
+        let row = inner.y + i as u16;
+        let mut spans = vec![
+            Span::raw(pad),
+            Span::styled(format!("#{}", issue.number), accent_style),
+            Span::styled(
+                format!(
+                    " {}",
+                    truncate_str(&issue.title, inner.width as usize / 2)
+                ),
+                fg_style,
+            ),
+            Span::styled(format!("  {}", issue.author), dim_style),
+        ];
+        if !issue.labels.is_empty() {
+            spans.push(Span::styled(
+                format!("  [{}]", issue.labels.join(", ")),
+                Style::default().fg(Color::Cyan),
+            ));
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect::new(inner.x, row, inner.width, 1),
+        );
+    }
+
+    render_overflow(git.gh_issues.len(), visible, theme, frame, inner);
+}
+
+// ---------------------------------------------------------------------------
+// Unit 6: Quick Actions, Running Processes
+// ---------------------------------------------------------------------------
+
+fn render_widget_quick_actions(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    hub_buttons: &mut Vec<crate::client::HubButton>,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = widget_block(" quick actions ", theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let accent_bold = Style::default()
+        .fg(theme.accent)
+        .add_modifier(Modifier::BOLD);
+    let dim_style = Style::default().fg(theme.dim);
+    let link_style = Style::default()
+        .fg(theme.accent)
+        .add_modifier(Modifier::UNDERLINED);
+
+    let has_github = git_info.and_then(|g| g.github_url()).is_some();
+
+    let mut row = inner.y;
+
+    // GitHub links (if available)
+    if has_github && inner.width >= 20 {
+        let buttons: &[(&str, &str)] = &[
+            (" repo ", ""),
+            (" issues ", "/issues"),
+            (" PRs ", "/pulls"),
+            (" actions ", "/actions"),
+            (" wiki ", "/wiki"),
+        ];
+        let mut cursor_x = inner.x + 1; // 1 for leading space
+        for (i, (label, suffix)) in buttons.iter().enumerate() {
+            if i > 0 {
+                cursor_x += 1; // gap between buttons
+            }
+            let w = label.len() as u16;
+            let btn_rect = Rect::new(cursor_x, row, w, 1);
+            hub_buttons.push(crate::client::HubButton {
+                rect: btn_rect,
+                url_suffix: suffix.to_string(),
+            });
+            cursor_x += w;
+        }
+        // Render the line
+        let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
+        for (i, (label, _)) in buttons.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled(" ", dim_style));
+            }
+            spans.push(Span::styled(label.to_string(), link_style));
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect::new(inner.x, row, inner.width, 1),
+        );
+        row += 2; // gap after links
+    }
+
+    // Keyboard shortcuts
+    if row >= inner.y + inner.height {
+        return;
+    }
+
+    let actions = [
+        ("t", "new tab"),
+        ("s", "split h"),
+        ("v", "split v"),
+        ("n", "new workspace"),
+        ("x", "close tab"),
+        ("z", "toggle zoom"),
+        ("f", "toggle fold"),
+        (":", "command palette"),
+        ("?", "help"),
+    ];
+
+    let remaining = (inner.y + inner.height).saturating_sub(row) as usize;
+    let col_w = inner.width / 3;
+    let cols = 3usize.min(inner.width as usize / 12);
+    if cols == 0 {
+        return;
+    }
+    let rows = (actions.len() + cols - 1) / cols;
+    let visible_rows = remaining.min(rows);
+
+    for (i, (key, desc)) in actions.iter().enumerate() {
+        let col = i / rows;
+        let row_idx = i % rows;
+        if row_idx >= visible_rows || col >= cols {
+            continue;
+        }
+        let x = inner.x + (col as u16) * col_w;
+        let y = row + row_idx as u16;
+        let line = Line::from(vec![
+            Span::raw(" "),
+            Span::styled(format!("{:<3}", key), accent_bold),
+            Span::styled(*desc, dim_style),
+        ]);
+        frame.render_widget(Paragraph::new(line), Rect::new(x, y, col_w, 1));
+    }
+}
+
+fn render_widget_running_processes(
+    git_info: Option<&ProjectGitInfo>,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = widget_block(" running processes ", theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 1 || inner.width < 10 {
+        return;
+    }
+
+    let git = match git_info {
+        Some(g) if !g.processes.is_empty() => g,
+        _ => {
+            render_empty_placeholder("no processes found", theme, frame, inner);
+            return;
+        }
+    };
+
+    let fg_style = Style::default().fg(theme.fg);
+    let dim_style = Style::default().fg(theme.dim);
+    let pad = " ";
+
+    let visible = (inner.height as usize).min(git.processes.len());
+    for (i, proc) in git.processes.iter().take(visible).enumerate() {
+        let row = inner.y + i as u16;
+        let cpu_val: f32 = proc.cpu.parse().unwrap_or(0.0);
+        let cpu_style = if cpu_val > 5.0 {
+            Style::default().fg(Color::Yellow)
+        } else {
+            dim_style
+        };
+        let cmd_display = truncate_str(&proc.command, inner.width as usize / 2);
+        let line = Line::from(vec![
+            Span::raw(pad),
+            Span::styled(format!("{:>6}", proc.pid), dim_style),
+            Span::styled(format!("  {:>5}%", proc.cpu), cpu_style),
+            Span::styled(format!("  {}", cmd_display), fg_style),
+        ]);
+        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+    }
+
+    render_overflow(git.processes.len(), visible, theme, frame, inner);
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn widget_block<'a>(title: &'a str, theme: &Theme) -> Block<'a> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border_inactive))
+        .title(Span::styled(title, Style::default().fg(theme.dim)))
+}
+
+fn render_empty_placeholder(msg: &str, theme: &Theme, frame: &mut Frame, inner: Rect) {
+    if inner.height >= 1 && inner.width >= 4 {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!(" {}", msg),
+                Style::default().fg(theme.dim),
+            ))),
+            Rect::new(inner.x, inner.y, inner.width, 1),
+        );
+    }
+}
+
+fn render_overflow(total: usize, visible: usize, theme: &Theme, frame: &mut Frame, inner: Rect) {
+    if total > visible && inner.height >= 1 {
+        let more = total - visible;
+        let row = inner.y + inner.height - 1;
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    format!("+{} more", more),
+                    Style::default().fg(theme.dim),
+                ),
+            ])),
+            Rect::new(inner.x, row, inner.width, 1),
+        );
+    }
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() > max && max > 1 {
+        format!("{}…", &s[..max - 1])
+    } else {
+        s.to_string()
+    }
+}
+
+/// Format an ISO 8601 timestamp to a relative time string.
+fn format_relative_time(iso: &str) -> String {
+    let Ok(dt) = chrono::DateTime::parse_from_rfc3339(iso) else {
+        return iso.to_string();
+    };
+    let now = chrono::Utc::now();
+    let diff = now.signed_duration_since(dt);
+    let secs = diff.num_seconds();
+    if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86400)
     }
 }

@@ -47,6 +47,7 @@ pub enum TabPickerSection {
     Repls,
     System,
     Cluster,
+    Scripts,
     Other,
 }
 
@@ -59,6 +60,7 @@ impl TabPickerSection {
             Self::Repls => "REPLs",
             Self::System => "System Management",
             Self::Cluster => "Cluster Management",
+            Self::Scripts => "Project Scripts",
             Self::Other => "Other",
         }
     }
@@ -72,6 +74,7 @@ impl TabPickerSection {
             "repls" | "repl" | "languages" => Self::Repls,
             "system" | "system management" => Self::System,
             "cluster" | "cluster management" => Self::Cluster,
+            "scripts" | "project scripts" => Self::Scripts,
             _ => Self::Other,
         }
     }
@@ -91,6 +94,7 @@ pub struct TabPickerEntry {
 }
 
 impl TabPickerState {
+    #[allow(dead_code)] // Used in tests
     pub fn new(
         system_programs: &[TabPickerEntry],
         custom_entries: &[TabPickerEntryConfig],
@@ -99,13 +103,24 @@ impl TabPickerState {
         Self::with_mode(system_programs, custom_entries, favorites, TabPickerMode::NewTab)
     }
 
+    #[allow(dead_code)] // Used in tests
     pub fn with_mode(
         system_programs: &[TabPickerEntry],
         custom_entries: &[TabPickerEntryConfig],
         favorites: &HashSet<String>,
         mode: TabPickerMode,
     ) -> Self {
-        let entries = build_entries(system_programs, custom_entries, favorites);
+        Self::with_scripts(system_programs, custom_entries, favorites, mode, &[])
+    }
+
+    pub fn with_scripts(
+        system_programs: &[TabPickerEntry],
+        custom_entries: &[TabPickerEntryConfig],
+        favorites: &HashSet<String>,
+        mode: TabPickerMode,
+        project_scripts: &[TabPickerEntry],
+    ) -> Self {
+        let entries = build_entries(system_programs, custom_entries, favorites, project_scripts);
         let mut filtered: Vec<usize> = (0..entries.len()).collect();
         // Sort favorites to top, preserving order within each group.
         filtered.sort_by(|&a, &b| entries[b].favorite.cmp(&entries[a].favorite));
@@ -418,6 +433,254 @@ pub fn scan_system_programs() -> Vec<TabPickerEntry> {
     entries
 }
 
+/// Detect project scripts/tasks from common config files in the given directory.
+///
+/// Supports: package.json (npm/bun/yarn), Cargo.toml (cargo), Makefile, Justfile,
+/// Taskfile.yml, Pipfile, pyproject.toml, and composer.json.
+pub fn scan_project_scripts(project_dir: &std::path::Path) -> Vec<TabPickerEntry> {
+    let mut entries = Vec::new();
+    let user_shell = default_shell();
+
+    // --- package.json scripts (npm/bun/yarn) ---
+    let pkg_json = project_dir.join("package.json");
+    if pkg_json.exists() {
+        if let Ok(content) = std::fs::read_to_string(&pkg_json) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+                // Detect runner: bun > pnpm > yarn > npm
+                let runner = detect_js_runner(project_dir);
+                if let Some(scripts) = parsed["scripts"].as_object() {
+                    for (name, val) in scripts {
+                        let cmd_text = val.as_str().unwrap_or("");
+                        entries.push(TabPickerEntry {
+                            name: format!("{} run {}", runner, name),
+                            command: Some(format!("{} run {}", runner, name)),
+                            description: truncate_script_desc(cmd_text, 50),
+                            section: TabPickerSection::Scripts,
+                            shell: Some(user_shell.clone()),
+                            favorite: false,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Cargo.toml binary targets + common cargo commands ---
+    let cargo_toml = project_dir.join("Cargo.toml");
+    if cargo_toml.exists() {
+        // Standard cargo commands
+        for (name, desc) in [
+            ("cargo build", "Build the project"),
+            ("cargo run", "Run the default binary"),
+            ("cargo test", "Run tests"),
+            ("cargo clippy", "Run linter"),
+            ("cargo check", "Type-check without building"),
+        ] {
+            entries.push(TabPickerEntry {
+                name: name.to_string(),
+                command: Some(name.to_string()),
+                description: desc.to_string(),
+                section: TabPickerSection::Scripts,
+                shell: Some(user_shell.clone()),
+                favorite: false,
+            });
+        }
+
+        // Parse [[bin]] targets
+        if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("name") {
+                    if let Some(name_val) = trimmed
+                        .split('=')
+                        .nth(1)
+                        .map(|s| s.trim().trim_matches('"'))
+                    {
+                        if !name_val.is_empty()
+                            && name_val != "name"
+                            && !entries.iter().any(|e| e.name == format!("cargo run --bin {}", name_val))
+                        {
+                            entries.push(TabPickerEntry {
+                                name: format!("cargo run --bin {}", name_val),
+                                command: Some(format!("cargo run --bin {}", name_val)),
+                                description: format!("Run {}", name_val),
+                                section: TabPickerSection::Scripts,
+                                shell: Some(user_shell.clone()),
+                                favorite: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Makefile targets ---
+    let makefile = if project_dir.join("Makefile").exists() {
+        Some(project_dir.join("Makefile"))
+    } else if project_dir.join("makefile").exists() {
+        Some(project_dir.join("makefile"))
+    } else if project_dir.join("GNUmakefile").exists() {
+        Some(project_dir.join("GNUmakefile"))
+    } else {
+        None
+    };
+    if let Some(mf) = makefile {
+        if let Ok(content) = std::fs::read_to_string(&mf) {
+            for line in content.lines() {
+                // Match lines like "target:" but not variable assignments or comments
+                if let Some(target) = line.split(':').next() {
+                    let target = target.trim();
+                    if !target.is_empty()
+                        && !target.starts_with('#')
+                        && !target.starts_with('.')
+                        && !target.starts_with('\t')
+                        && !target.contains('=')
+                        && !target.contains('$')
+                        && !target.contains(' ')
+                    {
+                        entries.push(TabPickerEntry {
+                            name: format!("make {}", target),
+                            command: Some(format!("make {}", target)),
+                            description: String::new(),
+                            section: TabPickerSection::Scripts,
+                            shell: Some(user_shell.clone()),
+                            favorite: false,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Justfile recipes ---
+    let justfile = if project_dir.join("justfile").exists() {
+        Some(project_dir.join("justfile"))
+    } else if project_dir.join("Justfile").exists() {
+        Some(project_dir.join("Justfile"))
+    } else {
+        None
+    };
+    if let Some(jf) = justfile {
+        if let Ok(content) = std::fs::read_to_string(&jf) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                // Recipe lines: "name:" or "name arg:" (not indented, not comments, not settings)
+                if !trimmed.is_empty()
+                    && !trimmed.starts_with('#')
+                    && !trimmed.starts_with(' ')
+                    && !trimmed.starts_with('\t')
+                    && !trimmed.starts_with("set ")
+                    && !trimmed.starts_with("export ")
+                    && !trimmed.starts_with("alias ")
+                    && !trimmed.starts_with("import ")
+                    && !trimmed.starts_with("mod ")
+                {
+                    if let Some(name) = trimmed.split(':').next() {
+                        let name = name.split_whitespace().next().unwrap_or("").trim();
+                        if !name.is_empty() && !name.contains('=') {
+                            entries.push(TabPickerEntry {
+                                name: format!("just {}", name),
+                                command: Some(format!("just {}", name)),
+                                description: String::new(),
+                                section: TabPickerSection::Scripts,
+                                shell: Some(user_shell.clone()),
+                                favorite: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- pyproject.toml scripts ---
+    let pyproject = project_dir.join("pyproject.toml");
+    if pyproject.exists() {
+        if let Ok(content) = std::fs::read_to_string(&pyproject) {
+            let mut in_scripts = false;
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed == "[project.scripts]" || trimmed == "[tool.poetry.scripts]" {
+                    in_scripts = true;
+                    continue;
+                }
+                if trimmed.starts_with('[') {
+                    in_scripts = false;
+                    continue;
+                }
+                if in_scripts {
+                    if let Some(name) = trimmed.split('=').next() {
+                        let name = name.trim().trim_matches('"');
+                        if !name.is_empty() {
+                            entries.push(TabPickerEntry {
+                                name: name.to_string(),
+                                command: Some(name.to_string()),
+                                description: "Python script".to_string(),
+                                section: TabPickerSection::Scripts,
+                                shell: Some(user_shell.clone()),
+                                favorite: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- composer.json scripts (PHP) ---
+    let composer_json = project_dir.join("composer.json");
+    if composer_json.exists() {
+        if let Ok(content) = std::fs::read_to_string(&composer_json) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(scripts) = parsed["scripts"].as_object() {
+                    for (name, _) in scripts {
+                        // Skip lifecycle hooks
+                        if name.starts_with("pre-") || name.starts_with("post-") {
+                            continue;
+                        }
+                        entries.push(TabPickerEntry {
+                            name: format!("composer {}", name),
+                            command: Some(format!("composer run-script {}", name)),
+                            description: String::new(),
+                            section: TabPickerSection::Scripts,
+                            shell: Some(user_shell.clone()),
+                            favorite: false,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Deduplicate by name
+    let mut seen = std::collections::HashSet::new();
+    entries.retain(|e| seen.insert(e.name.clone()));
+
+    entries
+}
+
+/// Detect the JS package runner for a project directory.
+fn detect_js_runner(dir: &std::path::Path) -> &'static str {
+    if dir.join("bun.lockb").exists() || dir.join("bun.lock").exists() {
+        "bun"
+    } else if dir.join("pnpm-lock.yaml").exists() {
+        "pnpm"
+    } else if dir.join("yarn.lock").exists() {
+        "yarn"
+    } else {
+        "npm"
+    }
+}
+
+fn truncate_script_desc(s: &str, max: usize) -> String {
+    if s.len() > max {
+        format!("{}…", &s[..max - 1])
+    } else {
+        s.to_string()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Entry builder
 // ---------------------------------------------------------------------------
@@ -426,6 +689,7 @@ fn build_entries(
     system_programs: &[TabPickerEntry],
     custom_entries: &[TabPickerEntryConfig],
     favorites: &HashSet<String>,
+    project_scripts: &[TabPickerEntry],
 ) -> Vec<TabPickerEntry> {
     let mut entries = Vec::new();
     let user_shell = default_shell();
@@ -448,6 +712,9 @@ fn build_entries(
 
     // -- System-detected programs --
     entries.extend(system_programs.iter().cloned());
+
+    // -- Project scripts (detected from project config files) --
+    entries.extend(project_scripts.iter().cloned());
 
     // -- Custom entries from config (placed in their configured category) --
     for ce in custom_entries {

@@ -16,7 +16,7 @@ use pane_protocol::app::Mode;
 use crate::client::Client;
 
 /// Render the TUI for a connected client (daemon mode).
-pub fn render_client(client: &Client, frame: &mut Frame) {
+pub fn render_client(client: &mut Client, frame: &mut Frame) {
     let theme = &client.config.theme;
 
     // Workspace bar shows when hub is active OR daemon workspaces exist
@@ -36,27 +36,22 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
         (None, b, f)
     };
 
-    // Workspace bar — prepend "Hub" as the first workspace
+    // Workspace bar with separate Home button
     if let Some(header) = header {
-        let mut names: Vec<String> = vec!["Hub".to_string()];
-        names.extend(
-            client
-                .render_state
-                .workspaces
-                .iter()
-                .map(|ws| ws.name.clone()),
-        );
+        let names: Vec<String> = client
+            .render_state
+            .workspaces
+            .iter()
+            .map(|ws| ws.name.clone())
+            .collect();
         let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-        let active_idx = if client.hub_active {
-            0
-        } else {
-            client.render_state.active_workspace + 1
-        };
+        let active_idx = client.render_state.active_workspace;
         workspace_bar::render(
             &name_refs,
             active_idx,
             theme,
             client.workspace_bar_focused,
+            client.hub_active,
             client.hover,
             frame,
             header,
@@ -68,8 +63,8 @@ pub fn render_client(client: &Client, frame: &mut Frame) {
 
     // When hub is active, render project hub body instead of terminal panes
     if client.hub_active {
-        if let Some(ref hub_state) = client.project_hub_state {
-            project_hub::render_body(hub_state, theme, client.hover, frame, body);
+        if let Some(ref mut hub_state) = client.project_hub_state {
+            project_hub::render_body(hub_state, theme, &client.config.behavior.hub_layout, client.hover, frame, body);
         }
     } else if let Some(ws) = client.active_workspace() {
         let copy_mode_state = if client.mode == Mode::Copy {

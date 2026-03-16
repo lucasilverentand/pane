@@ -34,13 +34,33 @@ pub struct ServerState {
 
 /// Auto-name a workspace based on the git repo name, then folder name, with
 /// numeric suffix for duplicates.
+/// Convert a kebab-case or snake_case name to Title Case.
+/// e.g. "expo-passkite" → "Expo Passkite", "pane" → "Pane"
+fn titlecase_name(name: &str) -> String {
+    name.split(|c: char| c == '-' || c == '_')
+        .filter(|s| !s.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(c) => {
+                    let upper: String = c.to_uppercase().collect();
+                    format!("{}{}", upper, chars.as_str())
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn auto_workspace_name(existing: &[Workspace], cwd: &Path) -> String {
     let used: std::collections::HashSet<&str> =
         existing.iter().map(|ws| ws.name.as_str()).collect();
 
-    let base = git_repo_name(cwd)
+    let raw = git_repo_name(cwd)
         .or_else(|| cwd.file_name().map(|f| f.to_string_lossy().to_string()))
         .unwrap_or_else(|| "1".to_string());
+    let base = titlecase_name(&raw);
 
     if !used.contains(base.as_str()) {
         return base;
@@ -185,50 +205,36 @@ impl ServerState {
         None
     }
 
+    /// Create a new server state with no workspaces.
+    /// Workspaces are created on demand when the user opens a project.
     pub fn new(
         event_tx: &mpsc::UnboundedSender<AppEvent>,
         cols: u16,
         rows: u16,
         config: Config,
-    ) -> anyhow::Result<Self> {
-        let pane_id = TabId::new_v4();
-        let group_id = WindowId::new_v4();
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-
-        let socket_path = crate::server::daemon::socket_path();
-        let tmux_env = crate::window::pty::TmuxEnv {
-            tmux_value: format!("{},{},0", socket_path.display(), std::process::id()),
-            tmux_pane: "%0".to_string(),
-        };
-
-        let pane = match Tab::spawn_with_env(
-            pane_id,
-            TabKind::Shell,
-            cols,
-            rows,
-            event_tx.clone(),
-            None,
-            None,
-            Some(tmux_env),
-            Some(&cwd),
-        ) {
-            Ok(p) => p,
-            Err(e) => Tab::spawn_error(pane_id, TabKind::Shell, &e.to_string()),
-        };
-
-        let group = Window::new(group_id, pane);
-        let workspace = Workspace::new(auto_workspace_name(&[], &cwd), cwd, group_id, group);
-
-        Ok(Self {
-            workspaces: vec![workspace],
+    ) -> Self {
+        Self {
+            workspaces: Vec::new(),
             active_workspace: 0,
             config,
             system_stats: SystemStats::default(),
             event_tx: event_tx.clone(),
             last_size: (cols.saturating_add(2), rows.saturating_add(3)),
-            next_pane_number: 1,
+            next_pane_number: 0,
             drag_state: None,
-        })
+        }
+    }
+
+    /// Create a new server state with a default workspace (for tests and backwards compat).
+    pub fn new_with_workspace(
+        event_tx: &mpsc::UnboundedSender<AppEvent>,
+        cols: u16,
+        rows: u16,
+        config: Config,
+    ) -> anyhow::Result<Self> {
+        let mut state = Self::new(event_tx, cols, rows, config);
+        state.new_workspace(cols, rows, None)?;
+        Ok(state)
     }
 
     pub fn handle_pty_exited(&mut self, pane_id: TabId) -> bool {
@@ -394,8 +400,14 @@ impl ServerState {
         let pane_id = TabId::new_v4();
         let group_id = WindowId::new_v4();
         let tmux_env = self.next_tmux_env();
-        // Use provided cwd, or inherit from the current workspace.
-        let cwd = cwd.unwrap_or_else(|| self.active_workspace().cwd.clone());
+        // Use provided cwd, inherit from current workspace, or fall back to $PWD.
+        let cwd = cwd.unwrap_or_else(|| {
+            if self.workspaces.is_empty() {
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
+            } else {
+                self.active_workspace().cwd.clone()
+            }
+        });
 
         let pane = match Tab::spawn_with_env(
             pane_id,
@@ -424,11 +436,17 @@ impl ServerState {
 
     /// Close the active workspace. Returns true if this was the last workspace
     /// (caller should shut down the server).
+    /// Close the active workspace. Returns true if there are no workspaces left
+    /// (the client should show the project hub).
     pub fn close_workspace(&mut self) -> bool {
-        if self.workspaces.len() <= 1 {
+        if self.workspaces.is_empty() {
             return true;
         }
         self.workspaces.remove(self.active_workspace);
+        if self.workspaces.is_empty() {
+            self.active_workspace = 0;
+            return true;
+        }
         if self.active_workspace >= self.workspaces.len() {
             self.active_workspace = self.workspaces.len() - 1;
         }
@@ -652,7 +670,7 @@ mod tests {
     #[test]
     fn test_auto_workspace_name_uses_folder_name() {
         let name = auto_workspace_name(&[], Path::new("/home/user/myproject"));
-        assert_eq!(name, "myproject");
+        assert_eq!(name, "Myproject");
     }
 
     #[test]
@@ -666,13 +684,38 @@ mod tests {
     }
 
     #[test]
+    fn test_titlecase_single_word() {
+        assert_eq!(titlecase_name("pane"), "Pane");
+    }
+
+    #[test]
+    fn test_titlecase_kebab_case() {
+        assert_eq!(titlecase_name("expo-passkite"), "Expo Passkite");
+    }
+
+    #[test]
+    fn test_titlecase_multi_kebab() {
+        assert_eq!(titlecase_name("seventwo-astro-theme"), "Seventwo Astro Theme");
+    }
+
+    #[test]
+    fn test_titlecase_snake_case() {
+        assert_eq!(titlecase_name("my_project"), "My Project");
+    }
+
+    #[test]
+    fn test_titlecase_already_capitalized() {
+        assert_eq!(titlecase_name("MyProject"), "MyProject");
+    }
+
+    #[test]
     fn test_auto_workspace_name_duplicate_suffix() {
         let cwd = Path::new("/tmp/myproject");
         let first = auto_workspace_name(&[], cwd);
-        assert_eq!(first, "myproject");
+        assert_eq!(first, "Myproject");
         let ws1 = make_named_ws(&first);
         let second = auto_workspace_name(&[ws1], cwd);
-        assert_eq!(second, "myproject 2");
+        assert_eq!(second, "Myproject 2");
     }
 
     #[test]
@@ -939,7 +982,7 @@ mod tests {
     async fn test_add_tab_to_active_group() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new(&event_tx, 80, 24, Config::default())
+            ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
         let gid = state.active_workspace().active_group;
         assert_eq!(state.active_workspace().groups[&gid].tab_count(), 1);
@@ -954,7 +997,7 @@ mod tests {
     async fn test_split_active_group() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new(&event_tx, 80, 24, Config::default())
+            ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
         assert_eq!(state.active_workspace().groups.len(), 1);
 
@@ -973,7 +1016,7 @@ mod tests {
     async fn test_new_workspace_names_increment() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new(&event_tx, 80, 24, Config::default())
+            ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
         // First workspace gets an auto-generated name
         let first_name = state.workspaces[0].name.clone();
@@ -993,7 +1036,7 @@ mod tests {
     async fn test_close_workspace_adjusts_active_index() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new(&event_tx, 80, 24, Config::default())
+            ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
         state.new_workspace(80, 24, None).unwrap();
         state.new_workspace(80, 24, None).unwrap();
@@ -1010,7 +1053,7 @@ mod tests {
     fn test_close_workspace_single_returns_true() {
         let (mut state, _rx) = make_test_state();
         assert!(state.close_workspace());
-        assert_eq!(state.workspaces.len(), 1); // workspace still there, caller handles shutdown
+        assert_eq!(state.workspaces.len(), 0); // workspace removed, hub shown
     }
 
     #[test]
@@ -1057,7 +1100,7 @@ mod tests {
     async fn test_server_state_new() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let state =
-            ServerState::new(&event_tx, 80, 24, Config::default())
+            ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
         assert_eq!(state.workspaces.len(), 1);
         assert_eq!(state.active_workspace, 0);
@@ -1067,7 +1110,7 @@ mod tests {
     async fn test_server_state_workspace_accessors() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let state =
-            ServerState::new(&event_tx, 80, 24, Config::default())
+            ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
         let ws = state.active_workspace();
         assert_eq!(ws.groups.len(), 1);
@@ -1077,18 +1120,18 @@ mod tests {
     async fn test_server_state_close_workspace_single() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new(&event_tx, 80, 24, Config::default())
+            ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
-        // Closing last workspace signals shutdown
+        // Closing last workspace returns true (show hub) and removes it
         assert!(state.close_workspace());
-        assert_eq!(state.workspaces.len(), 1);
+        assert_eq!(state.workspaces.len(), 0);
     }
 
     #[tokio::test]
     async fn test_server_state_new_workspace() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new(&event_tx, 80, 24, Config::default())
+            ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
         state.new_workspace(80, 24, None).unwrap();
         assert_eq!(state.workspaces.len(), 2);
@@ -1099,7 +1142,7 @@ mod tests {
     async fn test_next_tmux_env_increments() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new(&event_tx, 80, 24, Config::default())
+            ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
 
         // new() already uses pane 0, so next_pane_number starts at 1
@@ -1108,7 +1151,7 @@ mod tests {
         let env1 = state.next_tmux_env();
         assert_eq!(env1.tmux_pane, "%1");
         assert!(env1.tmux_value.contains(",0")); // ends with ",<pid>,0"
-        assert!(env1.tmux_value.contains("pane.sock"));
+        assert!(env1.tmux_value.contains(".sock"));
 
         let env2 = state.next_tmux_env();
         assert_eq!(env2.tmux_pane, "%2");
@@ -1123,7 +1166,7 @@ mod tests {
     async fn test_last_pane_number() {
         let (event_tx, _rx) = mpsc::unbounded_channel();
         let mut state =
-            ServerState::new(&event_tx, 80, 24, Config::default())
+            ServerState::new_with_workspace(&event_tx, 80, 24, Config::default())
                 .unwrap();
         // new() uses pane 0, so last_pane_number = 0 initially
         assert_eq!(state.last_pane_number(), 0);

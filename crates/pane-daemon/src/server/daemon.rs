@@ -102,19 +102,29 @@ pub fn socket_dir() -> PathBuf {
     base.join(format!("pane-{}", uid))
 }
 
-/// Returns the fixed socket path for the single pane daemon.
+/// Returns the socket path for the pane daemon.
+/// Debug builds automatically use `pane-dev.sock` to avoid colliding with release installs.
+/// Set `PANE_SOCKET` to override (e.g. `PANE_SOCKET=test pane` → `pane-test.sock`).
 pub fn socket_path() -> PathBuf {
-    socket_dir().join("pane.sock")
+    socket_dir().join(format!("{}.sock", instance_prefix()))
 }
 
 /// Returns the version file path.
+fn instance_prefix() -> String {
+    match std::env::var("PANE_SOCKET") {
+        Ok(name) if !name.is_empty() => format!("pane-{}", name),
+        _ if cfg!(debug_assertions) => "pane-dev".to_string(),
+        _ => "pane".to_string(),
+    }
+}
+
 fn version_path() -> PathBuf {
-    socket_dir().join("pane.version")
+    socket_dir().join(format!("{}.version", instance_prefix()))
 }
 
 /// Returns the PID file path.
 fn pid_path() -> PathBuf {
-    socket_dir().join("pane.pid")
+    socket_dir().join(format!("{}.pid", instance_prefix()))
 }
 
 /// Returns the log file path.
@@ -159,7 +169,7 @@ pub async fn run_server(config: Config) -> Result<()> {
 
     let auto_suspend_secs = config.behavior.auto_suspend_secs;
 
-    let state = ServerState::new(&event_tx, 80, 24, config)?;
+    let state = ServerState::new(&event_tx, 80, 24, config);
     // Start plugin manager
     let plugin_configs = state.config.plugins.clone();
     let state = Arc::new(Mutex::new(state));
@@ -649,6 +659,7 @@ async fn handle_client(
             ClientRequest::Key(sk) => {
                 let key_event = sk.into();
                 let mut state = state.lock().await;
+                if state.workspaces.is_empty() { continue; }
                 // Set state to this client's active workspace
                 if let Some(cws) = clients.get_active_workspace(client_id).await {
                     state.active_workspace = cws;
@@ -667,6 +678,7 @@ async fn handle_client(
             }
             ClientRequest::MouseDown { x, y } => {
                 let mut state = state.lock().await;
+                if state.workspaces.is_empty() { continue; }
                 if let Some(cws) = clients.get_active_workspace(client_id).await {
                     state.active_workspace = cws;
                 }
@@ -677,6 +689,7 @@ async fn handle_client(
             }
             ClientRequest::MouseDrag { x, y } => {
                 let mut state = state.lock().await;
+                if state.workspaces.is_empty() { continue; }
                 if let Some(cws) = clients.get_active_workspace(client_id).await {
                     state.active_workspace = cws;
                 }
@@ -694,6 +707,7 @@ async fn handle_client(
             ClientRequest::MouseMove { x, y } => {
                 // Forward motion to PTY if the process wants any-motion events
                 let mut state = state.lock().await;
+                if state.workspaces.is_empty() { continue; }
                 if let Some(cws) = clients.get_active_workspace(client_id).await {
                     state.active_workspace = cws;
                 }
@@ -701,29 +715,25 @@ async fn handle_client(
             }
             ClientRequest::MouseUp { x, y } => {
                 let had_drag = state.lock().await.drag_state.is_some();
+                let mut state = state.lock().await;
+                if state.workspaces.is_empty() { continue; }
+                if let Some(cws) = clients.get_active_workspace(client_id).await {
+                    state.active_workspace = cws;
+                }
                 if had_drag {
-                    let mut state = state.lock().await;
-                    if let Some(cws) = clients.get_active_workspace(client_id).await {
-                        state.active_workspace = cws;
-                    }
                     state.drag_state = None;
-                    // Drag completed — no auto-fold action needed
                     let (w, h) = state.last_size;
                     state.resize_all_tabs(w, h);
                     let cws = state.active_workspace;
                     let render_state = render_state_for_client(&state, cws);
                     let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
                 } else {
-                    // Forward mouse release to PTY if the process wants mouse events
-                    let mut state = state.lock().await;
-                    if let Some(cws) = clients.get_active_workspace(client_id).await {
-                        state.active_workspace = cws;
-                    }
                     forward_mouse_to_pty(&mut state, 0, x, y, false);
                 }
             }
             ClientRequest::MouseScroll { up } => {
                 let mut state = state.lock().await;
+                if state.workspaces.is_empty() { continue; }
                 if let Some(cws) = clients.get_active_workspace(client_id).await {
                     state.active_workspace = cws;
                 }
@@ -1248,7 +1258,7 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let config = Config::default();
 
-        let state = ServerState::new(&event_tx, 80, 24, config)
+        let state = ServerState::new_with_workspace(&event_tx, 80, 24, config)
             .unwrap();
         let state = Arc::new(Mutex::new(state));
         let id_map = Arc::new(Mutex::new(IdMap::new()));
