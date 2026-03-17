@@ -381,6 +381,7 @@ pub struct ProjectGitInfo {
 impl ProjectGitInfo {
     /// Derive GitHub web URL from the remote origin URL.
     /// Supports both SSH (git@github.com:user/repo.git) and HTTPS formats.
+    #[allow(dead_code)]
     pub fn github_url(&self) -> Option<String> {
         let url = self.remote_url.as_deref()?;
         // SSH: git@github.com:user/repo.git
@@ -502,13 +503,6 @@ impl GitCacheEntry {
     }
 }
 
-/// A clickable GitHub link button in the quick actions widget.
-#[derive(Clone, Debug)]
-pub struct HubButton {
-    pub rect: ratatui::layout::Rect,
-    pub url_suffix: String,
-}
-
 pub struct ProjectHubState {
     /// All discovered projects.
     pub all_projects: Vec<ProjectEntry>,
@@ -526,8 +520,6 @@ pub struct ProjectHubState {
     pub last_git_fetch: Option<usize>,
     /// Track last click for double-click detection: (selected index, timestamp).
     pub last_click: Option<(usize, std::time::Instant)>,
-    /// Clickable button rects set during render.
-    pub buttons: Vec<HubButton>,
     /// Channel for sending async results back to the event loop.
     event_tx: tokio::sync::mpsc::UnboundedSender<ServerEvent>,
 }
@@ -576,7 +568,6 @@ impl ProjectHubState {
             git_cache: HashMap::new(),
             last_git_fetch: None,
             last_click: None,
-            buttons: Vec::new(),
             event_tx,
         };
         state.ensure_git_info();
@@ -1705,23 +1696,6 @@ impl Client {
                     if self.is_home_active() {
                         let body = crate::ui::body_rect(self, tui.size()?);
                         if let Some(ref mut hub) = self.project_hub_state {
-                            // Check GitHub button clicks first
-                            let button_url = hub.buttons.iter().find(|btn| {
-                                x >= btn.rect.x && x < btn.rect.x + btn.rect.width
-                                    && y >= btn.rect.y && y < btn.rect.y + btn.rect.height
-                            }).and_then(|btn| {
-                                hub.selected_git_info()
-                                    .and_then(|g| g.github_url())
-                                    .map(|base| format!("{}{}", base, btn.url_suffix))
-                            });
-                            if let Some(url) = button_url {
-                                let _ = std::process::Command::new("open")
-                                    .arg(&url)
-                                    .spawn();
-                                self.workspace_bar_focused = false;
-                                return Ok(());
-                            }
-
                             if let Some(idx) = crate::ui::project_hub::sidebar_hit_test(hub, body, x, y) {
                                 let now = std::time::Instant::now();
                                 let is_double = hub.last_click

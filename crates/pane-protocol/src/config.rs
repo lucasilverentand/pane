@@ -193,8 +193,6 @@ pub enum HubWidget {
     CiStatus,
     /// Open issues from GitHub (requires `gh`).
     OpenIssues,
-    /// Keyboard shortcut cheat sheet.
-    QuickActions,
     /// Processes running in the project directory.
     RunningProcesses,
 }
@@ -216,7 +214,6 @@ impl HubWidget {
             Self::DiskUsage => "Disk",
             Self::CiStatus => "CI",
             Self::OpenIssues => "Issues",
-            Self::QuickActions => "Actions",
             Self::RunningProcesses => "Processes",
         }
     }
@@ -237,7 +234,6 @@ impl HubWidget {
             "disk_usage" => Some(Self::DiskUsage),
             "ci_status" => Some(Self::CiStatus),
             "open_issues" => Some(Self::OpenIssues),
-            "quick_actions" => Some(Self::QuickActions),
             "running_processes" => Some(Self::RunningProcesses),
             _ => None,
         }
@@ -259,7 +255,6 @@ impl HubWidget {
             Self::DiskUsage,
             Self::CiStatus,
             Self::OpenIssues,
-            Self::QuickActions,
             Self::RunningProcesses,
         ]
     }
@@ -278,7 +273,6 @@ impl Default for HubLayout {
         Self {
             rows: vec![
                 vec![HubWidget::ProjectInfo],
-                vec![HubWidget::QuickActions],
                 vec![HubWidget::RecentCommits, HubWidget::ChangedFiles],
                 vec![HubWidget::Branches, HubWidget::Tags],
             ],

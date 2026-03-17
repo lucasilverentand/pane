@@ -104,7 +104,6 @@ pub fn render_single_widget(
         return;
     }
 
-    let mut buttons = Vec::new();
     match widget {
         HubWidget::ProjectInfo => {
             render_widget_project_info(project, git_info, theme, frame, area);
@@ -148,9 +147,6 @@ pub fn render_single_widget(
         HubWidget::OpenIssues => {
             render_widget_open_issues(git_info, theme, frame, area);
         }
-        HubWidget::QuickActions => {
-            render_widget_quick_actions(git_info, theme, &mut buttons, frame, area);
-        }
         HubWidget::RunningProcesses => {
             render_widget_running_processes(git_info, theme, frame, area);
         }
@@ -179,10 +175,7 @@ pub fn render_body(
     frame: &mut Frame,
     area: Rect,
 ) {
-    let mut buttons = Vec::new();
-
     if area.height < 4 || area.width < 20 {
-        state.buttons = buttons;
         return;
     }
 
@@ -196,8 +189,7 @@ pub fn render_body(
     .areas(area);
 
     render_sidebar(state, theme, hover, frame, left);
-    render_widgets(state, theme, layout, &mut buttons, frame, right);
-    state.buttons = buttons;
+    render_widgets(state, theme, layout, frame, right);
 }
 
 fn render_sidebar(
@@ -341,7 +333,6 @@ fn render_widgets(
     state: &ProjectHubState,
     theme: &Theme,
     layout: &HubLayout,
-    buttons: &mut Vec<crate::client::HubButton>,
     frame: &mut Frame,
     area: Rect,
 ) {
@@ -406,12 +397,10 @@ fn render_widgets(
         .iter()
         .enumerate()
         .map(|(i, row)| {
-            // Give ProjectInfo/QuickActions rows a smaller fixed height, others fill
+            // Give ProjectInfo row a smaller fixed height, others fill
             if row.len() == 1 && row[0] == HubWidget::ProjectInfo {
                 // ProjectInfo needs ~6 lines + 2 border = 8
                 Constraint::Length(8)
-            } else if row.len() == 1 && row[0] == HubWidget::QuickActions {
-                Constraint::Length(6)
             } else if i == row_count - 1 {
                 Constraint::Fill(1)
             } else {
@@ -480,9 +469,6 @@ fn render_widgets(
                 }
                 HubWidget::OpenIssues => {
                     render_widget_open_issues(git_info, theme, frame, cell);
-                }
-                HubWidget::QuickActions => {
-                    render_widget_quick_actions(git_info, theme, buttons, frame, cell);
                 }
                 HubWidget::RunningProcesses => {
                     render_widget_running_processes(git_info, theme, frame, cell);
@@ -1409,113 +1395,6 @@ fn render_widget_open_issues(
 // ---------------------------------------------------------------------------
 // Unit 6: Quick Actions, Running Processes
 // ---------------------------------------------------------------------------
-
-fn render_widget_quick_actions(
-    git_info: Option<&ProjectGitInfo>,
-    theme: &Theme,
-    hub_buttons: &mut Vec<crate::client::HubButton>,
-    frame: &mut Frame,
-    area: Rect,
-) {
-    let block = widget_block(" quick actions ", theme);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height < 1 || inner.width < 10 {
-        return;
-    }
-
-    let accent_bold = Style::default()
-        .fg(theme.accent)
-        .add_modifier(Modifier::BOLD);
-    let dim_style = Style::default().fg(theme.dim);
-    let link_style = Style::default()
-        .fg(theme.accent)
-        .add_modifier(Modifier::UNDERLINED);
-
-    let has_github = git_info.and_then(|g| g.github_url()).is_some();
-
-    let mut row = inner.y;
-
-    // GitHub links (if available)
-    if has_github && inner.width >= 20 {
-        let buttons: &[(&str, &str)] = &[
-            (" repo ", ""),
-            (" issues ", "/issues"),
-            (" PRs ", "/pulls"),
-            (" actions ", "/actions"),
-            (" wiki ", "/wiki"),
-        ];
-        let mut cursor_x = inner.x + 1; // 1 for leading space
-        for (i, (label, suffix)) in buttons.iter().enumerate() {
-            if i > 0 {
-                cursor_x += 1; // gap between buttons
-            }
-            let w = label.len() as u16;
-            let btn_rect = Rect::new(cursor_x, row, w, 1);
-            hub_buttons.push(crate::client::HubButton {
-                rect: btn_rect,
-                url_suffix: suffix.to_string(),
-            });
-            cursor_x += w;
-        }
-        // Render the line
-        let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
-        for (i, (label, _)) in buttons.iter().enumerate() {
-            if i > 0 {
-                spans.push(Span::styled(" ", dim_style));
-            }
-            spans.push(Span::styled(label.to_string(), link_style));
-        }
-        frame.render_widget(
-            Paragraph::new(Line::from(spans)),
-            Rect::new(inner.x, row, inner.width, 1),
-        );
-        row += 2; // gap after links
-    }
-
-    // Keyboard shortcuts
-    if row >= inner.y + inner.height {
-        return;
-    }
-
-    let actions = [
-        ("t", "new tab"),
-        ("s", "split h"),
-        ("v", "split v"),
-        ("n", "new workspace"),
-        ("x", "close tab"),
-        ("z", "toggle zoom"),
-        ("f", "toggle fold"),
-        (":", "command palette"),
-        ("?", "help"),
-    ];
-
-    let remaining = (inner.y + inner.height).saturating_sub(row) as usize;
-    let col_w = inner.width / 3;
-    let cols = 3usize.min(inner.width as usize / 12);
-    if cols == 0 {
-        return;
-    }
-    let rows = (actions.len() + cols - 1) / cols;
-    let visible_rows = remaining.min(rows);
-
-    for (i, (key, desc)) in actions.iter().enumerate() {
-        let col = i / rows;
-        let row_idx = i % rows;
-        if row_idx >= visible_rows || col >= cols {
-            continue;
-        }
-        let x = inner.x + (col as u16) * col_w;
-        let y = row + row_idx as u16;
-        let line = Line::from(vec![
-            Span::raw(" "),
-            Span::styled(format!("{:<3}", key), accent_bold),
-            Span::styled(*desc, dim_style),
-        ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(x, y, col_w, 1));
-    }
-}
 
 fn render_widget_running_processes(
     git_info: Option<&ProjectGitInfo>,
