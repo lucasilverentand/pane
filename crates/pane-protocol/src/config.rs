@@ -273,8 +273,6 @@ impl Default for HubLayout {
         Self {
             rows: vec![
                 vec![HubWidget::ProjectInfo],
-                vec![HubWidget::RecentCommits, HubWidget::ChangedFiles],
-                vec![HubWidget::Branches, HubWidget::Tags],
             ],
         }
     }
