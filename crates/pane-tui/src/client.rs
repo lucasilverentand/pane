@@ -1845,14 +1845,6 @@ impl Client {
         tui: &Tui,
         writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     ) -> Result<()> {
-        // Hub workspace: handle keys when hub is active (regardless of mode)
-        if self.is_home_active() && self.mode != Mode::Palette && self.mode != Mode::Confirm
-            && self.mode != Mode::Rename && self.mode != Mode::ContextMenu
-            && self.mode != Mode::Leader && self.mode != Mode::NewWorkspaceInput
-        {
-            return self.handle_project_hub_key(key, writer).await;
-        }
-
         // Modal modes handled client-side
         match &self.mode {
             Mode::Scroll => return self.handle_scroll_key(key, writer).await,
@@ -1912,6 +1904,19 @@ impl Client {
         // Esc clears transient state but stays in Normal mode
         if normalized.code == KeyCode::Esc {
             self.workspace_bar_focused = false;
+            // On home workspace, clear search; if no search, switch away
+            if self.is_home_active() {
+                if let Some(ref mut hub) = self.project_hub_state {
+                    if !hub.input.is_empty() {
+                        hub.input.clear();
+                        hub.update_filter();
+                        return Ok(());
+                    }
+                }
+                if self.render_state.workspaces.len() > 1 {
+                    self.render_state.active_workspace = 1;
+                }
+            }
             return Ok(());
         }
 
@@ -1942,6 +1947,41 @@ impl Client {
                 return self
                     .execute_action(Action::FocusGroupN(n), tui, writer)
                     .await;
+            }
+        }
+
+        // Home workspace sidebar: arrow keys navigate, Enter opens, typing searches
+        if self.is_home_active() {
+            let hub_action = self.project_hub_state.as_mut().and_then(|hub| {
+                match normalized.code {
+                    KeyCode::Up => { hub.move_up(); Some(()) }
+                    KeyCode::Down => { hub.move_down(); Some(()) }
+                    KeyCode::Backspace => {
+                        if hub.input.pop().is_some() {
+                            hub.update_filter();
+                        }
+                        Some(())
+                    }
+                    KeyCode::Char(c) if normalized.modifiers == KeyModifiers::NONE => {
+                        hub.input.push(c);
+                        hub.update_filter();
+                        Some(())
+                    }
+                    _ => None,
+                }
+            });
+            if hub_action.is_some() {
+                return Ok(());
+            }
+            // Enter: open project (needs &mut self after hub borrow ends)
+            if normalized.code == KeyCode::Enter {
+                let dir = self.project_hub_state.as_ref()
+                    .and_then(|hub| hub.selected_project())
+                    .map(|p| p.path.to_string_lossy().to_string());
+                if let Some(dir) = dir {
+                    self.open_project(&dir, writer).await?;
+                }
+                return Ok(());
             }
         }
 
@@ -2040,8 +2080,11 @@ impl Client {
                     return Ok(());
                 }
                 Action::EnterInteract => {
-                    self.workspace_bar_focused = false;
-                    self.mode = Mode::Interact;
+                    // Widget tabs have no PTY — stay in Normal mode
+                    if !self.is_home_active() {
+                        self.workspace_bar_focused = false;
+                        self.mode = Mode::Interact;
+                    }
                     return Ok(());
                 }
                 _ => {
@@ -2110,8 +2153,10 @@ impl Client {
                 return Ok(());
             }
             Action::EnterInteract => {
-                self.workspace_bar_focused = false;
-                self.mode = Mode::Interact;
+                if !self.is_home_active() {
+                    self.workspace_bar_focused = false;
+                    self.mode = Mode::Interact;
+                }
                 return Ok(());
             }
             Action::EnterNormal => {
@@ -2541,82 +2586,6 @@ impl Client {
             let cmd = format!("new-workspace -c \"{}\"", dir);
             let mut w = writer.lock().await;
             let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
-        }
-        Ok(())
-    }
-
-    async fn handle_project_hub_key(
-        &mut self,
-        key: KeyEvent,
-        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
-    ) -> Result<()> {
-        let state = match self.project_hub_state.as_mut() {
-            Some(s) => s,
-            None => {
-                self.mode = Mode::Normal;
-                return Ok(());
-            }
-        };
-
-        match key.code {
-            KeyCode::Esc => {
-                // Switch to first non-home workspace if one exists
-                if self.render_state.workspaces.len() > 1 {
-                    self.render_state.active_workspace = 1;
-                }
-            }
-            KeyCode::Up => {
-                state.move_up();
-            }
-            KeyCode::Down => {
-                state.move_down();
-            }
-            KeyCode::Enter => {
-                if let Some(project) = state.selected_project().cloned() {
-                    let dir = project.path.to_string_lossy().to_string();
-                    self.open_project(&dir, writer).await?;
-                }
-            }
-            KeyCode::Char(c) if state.input.is_empty() => {
-                match c {
-                    'q' => {
-                        self.should_quit = true;
-                    }
-                    ':' => {
-                        self.palette_state = Some(UnifiedPaletteState::new_full_search(&self.config.keys, &self.config.leader));
-                        self.mode = Mode::Palette;
-                    }
-                    'n' => {
-                        let home = std::env::var("HOME")
-                            .map(std::path::PathBuf::from)
-                            .unwrap_or_else(|_| std::path::PathBuf::from("/"));
-                        self.new_workspace_input = Some(NewWorkspaceInputState {
-                            stage: NewWorkspaceStage::Directory,
-                            name: String::new(),
-                            browser: DirBrowser::new(home),
-                            last_click: None,
-                        });
-                        self.mode = Mode::NewWorkspaceInput;
-                    }
-                    '/' => {
-                        // Focus search — just start typing
-                    }
-                    _ => {
-                        state.input.push(c);
-                        state.update_filter();
-                    }
-                }
-            }
-            KeyCode::Char(c) => {
-                state.input.push(c);
-                state.update_filter();
-            }
-            KeyCode::Backspace => {
-                if state.input.pop().is_some() {
-                    state.update_filter();
-                }
-            }
-            _ => {}
         }
         Ok(())
     }
