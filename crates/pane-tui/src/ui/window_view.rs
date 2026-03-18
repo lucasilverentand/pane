@@ -173,7 +173,9 @@ pub fn render_group_from_snapshot(
     let active_tab = group.tabs.get(group.active_tab);
     if let Some(TabKind::Widget(ref w)) = active_tab.map(|t| &t.kind) {
         if let Some(hub) = hub_state {
-            super::project_hub::render_single_widget(hub, w, theme, frame, area);
+            let is_focused = hub.focused_widget == Some(group.id);
+            let interact = hub.widget_interact.get(&group.id);
+            super::project_hub::render_single_widget(hub, w, is_focused, interact, theme, frame, area);
         }
         return;
     }

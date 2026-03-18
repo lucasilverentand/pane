@@ -12,7 +12,8 @@ use tokio::sync::Mutex;
 use crate::event::AppEvent;
 use pane_protocol::app::{LeaderState, Mode, ResizeBorder, ResizeState};
 use crate::clipboard;
-use pane_protocol::config::{self, Action, Config};
+use pane_protocol::config::{self, Action, Config, HubWidget};
+use pane_protocol::window_types::{TabKind, WindowId};
 use crate::copy_mode::{CopyModeAction, CopyModeState};
 use pane_protocol::layout::{Side, SplitDirection, TabId};
 use pane_daemon::server::daemon;
@@ -540,6 +541,10 @@ pub struct ProjectHubState {
     pub last_git_fetch: Option<usize>,
     /// Track last click for double-click detection: (selected index, timestamp).
     pub last_click: Option<(usize, std::time::Instant)>,
+    /// Which widget window is currently focused (for j/k item navigation).
+    pub focused_widget: Option<WindowId>,
+    /// Per-widget interaction state (selected item index).
+    pub widget_interact: HashMap<WindowId, WidgetInteractState>,
     /// Channel for sending async results back to the event loop.
     event_tx: tokio::sync::mpsc::UnboundedSender<ServerEvent>,
 }
@@ -588,6 +593,8 @@ impl ProjectHubState {
             git_cache: HashMap::new(),
             last_git_fetch: None,
             last_click: None,
+            focused_widget: None,
+            widget_interact: HashMap::new(),
             event_tx,
         };
         state.ensure_git_info();
@@ -729,6 +736,12 @@ impl ProjectHubState {
             });
         });
     }
+}
+
+/// Per-widget interaction state: tracks which list item is selected for keyboard navigation.
+#[derive(Default, Clone)]
+pub struct WidgetInteractState {
+    pub selected: usize,
 }
 
 /// Disk cache TTL for project git info (seconds).
@@ -1763,29 +1776,76 @@ impl Client {
                                 }
                             }
                         }
-                        if let Some(ref mut hub) = self.project_hub_state {
-                            if let Some(idx) = crate::ui::project_hub::sidebar_hit_test(hub, body, x, y, self.sidebar_width) {
-                                let now = std::time::Instant::now();
-                                let is_double = hub.last_click
-                                    .map(|(prev_idx, prev_time)| {
-                                        prev_idx == idx && now.duration_since(prev_time).as_millis() < 400
-                                    })
-                                    .unwrap_or(false);
-
-                                if is_double {
-                                    // Double click — open as workspace
-                                    hub.last_click = None;
-                                    if let Some(project) = hub.selected_project().cloned() {
-                                        let dir = project.path.to_string_lossy().to_string();
-                                        self.open_project(&dir, writer).await?;
+                        // Track sidebar interaction (borrow ends before the async call below)
+                        let (sidebar_was_clicked, double_click_project) =
+                            if let Some(ref mut hub) = self.project_hub_state {
+                                if let Some(idx) = crate::ui::project_hub::sidebar_hit_test(
+                                    hub, body, x, y, self.sidebar_width,
+                                ) {
+                                    let now = std::time::Instant::now();
+                                    let is_double = hub
+                                        .last_click
+                                        .map(|(prev_idx, prev_time)| {
+                                            prev_idx == idx
+                                                && now.duration_since(prev_time).as_millis() < 400
+                                        })
+                                        .unwrap_or(false);
+                                    hub.focused_widget = None;
+                                    if is_double {
+                                        hub.last_click = None;
+                                        (true, hub.selected_project().cloned())
+                                    } else {
+                                        hub.select(idx);
+                                        hub.last_click = Some((idx, now));
+                                        (true, None)
                                     }
                                 } else {
-                                    // Single click — select
-                                    hub.select(idx);
-                                    hub.last_click = Some((idx, now));
+                                    hub.last_click = None;
+                                    (false, None)
                                 }
                             } else {
-                                hub.last_click = None;
+                                (false, None)
+                            };
+
+                        if let Some(project) = double_click_project {
+                            let dir = project.path.to_string_lossy().to_string();
+                            self.open_project(&dir, writer).await?;
+                        } else if !sidebar_was_clicked {
+                            // Widget click: focus the window that was clicked
+                            let sw = crate::ui::project_hub::sidebar_width(
+                                body.width,
+                                self.sidebar_width,
+                            );
+                            let layout_body = Rect::new(
+                                body.x + sw,
+                                body.y,
+                                body.width.saturating_sub(sw),
+                                body.height,
+                            );
+                            let clicked_id = self.active_workspace().and_then(|ws| {
+                                let resolved =
+                                    ws.layout.resolve_with_folds(layout_body, &ws.folded_windows);
+                                resolved.into_iter().find_map(|rp| {
+                                    if let pane_protocol::layout::ResolvedPane::Visible {
+                                        id,
+                                        rect,
+                                    } = rp
+                                    {
+                                        if x >= rect.x
+                                            && x < rect.x + rect.width
+                                            && y >= rect.y
+                                            && y < rect.y + rect.height
+                                        {
+                                            return Some(id);
+                                        }
+                                    }
+                                    None
+                                })
+                            });
+                            if let Some(id) = clicked_id {
+                                if let Some(ref mut hub) = self.project_hub_state {
+                                    hub.focused_widget = Some(id);
+                                }
                             }
                         }
                         self.workspace_bar_focused = false;
@@ -2018,9 +2078,13 @@ impl Client {
         // Esc clears transient state but stays in Normal mode
         if normalized.code == KeyCode::Esc {
             self.workspace_bar_focused = false;
-            // On home workspace, clear search; if no search, switch away
+            // On home workspace, defocus widget → clear search → switch away
             if self.is_home_active() {
                 if let Some(ref mut hub) = self.project_hub_state {
+                    if hub.focused_widget.is_some() {
+                        hub.focused_widget = None;
+                        return Ok(());
+                    }
                     if !hub.input.is_empty() {
                         hub.input.clear();
                         hub.update_filter();
@@ -2066,7 +2130,57 @@ impl Client {
 
         // Home workspace sidebar: arrow keys navigate, Enter opens, typing searches
         if self.is_home_active() {
+            // If a widget is focused, route j/k/Enter to widget item navigation
+            let widget_focused = self.project_hub_state.as_ref().is_some_and(|h| h.focused_widget.is_some());
+            if widget_focused {
+                match normalized.code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        let widget = self.focused_widget_kind();
+                        let count = widget.as_ref().and_then(|w| {
+                            self.project_hub_state.as_ref().map(|h| {
+                                crate::ui::project_hub::widget_item_count(w, h.selected_git_info())
+                            })
+                        }).unwrap_or(0);
+                        if let Some(ref mut hub) = self.project_hub_state {
+                            if let Some(id) = hub.focused_widget {
+                                let state = hub.widget_interact.entry(id).or_default();
+                                if state.selected + 1 < count {
+                                    state.selected += 1;
+                                }
+                            }
+                        }
+                        return Ok(());
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        if let Some(ref mut hub) = self.project_hub_state {
+                            if let Some(id) = hub.focused_widget {
+                                let state = hub.widget_interact.entry(id).or_default();
+                                state.selected = state.selected.saturating_sub(1);
+                            }
+                        }
+                        return Ok(());
+                    }
+                    KeyCode::Enter => {
+                        let text = self.focused_widget_kind().and_then(|w| {
+                            self.project_hub_state.as_ref().and_then(|h| {
+                                let id = h.focused_widget?;
+                                let selected = h.widget_interact.get(&id).map(|s| s.selected).unwrap_or(0);
+                                crate::ui::project_hub::widget_selected_text(&w, h.selected_git_info(), selected)
+                            })
+                        });
+                        if let Some(text) = text {
+                            let _ = crate::clipboard::copy_to_clipboard(&text);
+                        }
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+
             let hub_action = self.project_hub_state.as_mut().and_then(|hub| {
+                if hub.focused_widget.is_some() {
+                    return None; // handled above
+                }
                 match normalized.code {
                     KeyCode::Up => { hub.move_up(); Some(()) }
                     KeyCode::Down => { hub.move_down(); Some(()) }
@@ -3088,6 +3202,20 @@ impl Client {
         self.render_state
             .workspaces
             .get(self.render_state.active_workspace)
+    }
+
+    /// Return the `HubWidget` kind for the currently focused widget window, if any.
+    fn focused_widget_kind(&self) -> Option<HubWidget> {
+        let hub = self.project_hub_state.as_ref()?;
+        let focused_id = hub.focused_widget?;
+        let ws = self.active_workspace()?;
+        let group = ws.groups.iter().find(|g| g.id == focused_id)?;
+        let tab = group.tabs.get(group.active_tab)?;
+        if let TabKind::Widget(w) = &tab.kind {
+            Some(w.clone())
+        } else {
+            None
+        }
     }
 
     /// Get the current workspace CWD, if any.

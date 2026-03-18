@@ -22,6 +22,11 @@ pub fn get_buttons(client: &Client) -> &'static [(&'static str, &'static str)] {
             ("n", "new"),
             ("j", "exit bar"),
         ],
+        Mode::Normal if is_home && client.project_hub_state.as_ref().is_some_and(|h| h.focused_widget.is_some()) => &[
+            ("j/k", "navigate"),
+            ("Enter", "copy"),
+            ("Esc", "back"),
+        ],
         Mode::Normal if is_home => &[
             ("/", "search"),
             ("Enter", "open"),
