@@ -59,7 +59,8 @@ pub struct Client {
     pub pending_confirm_action: Option<Action>,
     pub confirm_message: Option<String>,
     pub resize_state: Option<ResizeState>,
-    pub workspace_bar_focused: bool,
+    pub focus_location: FocusLocation,
+    focus_stack: Vec<FocusLocation>,
     pub hover: Option<(u16, u16)>,
     pub should_quit: bool,
     pub needs_redraw: bool,
@@ -88,6 +89,13 @@ struct HomeWidgetDragState {
     split_path: Vec<Side>,
     direction: SplitDirection,
     layout_body: Rect,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum FocusLocation {
+    #[default]
+    WindowLayout,
+    WorkspaceBar,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1222,7 +1230,8 @@ impl Client {
             pending_confirm_action: None,
             confirm_message: None,
             resize_state: None,
-            workspace_bar_focused: false,
+            focus_location: FocusLocation::WindowLayout,
+            focus_stack: Vec::new(),
             hover: None,
             should_quit: false,
             needs_redraw: true,
@@ -1236,6 +1245,22 @@ impl Client {
             widget_picker_state: None,
             event_tx: None,
         }
+    }
+
+    /// Save current focus before entering a modal.
+    fn push_focus(&mut self) {
+        self.focus_stack.push(self.focus_location.clone());
+        self.focus_location = FocusLocation::WindowLayout;
+    }
+
+    /// Restore focus saved by the most recent push_focus().
+    fn pop_focus(&mut self) {
+        self.focus_location = self.focus_stack.pop().unwrap_or_default();
+    }
+
+    /// Convenience for rendering code.
+    pub fn is_workspace_bar_focused(&self) -> bool {
+        self.focus_location == FocusLocation::WorkspaceBar
     }
 
     /// Returns true if the active workspace is the home workspace.
@@ -1429,6 +1454,14 @@ impl Client {
         // Show hub when no workspaces exist
         if self.render_state.workspaces.is_empty() {
             self.render_state.active_workspace = 0;
+        }
+
+        // If workspace bar was focused but workspaces are gone, reset focus
+        if self.focus_location == FocusLocation::WorkspaceBar
+            && self.render_state.workspaces.is_empty()
+        {
+            self.focus_location = FocusLocation::WindowLayout;
+            self.focus_stack.clear();
         }
     }
 
@@ -1706,7 +1739,7 @@ impl Client {
                             x,
                             y,
                         ) {
-                            self.workspace_bar_focused = true;
+                            self.focus_location = FocusLocation::WorkspaceBar;
                             match click {
                                 crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
                                     // Ensure hub state exists when switching to home
@@ -1848,7 +1881,7 @@ impl Client {
                                 }
                             }
                         }
-                        self.workspace_bar_focused = false;
+                        self.focus_location = FocusLocation::WindowLayout;
                         return Ok(());
                     }
 
@@ -1859,7 +1892,7 @@ impl Client {
                     }
 
                     // Forward mouse to server (click on body clears workspace bar focus)
-                    self.workspace_bar_focused = false;
+                    self.focus_location = FocusLocation::WindowLayout;
                     let mut w = writer.lock().await;
                     let _ = send_request(&mut w, &ClientRequest::MouseDown { x, y }).await;
                 }
@@ -1978,6 +2011,7 @@ impl Client {
                         }
                         self.context_menu_state =
                             Some(crate::ui::context_menu::workspace_bar_menu(x, y));
+                        self.push_focus();
                         self.mode = Mode::ContextMenu;
                     } else if let Some(TabBarHit::Tab { group_index, tab_index }) = self.hit_test_tab_bar(tui, x, y) {
                         // Right-click on a tab — select that tab first, then show tab bar menu
@@ -1992,6 +2026,7 @@ impl Client {
                         }
                         self.context_menu_state =
                             Some(crate::ui::context_menu::tab_bar_menu(x, y));
+                        self.push_focus();
                         self.mode = Mode::ContextMenu;
                     } else {
                         // Right-click on pane body — use home-workspace menu when appropriate
@@ -2000,6 +2035,7 @@ impl Client {
                         } else {
                             crate::ui::context_menu::pane_body_menu(x, y)
                         });
+                        self.push_focus();
                         self.mode = Mode::ContextMenu;
                     }
                 }
@@ -2077,7 +2113,7 @@ impl Client {
 
         // Esc clears transient state but stays in Normal mode
         if normalized.code == KeyCode::Esc {
-            self.workspace_bar_focused = false;
+            self.focus_location = FocusLocation::WindowLayout;
             // On home workspace, defocus widget → clear search → switch away
             if self.is_home_active() {
                 if let Some(ref mut hub) = self.project_hub_state {
@@ -2227,7 +2263,7 @@ impl Client {
             "leader" => self.enter_leader_mode(),
             "normal" => {
                 self.mode = Mode::Normal;
-                self.workspace_bar_focused = false;
+                self.focus_location = FocusLocation::WindowLayout;
             }
             "commands" => {
                 self.execute_action(Action::CommandPalette, tui, writer).await?;
@@ -2248,7 +2284,7 @@ impl Client {
                 self.execute_action(Action::CloseTab, tui, writer).await?;
             }
             "exit bar" => {
-                self.workspace_bar_focused = false;
+                self.focus_location = FocusLocation::WindowLayout;
             }
             "open" => {
                 let dir = self.project_hub_state.as_ref()
@@ -2264,7 +2300,7 @@ impl Client {
     }
 
     fn enter_leader_mode(&mut self) {
-        self.workspace_bar_focused = false;
+        self.push_focus();
         let root = self.config.leader.root.clone();
         self.leader_state = Some(LeaderState {
             path: Vec::new(),
@@ -2281,7 +2317,7 @@ impl Client {
         writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     ) -> Result<()> {
         // Workspace bar focus mode
-        if self.workspace_bar_focused {
+        if self.focus_location == FocusLocation::WorkspaceBar {
             match &action {
                 Action::FocusLeft => {
                     if self.is_home_active() {
@@ -2333,7 +2369,7 @@ impl Client {
                     return Ok(());
                 }
                 Action::FocusDown | Action::FocusUp => {
-                    self.workspace_bar_focused = false;
+                    self.focus_location = FocusLocation::WindowLayout;
                     return Ok(());
                 }
                 Action::CloseTab => {
@@ -2349,21 +2385,22 @@ impl Client {
                     } else {
                         "Close this workspace?".into()
                     });
-                    self.workspace_bar_focused = false;
+                    self.push_focus();
                     self.mode = Mode::Confirm;
                     return Ok(());
                 }
                 Action::EnterInteract => {
                     // Widget tabs have no PTY — stay in Normal mode
                     if !self.is_home_active() {
-                        self.workspace_bar_focused = false;
+                        self.focus_stack.clear();
+                        self.focus_location = FocusLocation::WindowLayout;
                         self.mode = Mode::Interact;
                     }
                     return Ok(());
                 }
                 Action::NewTab => {
                     // On the workspace bar, "n" creates a new workspace, not a new tab
-                    self.workspace_bar_focused = false;
+                    self.push_focus();
                     let home = std::env::var("HOME")
                         .map(std::path::PathBuf::from)
                         .unwrap_or_else(|_| std::path::PathBuf::from("/"));
@@ -2377,7 +2414,7 @@ impl Client {
                     return Ok(());
                 }
                 _ => {
-                    self.workspace_bar_focused = false;
+                    self.focus_location = FocusLocation::WindowLayout;
                     // Fall through to normal action handling
                 }
             }
@@ -2412,7 +2449,7 @@ impl Client {
                     Side::First,
                 ).is_none();
                 if at_top {
-                    self.workspace_bar_focused = true;
+                    self.focus_location = FocusLocation::WorkspaceBar;
                     return Ok(());
                 }
             }
@@ -2426,11 +2463,13 @@ impl Client {
             }
             Action::Help => {
                 // Help opens the command palette (unified palette)
+                self.push_focus();
                 self.palette_state = Some(UnifiedPaletteState::new_full_search(&self.config.keys, &self.config.leader));
                 self.mode = Mode::Palette;
                 return Ok(());
             }
             Action::ScrollMode => {
+                self.push_focus();
                 self.mode = Mode::Scroll;
                 return Ok(());
             }
@@ -2449,6 +2488,7 @@ impl Client {
                                     cursor_row as usize,
                                     cursor_col as usize,
                                 ));
+                                self.push_focus();
                                 self.mode = Mode::Copy;
                             }
                         }
@@ -2457,19 +2497,21 @@ impl Client {
                 return Ok(());
             }
             Action::CommandPalette => {
+                self.push_focus();
                 self.palette_state = Some(UnifiedPaletteState::new_full_search(&self.config.keys, &self.config.leader));
                 self.mode = Mode::Palette;
                 return Ok(());
             }
             Action::EnterInteract => {
                 if !self.is_home_active() {
-                    self.workspace_bar_focused = false;
+                    self.focus_stack.clear();
+                    self.focus_location = FocusLocation::WindowLayout;
                     self.mode = Mode::Interact;
                 }
                 return Ok(());
             }
             Action::EnterNormal => {
-                self.workspace_bar_focused = false;
+                self.focus_location = FocusLocation::WindowLayout;
                 self.mode = Mode::Normal;
                 return Ok(());
             }
@@ -2515,6 +2557,7 @@ impl Client {
                     })
                     .unwrap_or_default();
                 self.rename_target = RenameTarget::Window;
+                self.push_focus();
                 self.mode = Mode::Rename;
                 return Ok(());
             }
@@ -2525,6 +2568,7 @@ impl Client {
                     .map(|ws| ws.name.clone())
                     .unwrap_or_default();
                 self.rename_target = RenameTarget::Workspace;
+                self.push_focus();
                 self.mode = Mode::Rename;
                 return Ok(());
             }
@@ -2538,12 +2582,13 @@ impl Client {
                     browser: DirBrowser::new(home),
                     last_click: None,
                 });
+                self.push_focus();
                 self.mode = Mode::NewWorkspaceInput;
                 return Ok(());
             }
             Action::ProjectHub => {
                 self.render_state.active_workspace = 0;
-                self.workspace_bar_focused = false;
+                self.focus_location = FocusLocation::WindowLayout;
                 if self.project_hub_state.is_none() {
                     self.project_hub_state = Some(ProjectHubState::new(&self.config, self.event_tx.as_ref().unwrap().clone()));
                 }
@@ -2551,6 +2596,7 @@ impl Client {
             }
             Action::ResizeMode => {
                 self.resize_state = Some(ResizeState { selected: None });
+                self.push_focus();
                 self.mode = Mode::Resize;
                 return Ok(());
             }
@@ -2583,7 +2629,7 @@ impl Client {
                 if has_fg {
                     self.pending_confirm_action = Some(Action::CloseTab);
                     self.confirm_message = Some("Close this tab? (process running)".into());
-                    self.workspace_bar_focused = false;
+                    self.push_focus();
                     self.mode = Mode::Confirm;
                 } else {
                     // Idle shell — close immediately
@@ -2606,12 +2652,12 @@ impl Client {
                 if is_last {
                     self.pending_confirm_action = Some(Action::CloseWorkspace);
                     self.confirm_message = Some("Close last workspace? This will end the session.".into());
-                    self.workspace_bar_focused = false;
+                    self.push_focus();
                     self.mode = Mode::Confirm;
                 } else if has_any_fg {
                     self.pending_confirm_action = Some(Action::CloseWorkspace);
                     self.confirm_message = Some("Close workspace? (processes running)".into());
-                    self.workspace_bar_focused = false;
+                    self.push_focus();
                     self.mode = Mode::Confirm;
                 } else {
                     let mut w = writer.lock().await;
@@ -2627,6 +2673,8 @@ impl Client {
             let idx = (*n as usize).saturating_sub(1);
             if idx < self.render_state.workspaces.len() {
                 self.render_state.active_workspace = idx;
+                self.focus_stack.clear();
+                self.focus_location = FocusLocation::WindowLayout;
                 self.mode = Mode::Normal;
             }
         }
@@ -2647,6 +2695,7 @@ impl Client {
         let state = match self.tab_picker_state.as_mut() {
             Some(s) => s,
             None => {
+                self.pop_focus();
                 self.mode = Mode::Normal;
                 return Ok(());
             }
@@ -2655,6 +2704,7 @@ impl Client {
         match key.code {
             KeyCode::Esc => {
                 self.tab_picker_state = None;
+                self.pop_focus();
                 self.mode = Mode::Normal;
             }
             KeyCode::Enter => {
@@ -2680,6 +2730,8 @@ impl Client {
                     let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
                 }
                 self.tab_picker_state = None;
+                self.focus_stack.clear();
+                self.focus_location = FocusLocation::WindowLayout;
                 self.mode = Mode::Interact;
             }
             KeyCode::Up => state.move_up(),
@@ -2726,11 +2778,13 @@ impl Client {
                     }
                 }
                 self.confirm_message = None;
+                self.pop_focus();
                 self.mode = Mode::Normal;
             }
             KeyCode::Esc | KeyCode::Char('n') => {
                 self.pending_confirm_action = None;
                 self.confirm_message = None;
+                self.pop_focus();
                 self.mode = Mode::Normal;
             }
             _ => {}
@@ -2746,11 +2800,13 @@ impl Client {
         match key.code {
             KeyCode::Esc => {
                 self.rename_input.clear();
+                self.pop_focus();
                 self.mode = Mode::Normal;
             }
             KeyCode::Enter => {
                 let name = self.rename_input.clone();
                 self.rename_input.clear();
+                self.pop_focus();
                 self.mode = Mode::Normal;
                 if !name.is_empty() {
                     let cmd = match self.rename_target {
@@ -2776,6 +2832,7 @@ impl Client {
         let state = match self.new_workspace_input.as_mut() {
             Some(s) => s,
             None => {
+                self.pop_focus();
                 self.mode = Mode::Normal;
                 return Ok(());
             }
@@ -2796,6 +2853,7 @@ impl Client {
                         state.browser.update_filter();
                     } else {
                         self.new_workspace_input = None;
+                        self.pop_focus();
                         self.mode = Mode::Normal;
                     }
                 }
@@ -2856,6 +2914,8 @@ impl Client {
                     let name = state.name.clone();
                     let dir = state.browser.current_dir.to_string_lossy().to_string();
                     self.new_workspace_input = None;
+                    self.focus_stack.clear();
+                    self.focus_location = FocusLocation::WindowLayout;
                     self.mode = Mode::Normal;
 
                     // New workspace will be appended and become active
@@ -2918,6 +2978,7 @@ impl Client {
         let state = match self.resize_state.as_mut() {
             Some(s) => s,
             None => {
+                self.pop_focus();
                 self.mode = Mode::Normal;
                 return Ok(());
             }
@@ -2926,6 +2987,7 @@ impl Client {
         match key.code {
             KeyCode::Esc => {
                 self.resize_state = None;
+                self.pop_focus();
                 self.mode = Mode::Normal;
             }
             KeyCode::Char('=') => {
@@ -2989,6 +3051,7 @@ impl Client {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.context_menu_state = None;
+                self.pop_focus();
                 self.mode = Mode::Normal;
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -3003,6 +3066,7 @@ impl Client {
             }
             KeyCode::Enter => {
                 if let Some(cm) = self.context_menu_state.take() {
+                    self.pop_focus();
                     self.mode = Mode::Normal;
                     if let Some(action) = cm.selected_action().cloned() {
                         self.execute_action(action, tui, writer).await?;
@@ -3025,6 +3089,7 @@ impl Client {
         let pane_id = match pane_id {
             Some(id) => id,
             None => {
+                self.pop_focus();
                 self.mode = Mode::Normal;
                 self.copy_mode_state = None;
                 return Ok(());
@@ -3034,6 +3099,7 @@ impl Client {
         let screen = match self.screens.get(&pane_id) {
             Some(parser) => parser.screen(),
             None => {
+                self.pop_focus();
                 self.mode = Mode::Normal;
                 self.copy_mode_state = None;
                 return Ok(());
@@ -3046,10 +3112,12 @@ impl Client {
                 CopyModeAction::YankSelection(text) => {
                     let _ = clipboard::copy_to_clipboard(&text);
                     self.copy_mode_state = None;
+                    self.pop_focus();
                     self.mode = Mode::Normal;
                 }
                 CopyModeAction::Exit => {
                     self.copy_mode_state = None;
+                    self.pop_focus();
                     self.mode = Mode::Normal;
                 }
             }
@@ -3064,6 +3132,7 @@ impl Client {
     ) -> Result<()> {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
+                self.pop_focus();
                 self.mode = Mode::Normal;
             }
             KeyCode::Char('g') | KeyCode::Home => {
@@ -3073,6 +3142,7 @@ impl Client {
             KeyCode::Char('G') | KeyCode::End => {
                 let mut w = writer.lock().await;
                 let _ = send_request(&mut w, &ClientRequest::Command("scroll-to-bottom".to_string())).await;
+                self.pop_focus();
                 self.mode = Mode::Normal;
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -3096,6 +3166,7 @@ impl Client {
                 }
             }
             _ => {
+                self.pop_focus();
                 self.mode = Mode::Normal;
                 // Forward the key to PTY
                 let mut w = writer.lock().await;
@@ -3119,11 +3190,13 @@ impl Client {
             match key.code {
                 KeyCode::Esc => {
                     self.palette_state = None;
+                    self.pop_focus();
                     self.mode = Mode::Normal;
                 }
                 KeyCode::Enter => {
                     if let Some(action) = cp.selected_action() {
                         self.palette_state = None;
+                        self.pop_focus();
                         self.mode = Mode::Normal;
                         return self.execute_action(action, tui, writer).await;
                     }
@@ -3137,6 +3210,7 @@ impl Client {
                 }
             }
         } else {
+            self.pop_focus();
             self.mode = Mode::Normal;
         }
         Ok(())
@@ -3152,6 +3226,7 @@ impl Client {
 
         if key.code == KeyCode::Esc {
             self.leader_state = None;
+            self.pop_focus();
             self.mode = Mode::Normal;
             return Ok(());
         }
@@ -3169,11 +3244,13 @@ impl Client {
         match next {
             Some(LeaderNode::Leaf { action, .. }) => {
                 self.leader_state = None;
+                self.pop_focus();
                 self.mode = Mode::Normal;
                 return self.execute_action(action, tui, writer).await;
             }
             Some(LeaderNode::PassThrough) => {
                 self.leader_state = None;
+                self.pop_focus();
                 self.mode = Mode::Normal;
                 let leader_key = self.config.leader.key;
                 let mut w = writer.lock().await;
@@ -3190,6 +3267,7 @@ impl Client {
             }
             None => {
                 self.leader_state = None;
+                self.pop_focus();
                 self.mode = Mode::Normal;
             }
         }
@@ -3243,11 +3321,13 @@ impl Client {
             mode,
             &scripts,
         ));
+        self.push_focus();
         self.mode = Mode::TabPicker;
     }
 
     fn open_widget_picker(&mut self, mode: WidgetPickerMode) {
         self.widget_picker_state = Some(WidgetPickerState::new(mode));
+        self.push_focus();
         self.mode = Mode::WidgetPicker;
     }
 
@@ -3259,6 +3339,7 @@ impl Client {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.widget_picker_state = None;
+                self.pop_focus();
                 self.mode = Mode::Normal;
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -3273,6 +3354,7 @@ impl Client {
             }
             KeyCode::Enter => {
                 if let Some(wp) = self.widget_picker_state.take() {
+                    self.pop_focus();
                     self.mode = Mode::Normal;
                     let widget_name = wp.selected_widget().map(|w| w.as_str().to_string());
                     if let Some(name) = widget_name {

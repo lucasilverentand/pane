@@ -16,7 +16,7 @@ pub fn get_buttons(client: &Client) -> &'static [(&'static str, &'static str)] {
     let is_home = client.is_home_active();
 
     match &client.mode {
-        Mode::Normal if client.workspace_bar_focused => &[
+        Mode::Normal if client.is_workspace_bar_focused() => &[
             ("h/l", "switch"),
             ("d", "close"),
             ("n", "new"),

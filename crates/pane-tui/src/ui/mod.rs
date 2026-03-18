@@ -57,7 +57,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
             &name_refs,
             active_idx,
             theme,
-            client.workspace_bar_focused,
+            client.is_workspace_bar_focused(),
             client.hover,
             frame,
             header,
@@ -81,7 +81,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
         } else {
             None
         };
-        let ws_bar_focused = client.workspace_bar_focused;
+        let ws_bar_focused = client.is_workspace_bar_focused();
 
         // For home workspace: split body into sidebar + layout area
         // Skip sidebar when terminal is too narrow
