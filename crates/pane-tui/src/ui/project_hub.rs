@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::client::{ProjectGitInfo, ProjectHubState};
+use crate::client::{ProjectGitInfo, ProjectHubState, WidgetInteractState};
 use pane_protocol::config::{HubLayout, HubWidget, Theme};
 
 pub const SIDEBAR_MIN_WIDTH: u16 = 20;
@@ -82,6 +82,8 @@ pub fn sidebar_hit_test(
 pub fn render_single_widget(
     hub_state: &ProjectHubState,
     widget: &HubWidget,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
@@ -117,50 +119,117 @@ pub fn render_single_widget(
 
     match widget {
         HubWidget::ProjectInfo => {
-            render_widget_project_info(project, git_info, theme, frame, area);
+            render_widget_project_info(project, git_info, is_focused, theme, frame, area);
         }
         HubWidget::RecentCommits => {
-            render_widget_recent_commits(git_info, theme, frame, area);
+            render_widget_recent_commits(git_info, is_focused, interact, theme, frame, area);
         }
         HubWidget::ChangedFiles => {
-            render_widget_changed_files(git_info, theme, frame, area);
+            render_widget_changed_files(git_info, is_focused, interact, theme, frame, area);
         }
         HubWidget::Branches => {
-            render_widget_branches(git_info, theme, frame, area);
+            render_widget_branches(git_info, is_focused, interact, theme, frame, area);
         }
         HubWidget::Stashes => {
-            render_widget_stashes(git_info, theme, frame, area);
+            render_widget_stashes(git_info, is_focused, interact, theme, frame, area);
         }
         HubWidget::Tags => {
-            render_widget_tags(git_info, theme, frame, area);
+            render_widget_tags(git_info, is_focused, interact, theme, frame, area);
         }
         HubWidget::GitGraph => {
-            render_widget_git_graph(git_info, theme, frame, area);
+            render_widget_git_graph(git_info, is_focused, interact, theme, frame, area);
         }
         HubWidget::Contributors => {
-            render_widget_contributors(git_info, theme, frame, area);
+            render_widget_contributors(git_info, is_focused, interact, theme, frame, area);
         }
         HubWidget::Todos => {
-            render_widget_todos(git_info, theme, frame, area);
+            render_widget_todos(git_info, is_focused, interact, theme, frame, area);
         }
         HubWidget::Readme => {
-            render_widget_readme(git_info, theme, frame, area);
+            render_widget_readme(git_info, is_focused, interact, theme, frame, area);
         }
         HubWidget::Languages => {
-            render_widget_languages(git_info, theme, frame, area);
+            render_widget_languages(git_info, is_focused, interact, theme, frame, area);
         }
         HubWidget::DiskUsage => {
-            render_widget_disk_usage(git_info, theme, frame, area);
+            render_widget_disk_usage(git_info, is_focused, theme, frame, area);
         }
         HubWidget::CiStatus => {
-            render_widget_ci_status(git_info, theme, frame, area);
+            render_widget_ci_status(git_info, is_focused, interact, theme, frame, area);
         }
         HubWidget::OpenIssues => {
-            render_widget_open_issues(git_info, theme, frame, area);
+            render_widget_open_issues(git_info, is_focused, interact, theme, frame, area);
         }
         HubWidget::RunningProcesses => {
-            render_widget_running_processes(git_info, theme, frame, area);
+            render_widget_running_processes(git_info, is_focused, interact, theme, frame, area);
         }
+    }
+}
+
+/// Return the number of selectable list items for a widget.
+pub fn widget_item_count(widget: &HubWidget, git_info: Option<&ProjectGitInfo>) -> usize {
+    let git = match git_info {
+        Some(g) => g,
+        None => return 0,
+    };
+    match widget {
+        HubWidget::RecentCommits => git.commits.len(),
+        HubWidget::ChangedFiles => git.status_lines.len(),
+        HubWidget::Branches => git.branches.len(),
+        HubWidget::Stashes => git.stashes.len(),
+        HubWidget::Tags => git.tags.len(),
+        HubWidget::GitGraph => git.graph_lines.len(),
+        HubWidget::Contributors => git.contributors.len(),
+        HubWidget::Todos => git.todos.len(),
+        HubWidget::Readme => git.readme_lines.len(),
+        HubWidget::Languages => git.languages.len(),
+        HubWidget::CiStatus => git.ci_runs.len(),
+        HubWidget::OpenIssues => git.gh_issues.len(),
+        HubWidget::RunningProcesses => git.processes.len(),
+        HubWidget::ProjectInfo | HubWidget::DiskUsage => 0,
+    }
+}
+
+/// Return the text to copy for the selected item in a widget.
+pub fn widget_selected_text(
+    widget: &HubWidget,
+    git_info: Option<&ProjectGitInfo>,
+    selected: usize,
+) -> Option<String> {
+    let git = git_info?;
+    match widget {
+        HubWidget::RecentCommits => git
+            .commits
+            .get(selected)
+            .map(|c| format!("{} {}", c.hash, c.message)),
+        HubWidget::ChangedFiles => git.status_lines.get(selected).map(|s| {
+            if s.len() >= 3 {
+                s[3..].trim().to_string()
+            } else {
+                s.clone()
+            }
+        }),
+        HubWidget::Branches => git.branches.get(selected).map(|b| b.name.clone()),
+        HubWidget::Stashes => git
+            .stashes
+            .get(selected)
+            .map(|s| format!("{} {}", s.id, s.message)),
+        HubWidget::Tags => git.tags.get(selected).map(|t| t.name.clone()),
+        HubWidget::GitGraph => git.graph_lines.get(selected).cloned(),
+        HubWidget::Contributors => git.contributors.get(selected).map(|c| c.name.clone()),
+        HubWidget::Todos => git
+            .todos
+            .get(selected)
+            .map(|t| format!("{}:{}", t.file, t.line_num)),
+        HubWidget::Readme => git.readme_lines.get(selected).cloned(),
+        HubWidget::Languages => git.languages.get(selected).map(|l| l.extension.clone()),
+        HubWidget::CiStatus => git.ci_runs.get(selected).map(|r| r.name.clone()),
+        HubWidget::OpenIssues => git
+            .gh_issues
+            .get(selected)
+            .map(|i| format!("#{} {}", i.number, i.title)),
+        HubWidget::RunningProcesses => git.processes.get(selected).map(|p| p.command.clone()),
+        HubWidget::ProjectInfo | HubWidget::DiskUsage => None,
     }
 }
 
@@ -435,49 +504,49 @@ fn render_widgets(
             }
             match widget {
                 HubWidget::ProjectInfo => {
-                    render_widget_project_info(project, git_info, theme, frame, cell);
+                    render_widget_project_info(project, git_info, false, theme, frame, cell);
                 }
                 HubWidget::RecentCommits => {
-                    render_widget_recent_commits(git_info, theme, frame, cell);
+                    render_widget_recent_commits(git_info, false, None, theme, frame, cell);
                 }
                 HubWidget::ChangedFiles => {
-                    render_widget_changed_files(git_info, theme, frame, cell);
+                    render_widget_changed_files(git_info, false, None, theme, frame, cell);
                 }
                 HubWidget::Branches => {
-                    render_widget_branches(git_info, theme, frame, cell);
+                    render_widget_branches(git_info, false, None, theme, frame, cell);
                 }
                 HubWidget::Stashes => {
-                    render_widget_stashes(git_info, theme, frame, cell);
+                    render_widget_stashes(git_info, false, None, theme, frame, cell);
                 }
                 HubWidget::Tags => {
-                    render_widget_tags(git_info, theme, frame, cell);
+                    render_widget_tags(git_info, false, None, theme, frame, cell);
                 }
                 HubWidget::GitGraph => {
-                    render_widget_git_graph(git_info, theme, frame, cell);
+                    render_widget_git_graph(git_info, false, None, theme, frame, cell);
                 }
                 HubWidget::Contributors => {
-                    render_widget_contributors(git_info, theme, frame, cell);
+                    render_widget_contributors(git_info, false, None, theme, frame, cell);
                 }
                 HubWidget::Todos => {
-                    render_widget_todos(git_info, theme, frame, cell);
+                    render_widget_todos(git_info, false, None, theme, frame, cell);
                 }
                 HubWidget::Readme => {
-                    render_widget_readme(git_info, theme, frame, cell);
+                    render_widget_readme(git_info, false, None, theme, frame, cell);
                 }
                 HubWidget::Languages => {
-                    render_widget_languages(git_info, theme, frame, cell);
+                    render_widget_languages(git_info, false, None, theme, frame, cell);
                 }
                 HubWidget::DiskUsage => {
-                    render_widget_disk_usage(git_info, theme, frame, cell);
+                    render_widget_disk_usage(git_info, false, theme, frame, cell);
                 }
                 HubWidget::CiStatus => {
-                    render_widget_ci_status(git_info, theme, frame, cell);
+                    render_widget_ci_status(git_info, false, None, theme, frame, cell);
                 }
                 HubWidget::OpenIssues => {
-                    render_widget_open_issues(git_info, theme, frame, cell);
+                    render_widget_open_issues(git_info, false, None, theme, frame, cell);
                 }
                 HubWidget::RunningProcesses => {
-                    render_widget_running_processes(git_info, theme, frame, cell);
+                    render_widget_running_processes(git_info, false, None, theme, frame, cell);
                 }
             }
         }
@@ -491,18 +560,12 @@ fn render_widgets(
 fn render_widget_project_info(
     project: &crate::client::ProjectEntry,
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.border_inactive))
-        .title(Span::styled(
-            " project ",
-            Style::default().fg(theme.dim),
-        ));
+    let block = widget_block(" project ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -622,18 +685,13 @@ fn render_widget_project_info(
 
 fn render_widget_recent_commits(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.border_inactive))
-        .title(Span::styled(
-            " recent commits ",
-            Style::default().fg(theme.dim),
-        ));
+    let block = widget_block(" recent commits ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -660,10 +718,19 @@ fn render_widget_recent_commits(
     let max_w = inner.width as usize;
     let pad = " ";
 
-    let visible = (inner.height as usize).min(git.commits.len());
+    let total = git.commits.len();
+    let visible = (inner.height as usize).min(total);
+    let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
 
-    for (i, commit) in git.commits.iter().take(visible).enumerate() {
-        let row = inner.y + i as u16;
+    for vis_i in 0..visible {
+        let item_idx = scroll + vis_i;
+        let commit = match git.commits.get(item_idx) {
+            Some(c) => c,
+            None => break,
+        };
+        let row = inner.y + vis_i as u16;
+        let is_selected = item_idx == selected;
 
         let hash_w = 8;
         let suffix = format!("{}  {}", commit.author, commit.age);
@@ -687,36 +754,22 @@ fn render_widget_recent_commits(
             Span::styled(format!("{}  ", commit.author), dim_style),
             Span::styled(&commit.age, dim_style),
         ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+        let row_style = if is_selected { Style::default().bg(theme.accent) } else { Style::default() };
+        frame.render_widget(Paragraph::new(line).style(row_style), Rect::new(inner.x, row, inner.width, 1));
     }
 
-    if git.commits.len() > visible {
-        let more = git.commits.len() - visible;
-        let row = inner.y + inner.height - 1;
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::raw(pad),
-                Span::styled(format!("+{} more", more), dim_style),
-            ])),
-            Rect::new(inner.x, row, inner.width, 1),
-        );
-    }
+    render_overflow(total, scroll + visible, theme, frame, inner);
 }
 
 fn render_widget_changed_files(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.border_inactive))
-        .title(Span::styled(
-            " changed files ",
-            Style::default().fg(theme.dim),
-        ));
+    let block = widget_block(" changed files ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -738,15 +791,23 @@ fn render_widget_changed_files(
         }
     };
 
-    let dim_style = Style::default().fg(theme.dim);
     let fg_style = Style::default().fg(theme.fg);
     let max_w = inner.width as usize;
     let pad = " ";
 
-    let visible = (inner.height as usize).min(git.status_lines.len());
+    let total = git.status_lines.len();
+    let visible = (inner.height as usize).min(total);
+    let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
 
-    for (i, status_line) in git.status_lines.iter().take(visible).enumerate() {
-        let row = inner.y + i as u16;
+    for vis_i in 0..visible {
+        let item_idx = scroll + vis_i;
+        let status_line = match git.status_lines.get(item_idx) {
+            Some(s) => s,
+            None => break,
+        };
+        let row = inner.y + vis_i as u16;
+        let is_selected = item_idx == selected;
 
         let (indicator, file) = if status_line.len() >= 3 {
             (&status_line[..2], status_line[3..].trim())
@@ -777,20 +838,11 @@ fn render_widget_changed_files(
             ),
             Span::styled(format!(" {}", file_display), fg_style),
         ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+        let row_style = if is_selected { Style::default().bg(theme.accent) } else { Style::default() };
+        frame.render_widget(Paragraph::new(line).style(row_style), Rect::new(inner.x, row, inner.width, 1));
     }
 
-    if git.status_lines.len() > visible {
-        let more = git.status_lines.len() - visible;
-        let row = inner.y + inner.height - 1;
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::raw(pad),
-                Span::styled(format!("+{} more", more), dim_style),
-            ])),
-            Rect::new(inner.x, row, inner.width, 1),
-        );
-    }
+    render_overflow(total, scroll + visible, theme, frame, inner);
 }
 
 // ---------------------------------------------------------------------------
@@ -799,11 +851,13 @@ fn render_widget_changed_files(
 
 fn render_widget_branches(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = widget_block(" branches ", theme);
+    let block = widget_block(" branches ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -826,14 +880,20 @@ fn render_widget_branches(
         .add_modifier(Modifier::BOLD);
     let pad = " ";
 
-    let visible = (inner.height as usize).min(git.branches.len());
-    for (i, branch) in git.branches.iter().take(visible).enumerate() {
-        let row = inner.y + i as u16;
-        let name_style = if branch.is_current {
-            accent_bold
-        } else {
-            fg_style
+    let total = git.branches.len();
+    let visible = (inner.height as usize).min(total);
+    let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+
+    for vis_i in 0..visible {
+        let item_idx = scroll + vis_i;
+        let branch = match git.branches.get(item_idx) {
+            Some(b) => b,
+            None => break,
         };
+        let row = inner.y + vis_i as u16;
+        let is_selected = item_idx == selected;
+        let name_style = if branch.is_current { accent_bold } else { fg_style };
         let prefix = if branch.is_current { "* " } else { "  " };
         let line = Line::from(vec![
             Span::raw(pad),
@@ -841,19 +901,22 @@ fn render_widget_branches(
             Span::styled(&branch.name, name_style),
             Span::styled(format!("  {}", branch.last_commit_date), dim_style),
         ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+        let row_style = if is_selected { Style::default().bg(theme.accent) } else { Style::default() };
+        frame.render_widget(Paragraph::new(line).style(row_style), Rect::new(inner.x, row, inner.width, 1));
     }
 
-    render_overflow(git.branches.len(), visible, theme, frame, inner);
+    render_overflow(total, scroll + visible, theme, frame, inner);
 }
 
 fn render_widget_stashes(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = widget_block(" stashes ", theme);
+    let block = widget_block(" stashes ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -872,27 +935,37 @@ fn render_widget_stashes(
     let fg_style = Style::default().fg(theme.fg);
     let pad = " ";
 
-    let visible = (inner.height as usize).min(git.stashes.len());
-    for (i, stash) in git.stashes.iter().take(visible).enumerate() {
-        let row = inner.y + i as u16;
+    let total = git.stashes.len();
+    let visible = (inner.height as usize).min(total);
+    let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+
+    for vis_i in 0..visible {
+        let item_idx = scroll + vis_i;
+        let stash = match git.stashes.get(item_idx) { Some(s) => s, None => break };
+        let row = inner.y + vis_i as u16;
+        let is_selected = item_idx == selected;
         let line = Line::from(vec![
             Span::raw(pad),
             Span::styled(&stash.id, Style::default().fg(Color::Yellow)),
             Span::styled(format!(" {}", stash.message), fg_style),
         ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+        let row_style = if is_selected { Style::default().bg(theme.accent) } else { Style::default() };
+        frame.render_widget(Paragraph::new(line).style(row_style), Rect::new(inner.x, row, inner.width, 1));
     }
 
-    render_overflow(git.stashes.len(), visible, theme, frame, inner);
+    render_overflow(total, scroll + visible, theme, frame, inner);
 }
 
 fn render_widget_tags(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = widget_block(" tags ", theme);
+    let block = widget_block(" tags ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -912,18 +985,26 @@ fn render_widget_tags(
     let dim_style = Style::default().fg(theme.dim);
     let pad = " ";
 
-    let visible = (inner.height as usize).min(git.tags.len());
-    for (i, tag) in git.tags.iter().take(visible).enumerate() {
-        let row = inner.y + i as u16;
+    let total = git.tags.len();
+    let visible = (inner.height as usize).min(total);
+    let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+
+    for vis_i in 0..visible {
+        let item_idx = scroll + vis_i;
+        let tag = match git.tags.get(item_idx) { Some(t) => t, None => break };
+        let row = inner.y + vis_i as u16;
+        let is_selected = item_idx == selected;
         let line = Line::from(vec![
             Span::raw(pad),
             Span::styled(&tag.name, accent_style),
             Span::styled(format!("  {}", tag.date), dim_style),
         ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+        let row_style = if is_selected { Style::default().bg(theme.accent) } else { Style::default() };
+        frame.render_widget(Paragraph::new(line).style(row_style), Rect::new(inner.x, row, inner.width, 1));
     }
 
-    render_overflow(git.tags.len(), visible, theme, frame, inner);
+    render_overflow(total, scroll + visible, theme, frame, inner);
 }
 
 // ---------------------------------------------------------------------------
@@ -932,11 +1013,13 @@ fn render_widget_tags(
 
 fn render_widget_git_graph(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = widget_block(" git graph ", theme);
+    let block = widget_block(" git graph ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -956,10 +1039,16 @@ fn render_widget_git_graph(
     let accent_style = Style::default().fg(theme.accent);
     let max_w = inner.width as usize;
 
-    let visible = (inner.height as usize).min(git.graph_lines.len());
-    for (i, gline) in git.graph_lines.iter().take(visible).enumerate() {
-        let row = inner.y + i as u16;
-        // Colorize graph chars vs text
+    let total = git.graph_lines.len();
+    let visible = (inner.height as usize).min(total);
+    let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+
+    for vis_i in 0..visible {
+        let item_idx = scroll + vis_i;
+        let gline = match git.graph_lines.get(item_idx) { Some(l) => l, None => break };
+        let row = inner.y + vis_i as u16;
+        let is_selected = item_idx == selected;
         let mut spans: Vec<Span> = Vec::new();
         spans.push(Span::raw(" "));
         let display = if gline.len() > max_w.saturating_sub(1) {
@@ -977,8 +1066,9 @@ fn render_widget_git_graph(
                 }
             }
         }
+        let row_style = if is_selected { Style::default().bg(theme.accent) } else { Style::default() };
         frame.render_widget(
-            Paragraph::new(Line::from(spans)),
+            Paragraph::new(Line::from(spans)).style(row_style),
             Rect::new(inner.x, row, inner.width, 1),
         );
     }
@@ -986,11 +1076,13 @@ fn render_widget_git_graph(
 
 fn render_widget_contributors(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = widget_block(" contributors ", theme);
+    let block = widget_block(" contributors ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1013,9 +1105,16 @@ fn render_widget_contributors(
         .add_modifier(Modifier::BOLD);
     let pad = " ";
 
-    let visible = (inner.height as usize).min(git.contributors.len());
-    for (i, contrib) in git.contributors.iter().take(visible).enumerate() {
-        let row = inner.y + i as u16;
+    let total = git.contributors.len();
+    let visible = (inner.height as usize).min(total);
+    let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+
+    for vis_i in 0..visible {
+        let item_idx = scroll + vis_i;
+        let contrib = match git.contributors.get(item_idx) { Some(c) => c, None => break };
+        let row = inner.y + vis_i as u16;
+        let is_selected = item_idx == selected;
         let mut spans = vec![
             Span::raw(pad),
             Span::styled(format!("{:>5}", contrib.count), count_style),
@@ -1024,13 +1123,14 @@ fn render_widget_contributors(
         if !contrib.email.is_empty() {
             spans.push(Span::styled(format!("  <{}>", contrib.email), dim_style));
         }
+        let row_style = if is_selected { Style::default().bg(theme.accent) } else { Style::default() };
         frame.render_widget(
-            Paragraph::new(Line::from(spans)),
+            Paragraph::new(Line::from(spans)).style(row_style),
             Rect::new(inner.x, row, inner.width, 1),
         );
     }
 
-    render_overflow(git.contributors.len(), visible, theme, frame, inner);
+    render_overflow(total, scroll + visible, theme, frame, inner);
 }
 
 // ---------------------------------------------------------------------------
@@ -1039,11 +1139,13 @@ fn render_widget_contributors(
 
 fn render_widget_todos(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = widget_block(" todos ", theme);
+    let block = widget_block(" todos ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1063,9 +1165,16 @@ fn render_widget_todos(
     let dim_style = Style::default().fg(theme.dim);
     let pad = " ";
 
-    let visible = (inner.height as usize).min(git.todos.len());
-    for (i, todo) in git.todos.iter().take(visible).enumerate() {
-        let row = inner.y + i as u16;
+    let total = git.todos.len();
+    let visible = (inner.height as usize).min(total);
+    let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+
+    for vis_i in 0..visible {
+        let item_idx = scroll + vis_i;
+        let todo = match git.todos.get(item_idx) { Some(t) => t, None => break };
+        let row = inner.y + vis_i as u16;
+        let is_selected = item_idx == selected;
         let kind_color = match todo.kind.as_str() {
             "FIXME" => Color::Red,
             "HACK" => Color::Cyan,
@@ -1093,19 +1202,22 @@ fn render_widget_todos(
                 fg_style,
             ),
         ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+        let row_style = if is_selected { Style::default().bg(theme.accent) } else { Style::default() };
+        frame.render_widget(Paragraph::new(line).style(row_style), Rect::new(inner.x, row, inner.width, 1));
     }
 
-    render_overflow(git.todos.len(), visible, theme, frame, inner);
+    render_overflow(total, scroll + visible, theme, frame, inner);
 }
 
 fn render_widget_readme(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = widget_block(" readme ", theme);
+    let block = widget_block(" readme ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1126,16 +1238,24 @@ fn render_widget_readme(
         .fg(theme.fg)
         .add_modifier(Modifier::BOLD);
 
-    let visible = (inner.height as usize).min(git.readme_lines.len());
-    for (i, line_text) in git.readme_lines.iter().take(visible).enumerate() {
-        let row = inner.y + i as u16;
-        let style = if i == 0 { bold_style } else { fg_style };
+    let total = git.readme_lines.len();
+    let visible = (inner.height as usize).min(total);
+    let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+
+    for vis_i in 0..visible {
+        let item_idx = scroll + vis_i;
+        let line_text = match git.readme_lines.get(item_idx) { Some(l) => l, None => break };
+        let row = inner.y + vis_i as u16;
+        let is_selected = item_idx == selected;
+        let style = if item_idx == 0 { bold_style } else { fg_style };
         let display = truncate_str(line_text, inner.width as usize - 1);
         let line = Line::from(vec![Span::raw(" "), Span::styled(display, style)]);
-        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+        let row_style = if is_selected { Style::default().bg(theme.accent) } else { Style::default() };
+        frame.render_widget(Paragraph::new(line).style(row_style), Rect::new(inner.x, row, inner.width, 1));
     }
 
-    render_overflow(git.readme_lines.len(), visible, theme, frame, inner);
+    render_overflow(total, scroll + visible, theme, frame, inner);
 }
 
 // ---------------------------------------------------------------------------
@@ -1144,11 +1264,13 @@ fn render_widget_readme(
 
 fn render_widget_languages(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = widget_block(" languages ", theme);
+    let block = widget_block(" languages ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1170,9 +1292,16 @@ fn render_widget_languages(
     let pad = " ";
     let bar_max = 20usize.min(inner.width as usize / 3);
 
-    let visible = (inner.height as usize).min(git.languages.len());
-    for (i, lang) in git.languages.iter().take(visible).enumerate() {
-        let row = inner.y + i as u16;
+    let total = git.languages.len();
+    let visible = (inner.height as usize).min(total);
+    let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+
+    for vis_i in 0..visible {
+        let item_idx = scroll + vis_i;
+        let lang = match git.languages.get(item_idx) { Some(l) => l, None => break };
+        let row = inner.y + vis_i as u16;
+        let is_selected = item_idx == selected;
         let filled = ((lang.percentage / 100.0) * bar_max as f32).round() as usize;
         let bar: String = "\u{2588}"
             .repeat(filled)
@@ -1184,19 +1313,21 @@ fn render_widget_languages(
             Span::styled(bar, accent_style),
             Span::styled(format!(" {:.0}%", lang.percentage), dim_style),
         ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+        let row_style = if is_selected { Style::default().bg(theme.accent) } else { Style::default() };
+        frame.render_widget(Paragraph::new(line).style(row_style), Rect::new(inner.x, row, inner.width, 1));
     }
 
-    render_overflow(git.languages.len(), visible, theme, frame, inner);
+    render_overflow(total, scroll + visible, theme, frame, inner);
 }
 
 fn render_widget_disk_usage(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = widget_block(" disk usage ", theme);
+    let block = widget_block(" disk usage ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1267,11 +1398,13 @@ fn render_widget_disk_usage(
 
 fn render_widget_ci_status(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = widget_block(" ci status ", theme);
+    let block = widget_block(" ci status ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1301,9 +1434,16 @@ fn render_widget_ci_status(
     let dim_style = Style::default().fg(theme.dim);
     let pad = " ";
 
-    let visible = (inner.height as usize).min(git.ci_runs.len());
-    for (i, run) in git.ci_runs.iter().take(visible).enumerate() {
-        let row = inner.y + i as u16;
+    let total = git.ci_runs.len();
+    let visible = (inner.height as usize).min(total);
+    let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+
+    for vis_i in 0..visible {
+        let item_idx = scroll + vis_i;
+        let run = match git.ci_runs.get(item_idx) { Some(r) => r, None => break };
+        let row = inner.y + vis_i as u16;
+        let is_selected = item_idx == selected;
         let (icon, icon_color) = match (run.status.as_str(), run.conclusion.as_str()) {
             ("completed", "success") => ("✓", Color::Green),
             ("completed", "failure") | ("completed", "cancelled") => ("✗", Color::Red),
@@ -1325,19 +1465,22 @@ fn render_widget_ci_status(
             Span::styled(format!("  {}", run.branch), dim_style),
             Span::styled(format!("  {}", time_display), dim_style),
         ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+        let row_style = if is_selected { Style::default().bg(theme.accent) } else { Style::default() };
+        frame.render_widget(Paragraph::new(line).style(row_style), Rect::new(inner.x, row, inner.width, 1));
     }
 
-    render_overflow(git.ci_runs.len(), visible, theme, frame, inner);
+    render_overflow(total, scroll + visible, theme, frame, inner);
 }
 
 fn render_widget_open_issues(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = widget_block(" open issues ", theme);
+    let block = widget_block(" open issues ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1368,9 +1511,16 @@ fn render_widget_open_issues(
     let accent_style = Style::default().fg(theme.accent);
     let pad = " ";
 
-    let visible = (inner.height as usize).min(git.gh_issues.len());
-    for (i, issue) in git.gh_issues.iter().take(visible).enumerate() {
-        let row = inner.y + i as u16;
+    let total = git.gh_issues.len();
+    let visible = (inner.height as usize).min(total);
+    let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+
+    for vis_i in 0..visible {
+        let item_idx = scroll + vis_i;
+        let issue = match git.gh_issues.get(item_idx) { Some(i) => i, None => break };
+        let row = inner.y + vis_i as u16;
+        let is_selected = item_idx == selected;
         let mut spans = vec![
             Span::raw(pad),
             Span::styled(format!("#{}", issue.number), accent_style),
@@ -1389,13 +1539,14 @@ fn render_widget_open_issues(
                 Style::default().fg(Color::Cyan),
             ));
         }
+        let row_style = if is_selected { Style::default().bg(theme.accent) } else { Style::default() };
         frame.render_widget(
-            Paragraph::new(Line::from(spans)),
+            Paragraph::new(Line::from(spans)).style(row_style),
             Rect::new(inner.x, row, inner.width, 1),
         );
     }
 
-    render_overflow(git.gh_issues.len(), visible, theme, frame, inner);
+    render_overflow(total, scroll + visible, theme, frame, inner);
 }
 
 // ---------------------------------------------------------------------------
@@ -1404,11 +1555,13 @@ fn render_widget_open_issues(
 
 fn render_widget_running_processes(
     git_info: Option<&ProjectGitInfo>,
+    is_focused: bool,
+    interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let block = widget_block(" running processes ", theme);
+    let block = widget_block(" running processes ", theme, is_focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1428,9 +1581,16 @@ fn render_widget_running_processes(
     let dim_style = Style::default().fg(theme.dim);
     let pad = " ";
 
-    let visible = (inner.height as usize).min(git.processes.len());
-    for (i, proc) in git.processes.iter().take(visible).enumerate() {
-        let row = inner.y + i as u16;
+    let total = git.processes.len();
+    let visible = (inner.height as usize).min(total);
+    let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+
+    for vis_i in 0..visible {
+        let item_idx = scroll + vis_i;
+        let proc = match git.processes.get(item_idx) { Some(p) => p, None => break };
+        let row = inner.y + vis_i as u16;
+        let is_selected = item_idx == selected;
         let cpu_val: f32 = proc.cpu.parse().unwrap_or(0.0);
         let cpu_style = if cpu_val > 5.0 {
             Style::default().fg(Color::Yellow)
@@ -1444,22 +1604,36 @@ fn render_widget_running_processes(
             Span::styled(format!("  {:>5}%", proc.cpu), cpu_style),
             Span::styled(format!("  {}", cmd_display), fg_style),
         ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, row, inner.width, 1));
+        let row_style = if is_selected { Style::default().bg(theme.accent) } else { Style::default() };
+        frame.render_widget(Paragraph::new(line).style(row_style), Rect::new(inner.x, row, inner.width, 1));
     }
 
-    render_overflow(git.processes.len(), visible, theme, frame, inner);
+    render_overflow(total, scroll + visible, theme, frame, inner);
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn widget_block<'a>(title: &'a str, theme: &Theme) -> Block<'a> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.border_inactive))
-        .title(Span::styled(title, Style::default().fg(theme.dim)))
+fn widget_block<'a>(title: &'a str, theme: &Theme, is_focused: bool) -> Block<'a> {
+    if is_focused {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.accent))
+            .title(Span::styled(
+                title,
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ))
+    } else {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.border_inactive))
+            .title(Span::styled(title, Style::default().fg(theme.dim)))
+    }
 }
 
 fn render_empty_placeholder(msg: &str, theme: &Theme, frame: &mut Frame, inner: Rect) {
