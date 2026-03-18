@@ -63,10 +63,6 @@ pub fn tab_bar_menu(x: u16, y: u16) -> ContextMenuState {
                 label: "Close Tab".into(),
                 action: Action::CloseTab,
             },
-            ContextMenuItem {
-                label: "Rename Tab".into(),
-                action: Action::RenamePane,
-            },
         ],
         selected: 0,
         context: ContextMenuContext::TabBar,
@@ -90,6 +86,34 @@ pub fn workspace_bar_menu(x: u16, y: u16) -> ContextMenuState {
         ],
         selected: 0,
         context: ContextMenuContext::WorkspaceBar,
+        anchor_x: x,
+        anchor_y: y,
+    }
+}
+
+/// Create a context menu for right-clicking the pane body on the home workspace.
+pub fn home_body_menu(x: u16, y: u16) -> ContextMenuState {
+    ContextMenuState {
+        items: vec![
+            ContextMenuItem {
+                label: "Change Widget".into(),
+                action: Action::ChangeWidget,
+            },
+            ContextMenuItem {
+                label: "Add Widget Right".into(),
+                action: Action::AddWidgetRight,
+            },
+            ContextMenuItem {
+                label: "Add Widget Below".into(),
+                action: Action::AddWidgetBelow,
+            },
+            ContextMenuItem {
+                label: "Remove Widget".into(),
+                action: Action::CloseTab,
+            },
+        ],
+        selected: 0,
+        context: ContextMenuContext::PaneBody,
         anchor_x: x,
         anchor_y: y,
     }
@@ -230,7 +254,7 @@ mod tests {
     #[test]
     fn tab_bar_menu_has_items() {
         let menu = tab_bar_menu(10, 5);
-        assert_eq!(menu.items.len(), 2);
+        assert_eq!(menu.items.len(), 1);
         assert_eq!(menu.context, ContextMenuContext::TabBar);
     }
 
@@ -375,11 +399,11 @@ mod tests {
     #[test]
     fn navigation_does_not_wrap_bottom() {
         let mut menu = tab_bar_menu(0, 0);
-        // tab_bar_menu has 2 items (indices 0, 1)
+        // tab_bar_menu has 1 item (index 0)
         for _ in 0..10 {
             menu.move_down();
         }
-        assert_eq!(menu.selected, 1); // clamped at last item
+        assert_eq!(menu.selected, 0); // clamped at last item
     }
 
     #[test]

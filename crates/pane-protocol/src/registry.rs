@@ -134,14 +134,6 @@ pub fn action_registry() -> &'static [ActionMeta] {
             action: NewTab,
         },
         ActionMeta {
-            name: "dev_server_input",
-            display_name: "New Dev Server Tab",
-            description: "Open a dev server tab",
-            category: Tabs,
-            palette_visible: true,
-            action: DevServerInput,
-        },
-        ActionMeta {
             name: "next_tab",
             display_name: "Next Tab",
             description: "Switch to the next tab",
@@ -213,14 +205,6 @@ pub fn action_registry() -> &'static [ActionMeta] {
             category: Splits,
             palette_visible: true,
             action: SplitVertical,
-        },
-        ActionMeta {
-            name: "new_pane",
-            display_name: "New Pane",
-            description: "Open directional pane split picker",
-            category: Splits,
-            palette_visible: true,
-            action: NewPane,
         },
         ActionMeta {
             name: "restart_pane",
@@ -347,22 +331,6 @@ pub fn action_registry() -> &'static [ActionMeta] {
         },
         // ── Session ─────────────────────────────────────────────────────
         ActionMeta {
-            name: "session_picker",
-            display_name: "Session Picker",
-            description: "Open the session picker",
-            category: Session,
-            palette_visible: true,
-            action: SessionPicker,
-        },
-        ActionMeta {
-            name: "client_picker",
-            display_name: "Client Picker",
-            description: "Show connected clients",
-            category: Session,
-            palette_visible: true,
-            action: ClientPicker,
-        },
-        ActionMeta {
             name: "detach",
             display_name: "Detach",
             description: "Detach from the session",
@@ -420,6 +388,38 @@ pub fn action_registry() -> &'static [ActionMeta] {
             action: PasteClipboard,
         },
         ActionMeta {
+            name: "reload_config",
+            display_name: "Reload Config",
+            description: "Reload configuration from disk",
+            category: Tools,
+            palette_visible: true,
+            action: ReloadConfig,
+        },
+        ActionMeta {
+            name: "change_widget",
+            display_name: "Change Widget",
+            description: "Replace the focused widget with a different one",
+            category: Tools,
+            palette_visible: true,
+            action: ChangeWidget,
+        },
+        ActionMeta {
+            name: "add_widget_right",
+            display_name: "Add Widget to the Right",
+            description: "Split the focused widget right and pick a new widget",
+            category: Tools,
+            palette_visible: true,
+            action: AddWidgetRight,
+        },
+        ActionMeta {
+            name: "add_widget_below",
+            display_name: "Add Widget Below",
+            description: "Split the focused widget down and pick a new widget",
+            category: Tools,
+            palette_visible: true,
+            action: AddWidgetBelow,
+        },
+        ActionMeta {
             name: "toggle_sync_panes",
             display_name: "Toggle Sync Panes",
             description: "Broadcast input to all panes in workspace",
@@ -442,14 +442,6 @@ pub fn action_registry() -> &'static [ActionMeta] {
             category: Workspaces,
             palette_visible: true,
             action: RenameWorkspace,
-        },
-        ActionMeta {
-            name: "rename_pane",
-            display_name: "Rename Pane",
-            description: "Rename the current pane",
-            category: Tools,
-            palette_visible: true,
-            action: RenamePane,
         },
     ];
 
@@ -692,7 +684,7 @@ mod tests {
 
     #[test]
     fn session_actions_in_session_category() {
-        for name in ["session_picker", "client_picker", "detach", "quit"] {
+        for name in ["detach", "quit"] {
             let meta = action_by_name(name).unwrap();
             assert_eq!(
                 meta.category,
@@ -713,7 +705,7 @@ mod tests {
             "paste_clipboard",
             "toggle_sync_panes",
             "rename_window",
-            "rename_pane",
+            "reload_config",
         ] {
             let meta = action_by_name(name).unwrap();
             assert_eq!(

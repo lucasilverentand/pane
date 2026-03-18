@@ -9,8 +9,20 @@ use ratatui::{
 use crate::client::{ProjectGitInfo, ProjectHubState};
 use pane_protocol::config::{HubLayout, HubWidget, Theme};
 
-const SIDEBAR_MIN_WIDTH: u16 = 28;
-const SIDEBAR_MAX_WIDTH: u16 = 40;
+pub const SIDEBAR_MIN_WIDTH: u16 = 20;
+pub const SIDEBAR_MAX_WIDTH: u16 = 80;
+const SIDEBAR_DEFAULT_FRACTION: u16 = 4; // body.width / 4
+
+/// Compute the sidebar width for the home workspace.
+/// If `user_width` is set, clamp it to valid bounds; otherwise auto-calculate.
+pub fn sidebar_width(body_width: u16, user_width: Option<u16>) -> u16 {
+    match user_width {
+        Some(w) => w.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH).min(body_width.saturating_sub(20)),
+        None => (body_width / SIDEBAR_DEFAULT_FRACTION)
+            .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH.min(40))
+            .min(body_width),
+    }
+}
 
 /// Hit test the project sidebar. Returns the filtered index of the project clicked.
 pub fn sidebar_hit_test(
@@ -18,15 +30,14 @@ pub fn sidebar_hit_test(
     area: Rect,
     x: u16,
     y: u16,
+    user_sidebar_width: Option<u16>,
 ) -> Option<usize> {
     if area.height < 4 || area.width < 20 {
         return None;
     }
 
-    let sidebar_width = (area.width / 3)
-        .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
-        .min(area.width);
-    let sidebar_area = Rect::new(area.x, area.y, sidebar_width, area.height);
+    let sw = sidebar_width(area.width, user_sidebar_width);
+    let sidebar_area = Rect::new(area.x, area.y, sw, area.height);
 
     // Compute inner area (inside border)
     let block = Block::default()
@@ -389,20 +400,15 @@ fn render_widgets(
         );
     }
 
-    let row_count = layout.rows.len();
-
     // Split area vertically into rows, each getting equal space
     let row_constraints: Vec<Constraint> = layout
         .rows
         .iter()
-        .enumerate()
-        .map(|(i, row)| {
+        .map(|row| {
             // Give ProjectInfo row a smaller fixed height, others fill
             if row.len() == 1 && row[0] == HubWidget::ProjectInfo {
                 // ProjectInfo needs ~6 lines + 2 border = 8
                 Constraint::Length(8)
-            } else if i == row_count - 1 {
-                Constraint::Fill(1)
             } else {
                 Constraint::Fill(1)
             }

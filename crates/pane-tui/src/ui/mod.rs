@@ -7,6 +7,7 @@ pub mod palette;
 pub mod project_hub;
 pub mod status_bar;
 pub mod tab_picker;
+pub mod widget_picker;
 pub mod window_view;
 pub mod workspace_bar;
 
@@ -15,6 +16,11 @@ use ratatui::Frame;
 
 use pane_protocol::app::Mode;
 use crate::client::Client;
+
+/// Cursor X offset within a window: 1 (border) + 1 (padding).
+const WINDOW_CONTENT_X_OFFSET: u16 = 2;
+/// Cursor Y offset within a window: 1 (border) + 1 (tab bar) + 1 (separator).
+const WINDOW_CONTENT_Y_OFFSET: u16 = 3;
 
 /// Render the TUI for a connected client (daemon mode).
 pub fn render_client(client: &mut Client, frame: &mut Frame) {
@@ -78,12 +84,11 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
         let ws_bar_focused = client.workspace_bar_focused;
 
         // For home workspace: split body into sidebar + layout area
-        let layout_body = if is_home {
-            let sidebar_width = (body.width / 4)
-                .clamp(28, 40)
-                .min(body.width);
+        // Skip sidebar when terminal is too narrow
+        let sidebar_w = project_hub::sidebar_width(body.width, client.sidebar_width);
+        let layout_body = if is_home && body.width >= sidebar_w + 20 {
             let [left, right] = Layout::horizontal([
-                Constraint::Length(sidebar_width),
+                Constraint::Length(sidebar_w),
                 Constraint::Fill(1),
             ])
             .areas(body);
@@ -119,8 +124,8 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                         if let Some(screen) = client.pane_screen(pane.id) {
                             if !screen.hide_cursor() {
                                 let (vt_row, vt_col) = screen.cursor_position();
-                                let cursor_x = layout_body.x + 2 + vt_col;
-                                let cursor_y = layout_body.y + 3 + vt_row;
+                                let cursor_x = layout_body.x + WINDOW_CONTENT_X_OFFSET + vt_col;
+                                let cursor_y = layout_body.y + WINDOW_CONTENT_Y_OFFSET + vt_row;
                                 if cursor_x < layout_body.x + layout_body.width && cursor_y < layout_body.y + layout_body.height
                                 {
                                     frame.set_cursor_position(ratatui::layout::Position {
@@ -187,8 +192,8 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                                     if let pane_protocol::layout::ResolvedPane::Visible { id, rect } = rp {
                                         if *id == ws.active_group {
                                             let (vt_row, vt_col) = screen.cursor_position();
-                                            let cursor_x = rect.x + 2 + vt_col;
-                                            let cursor_y = rect.y + 3 + vt_row;
+                                            let cursor_x = rect.x + WINDOW_CONTENT_X_OFFSET + vt_col;
+                                            let cursor_y = rect.y + WINDOW_CONTENT_Y_OFFSET + vt_row;
                                             if cursor_x < rect.x + rect.width
                                                 && cursor_y < rect.y + rect.height
                                             {
@@ -300,6 +305,12 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
         }
         Mode::ProjectHub => {
             // Legacy: hub is now rendered as workspace body, not overlay
+        }
+        Mode::WidgetPicker => {
+            if let Some(ref wp_state) = client.widget_picker_state {
+                dialog::dim_background(frame, frame.area());
+                widget_picker::render(wp_state, theme, frame, frame.area());
+            }
         }
         Mode::Resize => {
             if let Some(ref rs) = client.resize_state {

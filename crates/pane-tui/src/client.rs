@@ -26,6 +26,7 @@ use crate::ui;
 use crate::ui::context_menu::ContextMenuState;
 use crate::ui::palette::UnifiedPaletteState;
 use crate::ui::tab_picker::{TabPickerEntry, TabPickerState};
+use crate::ui::widget_picker::{WidgetPickerMode, WidgetPickerState};
 
 /// Result of hit-testing a tab bar click.
 enum TabBarHit {
@@ -65,8 +66,27 @@ pub struct Client {
     pub rename_target: RenameTarget,
     pub new_workspace_input: Option<NewWorkspaceInputState>,
     pub project_hub_state: Option<ProjectHubState>,
+    /// User-set sidebar width for the home workspace (None = auto).
+    pub sidebar_width: Option<u16>,
+    /// Active sidebar border drag state.
+    sidebar_drag: Option<SidebarDragState>,
+    /// Active widget split drag state (home workspace only).
+    home_widget_drag: Option<HomeWidgetDragState>,
+    /// State for the widget picker overlay.
+    pub widget_picker_state: Option<WidgetPickerState>,
     /// Channel for sending async events (e.g. git info ready) back to the event loop.
     event_tx: Option<tokio::sync::mpsc::UnboundedSender<ServerEvent>>,
+}
+
+struct SidebarDragState {
+    /// The body rect at the time the drag started.
+    body: Rect,
+}
+
+struct HomeWidgetDragState {
+    split_path: Vec<Side>,
+    direction: SplitDirection,
+    layout_body: Rect,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -684,7 +704,7 @@ impl ProjectHubState {
                 save_disk_cache(&path, &full);
                 let _ = tx.send(ServerEvent::GitInfoReady {
                     project_idx,
-                    info: full,
+                    info: Box::new(full),
                     refreshing: false,
                 });
             });
@@ -697,14 +717,14 @@ impl ProjectHubState {
             let fast = fetch_git_info_fast(&path);
             let _ = tx.send(ServerEvent::GitInfoReady {
                 project_idx,
-                info: fast.clone(),
+                info: Box::new(fast.clone()),
                 refreshing: true,
             });
             let full = fetch_git_info_slow(&path, fast);
             save_disk_cache(&path, &full);
             let _ = tx.send(ServerEvent::GitInfoReady {
                 project_idx,
-                info: full,
+                info: Box::new(full),
                 refreshing: false,
             });
         });
@@ -1197,6 +1217,10 @@ impl Client {
             rename_target: RenameTarget::Window,
             new_workspace_input: None,
             project_hub_state: None,
+            sidebar_width: None,
+            sidebar_drag: None,
+            home_widget_drag: None,
+            widget_picker_state: None,
             event_tx: None,
         }
     }
@@ -1422,9 +1446,9 @@ impl Client {
             ServerEvent::GitInfoReady { project_idx, info, refreshing } => {
                 if let Some(ref mut hub) = self.project_hub_state {
                     let entry = if refreshing {
-                        GitCacheEntry::Refreshing(info)
+                        GitCacheEntry::Refreshing(*info)
                     } else {
-                        GitCacheEntry::Ready(info)
+                        GitCacheEntry::Ready(*info)
                     };
                     hub.git_cache.insert(project_idx, entry);
                 }
@@ -1692,11 +1716,55 @@ impl Client {
                         }
                     }
 
+                    // Check status bar clicks (client-side)
+                    let size = tui.size()?;
+                    let footer_y = size.height.saturating_sub(1);
+                    if y == footer_y {
+                        let buttons = crate::ui::status_bar::get_buttons(self);
+                        let footer_area = Rect::new(0, footer_y, size.width, 1);
+                        if let Some(idx) = crate::ui::status_bar::hit_test(buttons, footer_area, x, y) {
+                            let (_key, label) = buttons[idx];
+                            self.handle_status_bar_click(label, tui, writer).await?;
+                            return Ok(());
+                        }
+                    }
+
                     // Hub sidebar click handling
                     if self.is_home_active() {
                         let body = crate::ui::body_rect(self, tui.size()?);
+                        let sw = crate::ui::project_hub::sidebar_width(body.width, self.sidebar_width);
+                        // Check if click is on the sidebar border (right edge ±1)
+                        if body.width >= sw + 20 {
+                            let border_x = body.x + sw;
+                            if x >= border_x.saturating_sub(1) && x <= border_x + 1
+                                && y >= body.y && y < body.y + body.height
+                            {
+                                self.sidebar_drag = Some(SidebarDragState { body });
+                                return Ok(());
+                            }
+
+                            // Check if click is on a widget split border (layout_body area)
+                            let layout_body = Rect::new(
+                                body.x + sw,
+                                body.y,
+                                body.width.saturating_sub(sw),
+                                body.height,
+                            );
+                            if let Some(ws) = self.active_workspace() {
+                                if let Some((path, direction)) =
+                                    ws.layout.hit_test_split_border(layout_body, x, y)
+                                {
+                                    self.home_widget_drag = Some(HomeWidgetDragState {
+                                        split_path: path,
+                                        direction,
+                                        layout_body,
+                                    });
+                                    return Ok(());
+                                }
+                            }
+                        }
                         if let Some(ref mut hub) = self.project_hub_state {
-                            if let Some(idx) = crate::ui::project_hub::sidebar_hit_test(hub, body, x, y) {
+                            if let Some(idx) = crate::ui::project_hub::sidebar_hit_test(hub, body, x, y, self.sidebar_width) {
                                 let now = std::time::Instant::now();
                                 let is_double = hub.last_click
                                     .map(|(prev_idx, prev_time)| {
@@ -1737,12 +1805,57 @@ impl Client {
                 }
             }
             AppEvent::MouseDrag { x, y } => {
-                let mut w = writer.lock().await;
-                let _ = send_request(&mut w, &ClientRequest::MouseDrag { x, y }).await;
+                if let Some(ref drag) = self.sidebar_drag {
+                    let new_width = x.saturating_sub(drag.body.x);
+                    self.sidebar_width = Some(new_width.clamp(
+                        crate::ui::project_hub::SIDEBAR_MIN_WIDTH,
+                        crate::ui::project_hub::SIDEBAR_MAX_WIDTH
+                            .min(drag.body.width.saturating_sub(20)),
+                    ));
+                    self.needs_redraw = true;
+                } else if let Some(ref drag) = self.home_widget_drag {
+                    // Compute new ratio based on cursor position within layout_body
+                    let lb = drag.layout_body;
+                    let new_ratio = match drag.direction {
+                        SplitDirection::Horizontal => {
+                            let clamped = x.clamp(lb.x, lb.x + lb.width);
+                            (clamped - lb.x) as f64 / lb.width.max(1) as f64
+                        }
+                        SplitDirection::Vertical => {
+                            let clamped = y.clamp(lb.y, lb.y + lb.height);
+                            (clamped - lb.y) as f64 / lb.height.max(1) as f64
+                        }
+                    };
+                    let path = drag.split_path.clone();
+                    // Update local cached layout for immediate visual feedback
+                    let ws_idx = self.render_state.active_workspace;
+                    if let Some(ws) = self.render_state.workspaces.get_mut(ws_idx) {
+                        ws.layout.set_ratio_at_path(&path, new_ratio);
+                    }
+                    // Encode path as "0,1" (0=First, 1=Second)
+                    let path_str: String = path.iter().map(|s| match s {
+                        Side::First => "0",
+                        Side::Second => "1",
+                    }).collect::<Vec<_>>().join(",");
+                    let path_arg = if path_str.is_empty() { "root".to_string() } else { path_str };
+                    let cmd = format!("set-split-ratio {} {:.6}", path_arg, new_ratio);
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
+                    self.needs_redraw = true;
+                } else {
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut w, &ClientRequest::MouseDrag { x, y }).await;
+                }
             }
             AppEvent::MouseUp { x, y } => {
-                let mut w = writer.lock().await;
-                let _ = send_request(&mut w, &ClientRequest::MouseUp { x, y }).await;
+                if self.sidebar_drag.take().is_some() {
+                    // Sidebar drag finished — width is already set
+                } else if self.home_widget_drag.take().is_some() {
+                    // Widget split drag finished — ratio already sent to daemon
+                } else {
+                    let mut w = writer.lock().await;
+                    let _ = send_request(&mut w, &ClientRequest::MouseUp { x, y }).await;
+                }
             }
             AppEvent::MouseScroll { up } => {
                 if self.is_home_active() {
@@ -1784,27 +1897,24 @@ impl Client {
                         let active_idx = self.render_state.active_workspace;
                         let bar_area =
                             Rect::new(0, 0, tui.size()?.width, crate::ui::workspace_bar::HEIGHT);
-                        match crate::ui::workspace_bar::hit_test(
+                        if let Some(crate::ui::workspace_bar::WorkspaceBarClick::Tab(i)) = crate::ui::workspace_bar::hit_test(
                             &name_refs,
                             active_idx,
                             bar_area,
                             x,
                             y,
                         ) {
-                            Some(crate::ui::workspace_bar::WorkspaceBarClick::Tab(i)) => {
-                                self.render_state.active_workspace = i;
-                                // Right-click on home — just select, no close menu
-                                if self.render_state.workspaces.get(i).is_some_and(|ws| ws.is_home) {
-                                    return Ok(());
-                                }
-                                let mut w = writer.lock().await;
-                                let _ = send_request(
-                                    &mut w,
-                                    &ClientRequest::Command(format!("select-workspace -t {}", i)),
-                                )
-                                .await;
+                            self.render_state.active_workspace = i;
+                            // Right-click on home — just select, no close menu
+                            if self.render_state.workspaces.get(i).is_some_and(|ws| ws.is_home) {
+                                return Ok(());
                             }
-                            _ => {}
+                            let mut w = writer.lock().await;
+                            let _ = send_request(
+                                &mut w,
+                                &ClientRequest::Command(format!("select-workspace -t {}", i)),
+                            )
+                            .await;
                         }
                         self.context_menu_state =
                             Some(crate::ui::context_menu::workspace_bar_menu(x, y));
@@ -1824,9 +1934,12 @@ impl Client {
                             Some(crate::ui::context_menu::tab_bar_menu(x, y));
                         self.mode = Mode::ContextMenu;
                     } else {
-                        // Right-click on pane body (default)
-                        self.context_menu_state =
-                            Some(crate::ui::context_menu::pane_body_menu(x, y));
+                        // Right-click on pane body — use home-workspace menu when appropriate
+                        self.context_menu_state = Some(if self.is_home_active() {
+                            crate::ui::context_menu::home_body_menu(x, y)
+                        } else {
+                            crate::ui::context_menu::pane_body_menu(x, y)
+                        });
                         self.mode = Mode::ContextMenu;
                     }
                 }
@@ -1858,9 +1971,10 @@ impl Client {
             Mode::ProjectHub => {
                 // Legacy: should not be reached, but handle gracefully
                 self.mode = Mode::Normal;
-                return Ok(());
+                Ok(())
             }
             Mode::ContextMenu => return self.handle_context_menu_key(key, tui, writer).await,
+            Mode::WidgetPicker => return self.handle_widget_picker_key(key, writer).await,
             Mode::Resize => return self.handle_resize_key(key, writer).await,
             Mode::Normal => return self.handle_normal_key(key, tui, writer).await,
             Mode::Interact => return self.handle_interact_key(key, tui, writer).await,
@@ -1989,6 +2103,52 @@ impl Client {
         Ok(())
     }
 
+    async fn handle_status_bar_click(
+        &mut self,
+        label: &str,
+        tui: &Tui,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        match label {
+            "leader" => self.enter_leader_mode(),
+            "normal" => {
+                self.mode = Mode::Normal;
+                self.workspace_bar_focused = false;
+            }
+            "commands" => {
+                self.execute_action(Action::CommandPalette, tui, writer).await?;
+            }
+            "new tab" => {
+                self.execute_action(Action::NewTab, tui, writer).await?;
+            }
+            "split" => {
+                self.execute_action(Action::SplitHorizontal, tui, writer).await?;
+            }
+            "new ws" | "new" => {
+                self.execute_action(Action::NewWorkspace, tui, writer).await?;
+            }
+            "quit" => {
+                self.execute_action(Action::Quit, tui, writer).await?;
+            }
+            "close" => {
+                self.execute_action(Action::CloseTab, tui, writer).await?;
+            }
+            "exit bar" => {
+                self.workspace_bar_focused = false;
+            }
+            "open" => {
+                let dir = self.project_hub_state.as_ref()
+                    .and_then(|hub| hub.selected_project())
+                    .map(|p| p.path.to_string_lossy().to_string());
+                if let Some(dir) = dir {
+                    self.open_project(&dir, writer).await?;
+                }
+            }
+            _ => {} // Buttons like "search", "switch" that need keyboard input
+        }
+        Ok(())
+    }
+
     fn enter_leader_mode(&mut self) {
         self.workspace_bar_focused = false;
         let root = self.config.leader.root.clone();
@@ -2087,10 +2247,45 @@ impl Client {
                     }
                     return Ok(());
                 }
+                Action::NewTab => {
+                    // On the workspace bar, "n" creates a new workspace, not a new tab
+                    self.workspace_bar_focused = false;
+                    let home = std::env::var("HOME")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|_| std::path::PathBuf::from("/"));
+                    self.new_workspace_input = Some(NewWorkspaceInputState {
+                        stage: NewWorkspaceStage::Directory,
+                        name: String::new(),
+                        browser: DirBrowser::new(home),
+                        last_click: None,
+                    });
+                    self.mode = Mode::NewWorkspaceInput;
+                    return Ok(());
+                }
                 _ => {
                     self.workspace_bar_focused = false;
                     // Fall through to normal action handling
                 }
+            }
+        }
+
+        // Sidebar resize on home workspace (Shift+H / Shift+L)
+        if self.is_home_active() && self.project_hub_state.is_some() {
+            let step: i16 = 4;
+            match &action {
+                Action::ResizeShrinkH => {
+                    let current = self.sidebar_width.unwrap_or(30);
+                    let new_w = (current as i16 - step).max(crate::ui::project_hub::SIDEBAR_MIN_WIDTH as i16) as u16;
+                    self.sidebar_width = Some(new_w);
+                    return Ok(());
+                }
+                Action::ResizeGrowH => {
+                    let current = self.sidebar_width.unwrap_or(30);
+                    let new_w = (current as i16 + step).min(crate::ui::project_hub::SIDEBAR_MAX_WIDTH as i16) as u16;
+                    self.sidebar_width = Some(new_w);
+                    return Ok(());
+                }
+                _ => {}
             }
         }
 
@@ -2178,7 +2373,18 @@ impl Client {
             }
             Action::SplitVertical => {
                 self.open_tab_picker(crate::ui::tab_picker::TabPickerMode::SplitVertical);
-                self.mode = Mode::TabPicker;
+                return Ok(());
+            }
+            Action::ChangeWidget => {
+                self.open_widget_picker(WidgetPickerMode::Change);
+                return Ok(());
+            }
+            Action::AddWidgetRight => {
+                self.open_widget_picker(WidgetPickerMode::SplitHorizontal);
+                return Ok(());
+            }
+            Action::AddWidgetBelow => {
+                self.open_widget_picker(WidgetPickerMode::SplitVertical);
                 return Ok(());
             }
             Action::RenameWindow => {
@@ -2240,7 +2446,7 @@ impl Client {
                         let mut w = writer.lock().await;
                         let _ = send_request(
                             &mut w,
-                            &ClientRequest::Command(format!("paste-buffer {}", text)),
+                            &ClientRequest::Paste(text),
                         )
                         .await;
                     }
@@ -2743,7 +2949,16 @@ impl Client {
         writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     ) -> Result<()> {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('G') | KeyCode::End => {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Char('g') | KeyCode::Home => {
+                let mut w = writer.lock().await;
+                let _ = send_request(&mut w, &ClientRequest::Command("scroll-to-top".to_string())).await;
+            }
+            KeyCode::Char('G') | KeyCode::End => {
+                let mut w = writer.lock().await;
+                let _ = send_request(&mut w, &ClientRequest::Command("scroll-to-bottom".to_string())).await;
                 self.mode = Mode::Normal;
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -2903,6 +3118,78 @@ impl Client {
         self.mode = Mode::TabPicker;
     }
 
+    fn open_widget_picker(&mut self, mode: WidgetPickerMode) {
+        self.widget_picker_state = Some(WidgetPickerState::new(mode));
+        self.mode = Mode::WidgetPicker;
+    }
+
+    async fn handle_widget_picker_key(
+        &mut self,
+        key: KeyEvent,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.widget_picker_state = None;
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(ref mut wp) = self.widget_picker_state {
+                    wp.move_up();
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(ref mut wp) = self.widget_picker_state {
+                    wp.move_down();
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(wp) = self.widget_picker_state.take() {
+                    self.mode = Mode::Normal;
+                    let widget_name = wp.selected_widget().map(|w| w.as_str().to_string());
+                    if let Some(name) = widget_name {
+                        let mut w = writer.lock().await;
+                        match wp.mode {
+                            WidgetPickerMode::Change => {
+                                let _ = send_request(
+                                    &mut w,
+                                    &ClientRequest::Command(format!("set-widget {}", name)),
+                                )
+                                .await;
+                            }
+                            WidgetPickerMode::SplitHorizontal => {
+                                let _ = send_request(
+                                    &mut w,
+                                    &ClientRequest::Command("split-window -h".to_string()),
+                                )
+                                .await;
+                                let _ = send_request(
+                                    &mut w,
+                                    &ClientRequest::Command(format!("set-widget {}", name)),
+                                )
+                                .await;
+                            }
+                            WidgetPickerMode::SplitVertical => {
+                                let _ = send_request(
+                                    &mut w,
+                                    &ClientRequest::Command("split-window -v".to_string()),
+                                )
+                                .await;
+                                let _ = send_request(
+                                    &mut w,
+                                    &ClientRequest::Command(format!("set-widget {}", name)),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     pub fn pane_screen(&self, pane_id: TabId) -> Option<&vt100::Screen> {
         self.screens.get(&pane_id).map(|p| p.screen())
     }
@@ -3048,7 +3335,7 @@ enum ServerEvent {
     Terminal(crate::event::AppEvent),
     Server(ServerResponse),
     Disconnected,
-    GitInfoReady { project_idx: usize, info: ProjectGitInfo, refreshing: bool },
+    GitInfoReady { project_idx: usize, info: Box<ProjectGitInfo>, refreshing: bool },
 }
 
 // Implement From so the event loop channel works
@@ -3077,8 +3364,8 @@ fn action_to_command(action: &Action) -> Option<String> {
         Action::CloseWorkspace => Some("close-workspace".to_string()),
         Action::SwitchWorkspace(n) => Some(format!("select-workspace -t {}", (*n as usize) - 1)),
         // Action::NewTab is handled client-side (opens picker)
-        Action::NextTab => Some("next-window".to_string()),
-        Action::PrevTab => Some("previous-window".to_string()),
+        Action::NextTab => Some("next-tab".to_string()),
+        Action::PrevTab => Some("prev-tab".to_string()),
         Action::CloseTab => Some("kill-pane".to_string()),
         // SplitHorizontal/SplitVertical handled client-side (opens picker)
         Action::RestartPane => Some("restart-pane".to_string()),
@@ -3101,13 +3388,13 @@ fn action_to_command(action: &Action) -> Option<String> {
             let ws_idx = (*n as usize) - 1;
             Some(format!("select-window -t {}", ws_idx))
         }
-        Action::DevServerInput => Some("new-window".to_string()),
+        Action::ReloadConfig => Some("reload-config".to_string()),
         Action::MaximizeFocused => Some("maximize-focused".to_string()),
         Action::ToggleZoom => Some("toggle-zoom".to_string()),
         Action::ToggleFloat => Some("toggle-float".to_string()),
         Action::NewFloat => Some("new-float".to_string()),
         Action::ToggleFold => Some("toggle-fold".to_string()),
-        Action::RenameWindow | Action::RenameWorkspace | Action::RenamePane => None,
+        Action::RenameWindow | Action::RenameWorkspace => None,
         // Client-only actions handled before this function is called
         Action::Quit
         | Action::Help
@@ -3118,15 +3405,15 @@ fn action_to_command(action: &Action) -> Option<String> {
         | Action::EnterInteract
         | Action::EnterNormal
         | Action::Detach
-        | Action::SessionPicker
         | Action::NewWorkspace // opens input dialog client-side
         | Action::ProjectHub // opens project hub client-side
         | Action::NewTab // NewTab opens picker client-side
         | Action::SplitHorizontal // opens picker client-side
         | Action::SplitVertical // opens picker client-side
-        | Action::NewPane
-        | Action::ClientPicker
-        | Action::ResizeMode => None,
+        | Action::ResizeMode
+        | Action::ChangeWidget // opens widget picker client-side
+        | Action::AddWidgetRight // opens widget picker client-side
+        | Action::AddWidgetBelow => None, // opens widget picker client-side
     }
 }
 
@@ -3141,7 +3428,7 @@ fn auto_workspace_name_suggestion(dir: &std::path::Path) -> String {
 
 /// Convert a kebab-case or snake_case name to Title Case.
 fn titlecase_name(name: &str) -> String {
-    name.split(|c: char| c == '-' || c == '_')
+    name.split(['-', '_'])
         .filter(|s| !s.is_empty())
         .map(|word| {
             let mut chars = word.chars();

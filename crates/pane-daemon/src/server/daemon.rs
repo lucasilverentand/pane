@@ -760,6 +760,20 @@ async fn handle_client(
                     state.scroll_active_tab(|p| p.scroll_down(3));
                 }
             }
+            ClientRequest::Paste(text) => {
+                let mut state = state.lock().await;
+                if state.workspaces.is_empty() { continue; }
+                if let Some(cws) = clients.get_active_workspace(client_id).await {
+                    state.active_workspace = cws;
+                }
+                let bytes = text.into_bytes();
+                if !bytes.is_empty() {
+                    let ws = state.active_workspace_mut();
+                    if let Some(group) = ws.groups.get_mut(&ws.active_group) {
+                        group.active_tab_mut().write_input(&bytes);
+                    }
+                }
+            }
             ClientRequest::Command(cmd) => {
                 if handle_command(&cmd, &state, &id_map, &broadcast_tx, &clients, client_id).await {
                     break;

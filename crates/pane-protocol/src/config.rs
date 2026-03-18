@@ -16,7 +16,6 @@ pub enum Action {
     CloseWorkspace,
     SwitchWorkspace(u8), // 1-indexed
     NewTab,
-    DevServerInput,
     NextTab,
     PrevTab,
     CloseTab,
@@ -37,7 +36,6 @@ pub enum Action {
     ResizeGrowV,
     ResizeShrinkV,
     Equalize,
-    SessionPicker,
     Help,
     ScrollMode,
     CopyMode,
@@ -47,7 +45,6 @@ pub enum Action {
     CommandPalette,
     RenameWindow,
     RenameWorkspace,
-    RenamePane,
     Detach,
     EnterInteract,
     EnterNormal,
@@ -56,10 +53,13 @@ pub enum Action {
     ToggleFloat,
     NewFloat,
     ToggleFold,
-    NewPane,
-    ClientPicker,
+    ReloadConfig,
     ResizeMode,
     ProjectHub,
+    // Widget management (home workspace)
+    ChangeWidget,
+    AddWidgetRight,
+    AddWidgetBelow,
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +218,28 @@ impl HubWidget {
         }
     }
 
+    /// Return the canonical string name used in commands (e.g. "project_info").
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ProjectInfo => "project_info",
+            Self::RecentCommits => "recent_commits",
+            Self::ChangedFiles => "changed_files",
+            Self::Branches => "branches",
+            Self::Stashes => "stashes",
+            Self::Tags => "tags",
+            Self::GitGraph => "git_graph",
+            Self::Contributors => "contributors",
+            Self::Todos => "todos",
+            Self::Readme => "readme",
+            Self::Languages => "languages",
+            Self::DiskUsage => "disk_usage",
+            Self::CiStatus => "ci_status",
+            Self::OpenIssues => "open_issues",
+            Self::RunningProcesses => "running_processes",
+        }
+    }
+
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "project_info" => Some(Self::ProjectInfo),
@@ -321,9 +343,9 @@ impl Behavior {
                 .projects_dirs
                 .iter()
                 .map(|s| {
-                    let expanded = if s.starts_with('~') {
+                    let expanded = if let Some(rest) = s.strip_prefix('~') {
                         if let Ok(home) = std::env::var("HOME") {
-                            format!("{}{}", home, &s[1..])
+                            format!("{}{}", home, rest)
                         } else {
                             s.clone()
                         }
@@ -628,7 +650,6 @@ fn default_leader_tree() -> LeaderNode {
     // \s → +Session
     {
         let mut children = HashMap::new();
-        insert_leaf(&mut children, "s", Action::SessionPicker, "Sessions");
         insert_leaf(&mut children, "p", Action::CommandPalette, "Palette");
         insert_leaf(&mut children, "d", Action::Detach, "Detach");
         let key = parse_key("s").unwrap();

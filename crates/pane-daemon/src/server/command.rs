@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 use tokio::sync::broadcast;
 
 use pane_protocol::config::HubWidget;
-use pane_protocol::layout::{SplitDirection, TabId};
+use pane_protocol::layout::{Side, SplitDirection, TabId};
 use crate::server::id_map::IdMap;
 use pane_protocol::protocol::ServerResponse;
 use crate::server::state::{ServerState, render_state_from_server};
@@ -125,6 +125,14 @@ pub enum Command {
     // Widget commands (home workspace)
     AddWidget { widget: String },
     SetWidget { widget: String },
+    SetSplitRatio { path: Vec<Side>, ratio: f64 },
+
+    // Scroll
+    ScrollToTop,
+    ScrollToBottom,
+
+    // Config
+    ReloadConfig,
 
     // Misc commands
     DisplayMessage {
@@ -247,6 +255,22 @@ pub fn execute(
                 pane_id: Some(pane_n),
                 window_id: Some(win_n),
             })
+        }
+
+        Command::ScrollToTop => {
+            state.scroll_active_tab(|t| t.scroll_up(usize::MAX));
+            Ok(CommandResult::Ok(String::new()))
+        }
+
+        Command::ScrollToBottom => {
+            state.scroll_active_tab(|t| t.scroll_to_bottom());
+            Ok(CommandResult::Ok(String::new()))
+        }
+
+        Command::ReloadConfig => {
+            state.config = pane_protocol::config::Config::load();
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::Ok("config reloaded".to_string()))
         }
 
         // All commands below require at least one workspace.
@@ -807,6 +831,13 @@ pub fn execute(
                 tab.kind = TabKind::Widget(hw.clone());
                 tab.title = hw.label().to_string();
             }
+            broadcast_layout(state, broadcast_tx);
+            Ok(CommandResult::LayoutChanged)
+        }
+
+        Command::SetSplitRatio { path, ratio } => {
+            let ws = state.active_workspace_mut();
+            ws.layout.set_ratio_at_path(path, *ratio);
             broadcast_layout(state, broadcast_tx);
             Ok(CommandResult::LayoutChanged)
         }

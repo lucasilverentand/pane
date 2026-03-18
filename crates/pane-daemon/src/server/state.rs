@@ -37,7 +37,7 @@ pub struct ServerState {
 /// Convert a kebab-case or snake_case name to Title Case.
 /// e.g. "expo-passkite" → "Expo Passkite", "pane" → "Pane"
 fn titlecase_name(name: &str) -> String {
-    name.split(|c: char| c == '-' || c == '_')
+    name.split(['-', '_'])
         .filter(|s| !s.is_empty())
         .map(|word| {
             let mut chars = word.chars();
@@ -224,7 +224,7 @@ fn chain_splits(nodes: Vec<LayoutNode>, direction: SplitDirection) -> LayoutNode
     for (i, node) in iter.enumerate() {
         let ratio = 1.0 / (n - i) as f64;
         result = LayoutNode::Split {
-            direction: direction.clone(),
+            direction,
             ratio,
             first: Box::new(result),
             second: Box::new(node),
@@ -428,14 +428,18 @@ impl ServerState {
         }
 
         let ws = self.active_workspace_mut();
-        let tab_idx = ws.groups.get(&source_group_id).unwrap().active_tab;
-        let pane = ws
-            .groups
-            .get_mut(&source_group_id)
-            .unwrap()
-            .remove_tab(tab_idx)
-            .unwrap();
-        ws.groups.get_mut(&neighbor_id).unwrap().add_tab(pane);
+        let Some(source) = ws.groups.get(&source_group_id) else { return };
+        let tab_idx = source.active_tab;
+        let Some(source_mut) = ws.groups.get_mut(&source_group_id) else { return };
+        let Some(pane) = source_mut.remove_tab(tab_idx) else { return };
+        let Some(target) = ws.groups.get_mut(&neighbor_id) else {
+            // Target vanished — re-add tab to source to prevent data loss
+            if let Some(source_mut) = ws.groups.get_mut(&source_group_id) {
+                source_mut.add_tab(pane);
+            }
+            return;
+        };
+        target.add_tab(pane);
         ws.active_group = neighbor_id;
     }
 

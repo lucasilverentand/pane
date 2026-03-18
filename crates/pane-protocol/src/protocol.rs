@@ -142,6 +142,8 @@ pub enum ClientRequest {
         up: bool,
     },
     Command(String),
+    /// Paste text directly to the active PTY, bypassing command parsing.
+    Paste(String),
     /// Synchronous command: execute and return result on this stream, then disconnect.
     /// Used by the tmux shim for fire-and-forget commands.
     CommandSync(String),
@@ -353,6 +355,7 @@ mod tests {
             ClientRequest::MouseUp { x: 10, y: 5 },
             ClientRequest::MouseScroll { up: true },
             ClientRequest::Command("list-panes".to_string()),
+            ClientRequest::Paste("hello world".to_string()),
         ];
 
         for req in &requests {
@@ -697,6 +700,7 @@ mod tests {
             ClientRequest::MouseScroll { up: true },
             ClientRequest::MouseScroll { up: false },
             ClientRequest::Command("list-panes".to_string()),
+            ClientRequest::Paste("pasted text with spaces\nnewlines".to_string()),
             ClientRequest::CommandSync("split -h".to_string()),
         ];
 

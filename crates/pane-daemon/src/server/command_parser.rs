@@ -41,8 +41,8 @@ pub fn parse(input: &str) -> Result<Command> {
         "display-message" | "display" => parse_display_message(args),
         "close-workspace" => Ok(Command::CloseWorkspace),
         "select-workspace" => parse_select_workspace(args),
-        "next-window" | "next" => Ok(Command::NextWindow),
-        "previous-window" | "prev" => Ok(Command::PreviousWindow),
+        "next-window" | "next" | "next-tab" => Ok(Command::NextWindow),
+        "previous-window" | "prev" | "prev-tab" | "previous-tab" => Ok(Command::PreviousWindow),
         "restart-pane" => Ok(Command::RestartPane),
         "move-tab" => parse_move_tab(args),
         "equalize-layout" | "equalize" => Ok(Command::EqualizeLayout),
@@ -56,6 +56,10 @@ pub fn parse(input: &str) -> Result<Command> {
         "toggle-fold" | "fold" => Ok(Command::ToggleFold),
         "add-widget" => parse_add_widget(args),
         "set-widget" => parse_set_widget(args),
+        "scroll-to-top" => Ok(Command::ScrollToTop),
+        "scroll-to-bottom" => Ok(Command::ScrollToBottom),
+        "reload-config" | "source" => Ok(Command::ReloadConfig),
+        "set-split-ratio" => parse_set_split_ratio(args),
         _ => bail!("unknown command: {}", cmd_name),
     }
 }
@@ -561,6 +565,26 @@ fn parse_set_widget(args: &[String]) -> Result<Command> {
     Ok(Command::SetWidget {
         widget: args[0].clone(),
     })
+}
+
+fn parse_set_split_ratio(args: &[String]) -> Result<Command> {
+    if args.len() < 2 {
+        bail!("set-split-ratio requires <path> <ratio>");
+    }
+    let path = if args[0].is_empty() || args[0] == "root" {
+        vec![]
+    } else {
+        args[0]
+            .split(',')
+            .map(|s| match s {
+                "0" => Ok(pane_protocol::layout::Side::First),
+                "1" => Ok(pane_protocol::layout::Side::Second),
+                _ => bail!("invalid path segment: {}", s),
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
+    let ratio: f64 = args[1].parse().map_err(|_| anyhow::anyhow!("invalid ratio: {}", args[1]))?;
+    Ok(Command::SetSplitRatio { path, ratio })
 }
 
 #[cfg(test)]

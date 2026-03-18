@@ -71,13 +71,10 @@ pub fn save_home_layout(workspace: &Workspace) {
 
     // Write atomically via temp file
     let tmp = path.with_extension("json.tmp");
-    match serde_json::to_string_pretty(&state) {
-        Ok(json) => {
-            if std::fs::write(&tmp, json).is_ok() {
-                let _ = std::fs::rename(&tmp, &path);
-            }
+    if let Ok(json) = serde_json::to_string_pretty(&state) {
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
         }
-        Err(_) => {}
     }
 }
 
