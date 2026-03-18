@@ -721,7 +721,7 @@ fn render_widget_recent_commits(
     let total = git.commits.len();
     let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -798,7 +798,7 @@ fn render_widget_changed_files(
     let total = git.status_lines.len();
     let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -883,7 +883,7 @@ fn render_widget_branches(
     let total = git.branches.len();
     let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -938,7 +938,7 @@ fn render_widget_stashes(
     let total = git.stashes.len();
     let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -988,7 +988,7 @@ fn render_widget_tags(
     let total = git.tags.len();
     let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1042,7 +1042,7 @@ fn render_widget_git_graph(
     let total = git.graph_lines.len();
     let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1108,7 +1108,7 @@ fn render_widget_contributors(
     let total = git.contributors.len();
     let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1168,7 +1168,7 @@ fn render_widget_todos(
     let total = git.todos.len();
     let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1241,7 +1241,7 @@ fn render_widget_readme(
     let total = git.readme_lines.len();
     let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1295,7 +1295,7 @@ fn render_widget_languages(
     let total = git.languages.len();
     let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1437,7 +1437,7 @@ fn render_widget_ci_status(
     let total = git.ci_runs.len();
     let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1514,7 +1514,7 @@ fn render_widget_open_issues(
     let total = git.gh_issues.len();
     let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1584,7 +1584,7 @@ fn render_widget_running_processes(
     let total = git.processes.len();
     let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v + 1).unwrap_or(0).min(total.saturating_sub(visible));
+    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
