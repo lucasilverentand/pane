@@ -1667,7 +1667,12 @@ fn render_overflow(total: usize, visible: usize, theme: &Theme, frame: &mut Fram
 
 fn truncate_str(s: &str, max: usize) -> String {
     if s.len() > max && max > 1 {
-        format!("{}…", &s[..max - 1])
+        let end = s.char_indices()
+            .map(|(i, _)| i)
+            .take(max - 1)
+            .last()
+            .unwrap_or(0);
+        format!("{}…", &s[..end])
     } else {
         s.to_string()
     }
