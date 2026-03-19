@@ -169,17 +169,6 @@ pub fn render_group_from_snapshot(
 ) {
     let theme = &config.theme;
 
-    // Widget tabs: skip window chrome, render widget directly with its own borders
-    let active_tab = group.tabs.get(group.active_tab);
-    if let Some(TabKind::Widget(ref w)) = active_tab.map(|t| &t.kind) {
-        if let Some(hub) = hub_state {
-            let is_focused = hub.focused_widget == Some(group.id);
-            let interact = hub.widget_interact.get(&group.id);
-            super::project_hub::render_single_widget(hub, w, is_focused, interact, theme, frame, area);
-        }
-        return;
-    }
-
     // Check if the active pane's foreground process has a decoration
     let decoration_color = group
         .tabs
@@ -198,8 +187,6 @@ pub fn render_group_from_snapshot(
         };
         let color = decoration_color.unwrap_or(mode_color);
         Style::default().fg(color)
-    } else if let Some(dec_color) = decoration_color {
-        Style::default().fg(dec_color)
     } else {
         Style::default().fg(theme.border_inactive)
     };
@@ -254,7 +241,13 @@ pub fn render_group_from_snapshot(
     let content_area = areas[2];
     let search_area = areas.get(3).copied();
 
-    if let Some(screen) = screen {
+    let active_tab = group.tabs.get(group.active_tab);
+    if let Some(TabKind::Widget(ref w)) = active_tab.map(|t| &t.kind) {
+        if let Some(hub) = hub_state {
+            let interact = hub.widget_interact.get(&group.id);
+            super::project_hub::render_widget_inner(hub, w, interact, theme, frame, content_area);
+        }
+    } else if let Some(screen) = screen {
         render_content(screen, cms, frame, content_area);
     }
 
@@ -339,9 +332,11 @@ fn render_tab_bar_from_snapshot(
 ) {
     const SEP: &str = " \u{B7} ";
     const SEP_WIDTH: u16 = 3;
+    const PLUS_RESERVE: u16 = 3; // " + "
     const INDICATOR_WIDTH: u16 = 2; // "◂ " or " ▸"
 
     let n = group.tabs.len();
+    let max_x = area.x + area.width;
 
     // Check if hover is on the tab bar row
     let hover_x = hover.and_then(|(hx, hy)| if hy == area.y { Some(hx) } else { None });
@@ -353,9 +348,10 @@ fn render_tab_bar_from_snapshot(
         .map(|tab| (tab.title.chars().count().min(MAX_TAB_TITLE) as u16) + 2)
         .collect();
 
-    // Check if everything fits
+    // Check if everything fits (reserve space for + button)
     let total: u16 = label_widths.iter().sum::<u16>()
-        + if n > 1 { SEP_WIDTH * (n as u16 - 1) } else { 0 };
+        + if n > 1 { SEP_WIDTH * (n as u16 - 1) } else { 0 }
+        + PLUS_RESERVE;
 
     let (lo, hi, hidden_left, hidden_right) = if n == 0 || total <= area.width {
         (0, n.saturating_sub(1), 0usize, 0usize)
@@ -376,7 +372,7 @@ fn render_tab_bar_from_snapshot(
             if hi < n - 1 {
                 w += INDICATOR_WIDTH;
             }
-            w
+            w + PLUS_RESERVE
         };
 
         let mut lo = active;
@@ -466,6 +462,18 @@ fn render_tab_bar_from_snapshot(
     let line = Line::from(spans);
     let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);
+
+    // Render + button right-aligned directly into the buffer
+    if PLUS_RESERVE <= max_x.saturating_sub(area.x) && !group.tabs.is_empty() {
+        let plus_x = max_x - PLUS_RESERVE;
+        let plus_hovered = hover_x.is_some_and(|hx| hx >= plus_x && hx < max_x);
+        let plus_style = if plus_hovered {
+            Style::default().fg(theme.fg)
+        } else {
+            Style::default().fg(theme.dim)
+        };
+        frame.buffer_mut().set_string(plus_x, area.y, " + ", plus_style);
+    }
 }
 
 /// Render a fold indicator line with 1-cell padding on each side.

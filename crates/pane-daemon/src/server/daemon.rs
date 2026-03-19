@@ -779,6 +779,18 @@ async fn handle_client(
                     break;
                 }
             }
+            ClientRequest::FocusWindow { id } => {
+                let mut state = state.lock().await;
+                if state.workspaces.is_empty() { continue; }
+                if let Some(cws) = clients.get_active_workspace(client_id).await {
+                    state.active_workspace = cws;
+                }
+                let bar_h = state.workspace_bar_height();
+                state.focus_group(id, bar_h);
+                let cws = state.active_workspace;
+                let render_state = render_state_for_client(&state, cws);
+                let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
+            }
             ClientRequest::Attach => {
                 // Already attached, ignore
             }

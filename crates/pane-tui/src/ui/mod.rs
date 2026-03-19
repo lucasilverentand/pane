@@ -94,7 +94,9 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
             .areas(body);
 
             if let Some(ref hub) = client.project_hub_state {
-                project_hub::render_sidebar_only(hub, theme, client.hover, frame, left);
+                let sidebar_focused = !client.is_workspace_bar_focused()
+                    && hub.focused_widget.is_none();
+                project_hub::render_sidebar_only(hub, sidebar_focused, theme, client.hover, frame, left);
             }
             right
         } else {

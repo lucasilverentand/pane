@@ -33,8 +33,8 @@ use crate::ui::widget_picker::{WidgetPickerMode, WidgetPickerState};
 enum TabBarHit {
     /// Clicked on a specific tab within a window.
     Tab { group_index: usize, tab_index: usize },
-    /// Clicked on the + button.
-    Plus,
+    /// Clicked on the + button of the given window.
+    Plus { group_id: WindowId },
 }
 
 /// TUI client that connects to a pane daemon via Unix socket.
@@ -1263,6 +1263,14 @@ impl Client {
         self.focus_location == FocusLocation::WorkspaceBar
     }
 
+    /// Focus the workspace bar and clear any widget/pane focus.
+    fn focus_workspace_bar(&mut self) {
+        self.focus_location = FocusLocation::WorkspaceBar;
+        if let Some(ref mut hub) = self.project_hub_state {
+            hub.focused_widget = None;
+        }
+    }
+
     /// Returns true if the active workspace is the home workspace.
     pub fn is_home_active(&self) -> bool {
         self.render_state
@@ -1678,6 +1686,18 @@ impl Client {
                                             )
                                             .await;
                                         }
+                                        WidgetPickerMode::AddTab => {
+                                            let _ = send_request(
+                                                &mut w,
+                                                &ClientRequest::Command("new-window".to_string()),
+                                            )
+                                            .await;
+                                            let _ = send_request(
+                                                &mut w,
+                                                &ClientRequest::Command(format!("set-widget {}", name)),
+                                            )
+                                            .await;
+                                        }
                                     }
                                 }
                             }
@@ -1782,6 +1802,8 @@ impl Client {
                     // Check workspace bar clicks (client-side)
                     let show_workspace_bar = self.is_home_active() || !self.render_state.workspaces.is_empty();
                     if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
+                        // Any click in the workspace bar area focuses it.
+                        self.focus_workspace_bar();
                         let names: Vec<String> = self.render_state
                             .workspaces
                             .iter()
@@ -1798,7 +1820,6 @@ impl Client {
                             x,
                             y,
                         ) {
-                            self.focus_location = FocusLocation::WorkspaceBar;
                             match click {
                                 crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
                                     // Ensure hub state exists when switching to home
@@ -1816,9 +1837,22 @@ impl Client {
                                     )
                                     .await;
                                 }
+                                crate::ui::workspace_bar::WorkspaceBarClick::NewWorkspace => {
+                                    self.push_focus();
+                                    let home = std::env::var("HOME")
+                                        .map(std::path::PathBuf::from)
+                                        .unwrap_or_else(|_| std::path::PathBuf::from("/"));
+                                    self.new_workspace_input = Some(NewWorkspaceInputState {
+                                        stage: NewWorkspaceStage::Directory,
+                                        name: String::new(),
+                                        browser: DirBrowser::new(home),
+                                        last_click: None,
+                                    });
+                                    self.mode = Mode::NewWorkspaceInput;
+                                }
                             }
-                            return Ok(());
                         }
+                        return Ok(());
                     }
 
                     // Check status bar clicks (client-side)
@@ -1914,6 +1948,41 @@ impl Client {
                                 body.width.saturating_sub(sw),
                                 body.height,
                             );
+
+                            // Check for + button click in any widget pane's tab bar
+                            let plus_group_id = self.active_workspace().and_then(|ws| {
+                                let resolved = ws.layout.resolve_with_folds(layout_body, &ws.folded_windows);
+                                resolved.into_iter().find_map(|rp| {
+                                    if let pane_protocol::layout::ResolvedPane::Visible { id, rect } = rp {
+                                        // Tab bar is at: inner.y = rect.y+1, padded.x = rect.x+2, padded.width = rect.width-4
+                                        let tab_y = rect.y.saturating_add(1);
+                                        let padded_x = rect.x.saturating_add(2);
+                                        let padded_w = rect.width.saturating_sub(4);
+                                        let max_x = padded_x + padded_w;
+                                        if y == tab_y && 3 <= max_x.saturating_sub(padded_x) {
+                                            let plus_start = max_x - 3;
+                                            let group = ws.groups.iter().find(|g| g.id == id)?;
+                                            if x >= plus_start && x < max_x && !group.tabs.is_empty() {
+                                                return Some(id);
+                                            }
+                                        }
+                                    }
+                                    None
+                                })
+                            });
+                            if let Some(id) = plus_group_id {
+                                if let Some(ref mut hub) = self.project_hub_state {
+                                    hub.focused_widget = Some(id);
+                                }
+                                {
+                                    let mut w = writer.lock().await;
+                                    let _ = send_request(&mut w, &ClientRequest::FocusWindow { id }).await;
+                                }
+                                self.focus_location = FocusLocation::WindowLayout;
+                                self.open_widget_picker(WidgetPickerMode::AddTab);
+                                return Ok(());
+                            }
+
                             let clicked_id = self.active_workspace().and_then(|ws| {
                                 let resolved =
                                     ws.layout.resolve_with_folds(layout_body, &ws.folded_windows);
@@ -1938,6 +2007,8 @@ impl Client {
                                 if let Some(ref mut hub) = self.project_hub_state {
                                     hub.focused_widget = Some(id);
                                 }
+                                let mut w = writer.lock().await;
+                                let _ = send_request(&mut w, &ClientRequest::FocusWindow { id }).await;
                             }
                         }
                         self.focus_location = FocusLocation::WindowLayout;
@@ -1945,8 +2016,21 @@ impl Client {
                     }
 
                     // Check if click hit a tab bar + button (open picker client-side)
-                    if self.hit_test_tab_bar_plus(tui, x, y) {
-                        self.open_tab_picker(crate::ui::tab_picker::TabPickerMode::NewTab);
+                    if let Some(TabBarHit::Plus { group_id }) = self.hit_test_tab_bar(tui, x, y) {
+                        let is_widget = self.active_workspace()
+                            .and_then(|ws| ws.groups.iter().find(|g| g.id == group_id))
+                            .and_then(|g| g.tabs.get(g.active_tab))
+                            .map(|t| matches!(t.kind, TabKind::Widget(_)))
+                            .unwrap_or(false);
+                        {
+                            let mut w = writer.lock().await;
+                            let _ = send_request(&mut w, &ClientRequest::FocusWindow { id: group_id }).await;
+                        }
+                        if is_widget {
+                            self.open_widget_picker(WidgetPickerMode::AddTab);
+                        } else {
+                            self.open_tab_picker(crate::ui::tab_picker::TabPickerMode::NewTab);
+                        }
                         return Ok(());
                     }
 
@@ -2508,7 +2592,7 @@ impl Client {
                     Side::First,
                 ).is_none();
                 if at_top {
-                    self.focus_location = FocusLocation::WorkspaceBar;
+                    self.focus_workspace_bar();
                     return Ok(());
                 }
             }
@@ -3457,6 +3541,18 @@ impl Client {
                                 )
                                 .await;
                             }
+                            WidgetPickerMode::AddTab => {
+                                let _ = send_request(
+                                    &mut w,
+                                    &ClientRequest::Command("new-window".to_string()),
+                                )
+                                .await;
+                                let _ = send_request(
+                                    &mut w,
+                                    &ClientRequest::Command(format!("set-widget {}", name)),
+                                )
+                                .await;
+                            }
                         }
                     }
                 }
@@ -3509,7 +3605,7 @@ impl Client {
                     if plus_reserve <= max_x.saturating_sub(padded.x) {
                         let plus_start = max_x - plus_reserve;
                         if x >= plus_start && x < max_x && !group.tabs.is_empty() {
-                            return Some(TabBarHit::Plus);
+                            return Some(TabBarHit::Plus { group_id: *group_id });
                         }
                     }
 
@@ -3585,10 +3681,6 @@ impl Client {
         None
     }
 
-    /// Check if a click hits the + button in any visible window's tab bar.
-    fn hit_test_tab_bar_plus(&self, tui: &Tui, x: u16, y: u16) -> bool {
-        matches!(self.hit_test_tab_bar(tui, x, y), Some(TabBarHit::Plus))
-    }
 
     fn update_terminal_title(&self) {
         if let Some(ref fmt) = self.config.behavior.terminal_title_format {

@@ -147,6 +147,8 @@ pub enum ClientRequest {
     /// Synchronous command: execute and return result on this stream, then disconnect.
     /// Used by the tmux shim for fire-and-forget commands.
     CommandSync(String),
+    /// Focus a specific window by UUID without forwarding mouse coordinates.
+    FocusWindow { id: WindowId },
 }
 
 // ---------------------------------------------------------------------------

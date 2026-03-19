@@ -90,14 +90,15 @@ pub fn sidebar_hit_test(
 }
 
 /// Render a single widget into a given area. Used by window_view for widget tabs.
-pub fn render_single_widget(
+/// Render widget content directly into `inner` without drawing an outer border.
+/// Used when the window chrome already provides the border and tab bar.
+pub fn render_widget_inner(
     hub_state: &ProjectHubState,
     widget: &HubWidget,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
     let project = match hub_state.selected_project() {
         Some(p) => p,
@@ -108,7 +109,7 @@ pub fn render_single_widget(
             ));
             frame.render_widget(
                 Paragraph::new(msg),
-                Rect::new(area.x, area.y + area.height / 2, area.width, 1),
+                Rect::new(inner.x, inner.y + inner.height / 2, inner.width, 1),
             );
             return;
         }
@@ -123,57 +124,39 @@ pub fn render_single_widget(
         ));
         frame.render_widget(
             Paragraph::new(msg),
-            Rect::new(area.x, area.y + area.height / 2, area.width, 1),
+            Rect::new(inner.x, inner.y + inner.height / 2, inner.width, 1),
         );
         return;
     }
 
+    dispatch_widget_content(widget, project, git_info, interact, theme, frame, inner);
+}
+
+fn dispatch_widget_content(
+    widget: &HubWidget,
+    project: &crate::client::ProjectEntry,
+    git_info: Option<&ProjectGitInfo>,
+    interact: Option<&WidgetInteractState>,
+    theme: &Theme,
+    frame: &mut Frame,
+    inner: Rect,
+) {
     match widget {
-        HubWidget::ProjectInfo => {
-            render_widget_project_info(project, git_info, is_focused, theme, frame, area);
-        }
-        HubWidget::RecentCommits => {
-            render_widget_recent_commits(git_info, is_focused, interact, theme, frame, area);
-        }
-        HubWidget::ChangedFiles => {
-            render_widget_changed_files(git_info, is_focused, interact, theme, frame, area);
-        }
-        HubWidget::Branches => {
-            render_widget_branches(git_info, is_focused, interact, theme, frame, area);
-        }
-        HubWidget::Stashes => {
-            render_widget_stashes(git_info, is_focused, interact, theme, frame, area);
-        }
-        HubWidget::Tags => {
-            render_widget_tags(git_info, is_focused, interact, theme, frame, area);
-        }
-        HubWidget::GitGraph => {
-            render_widget_git_graph(git_info, is_focused, interact, theme, frame, area);
-        }
-        HubWidget::Contributors => {
-            render_widget_contributors(git_info, is_focused, interact, theme, frame, area);
-        }
-        HubWidget::Todos => {
-            render_widget_todos(git_info, is_focused, interact, theme, frame, area);
-        }
-        HubWidget::Readme => {
-            render_widget_readme(git_info, is_focused, interact, theme, frame, area);
-        }
-        HubWidget::Languages => {
-            render_widget_languages(git_info, is_focused, interact, theme, frame, area);
-        }
-        HubWidget::DiskUsage => {
-            render_widget_disk_usage(git_info, is_focused, theme, frame, area);
-        }
-        HubWidget::CiStatus => {
-            render_widget_ci_status(git_info, is_focused, interact, theme, frame, area);
-        }
-        HubWidget::OpenIssues => {
-            render_widget_open_issues(git_info, is_focused, interact, theme, frame, area);
-        }
-        HubWidget::RunningProcesses => {
-            render_widget_running_processes(git_info, is_focused, interact, theme, frame, area);
-        }
+        HubWidget::ProjectInfo      => render_widget_project_info(project, git_info, theme, frame, inner),
+        HubWidget::RecentCommits    => render_widget_recent_commits(git_info, interact, theme, frame, inner),
+        HubWidget::ChangedFiles     => render_widget_changed_files(git_info, interact, theme, frame, inner),
+        HubWidget::Branches         => render_widget_branches(git_info, interact, theme, frame, inner),
+        HubWidget::Stashes          => render_widget_stashes(git_info, interact, theme, frame, inner),
+        HubWidget::Tags             => render_widget_tags(git_info, interact, theme, frame, inner),
+        HubWidget::GitGraph         => render_widget_git_graph(git_info, interact, theme, frame, inner),
+        HubWidget::Contributors     => render_widget_contributors(git_info, interact, theme, frame, inner),
+        HubWidget::Todos            => render_widget_todos(git_info, interact, theme, frame, inner),
+        HubWidget::Readme           => render_widget_readme(git_info, interact, theme, frame, inner),
+        HubWidget::Languages        => render_widget_languages(git_info, interact, theme, frame, inner),
+        HubWidget::DiskUsage        => render_widget_disk_usage(git_info, theme, frame, inner),
+        HubWidget::CiStatus         => render_widget_ci_status(git_info, interact, theme, frame, inner),
+        HubWidget::OpenIssues       => render_widget_open_issues(git_info, interact, theme, frame, inner),
+        HubWidget::RunningProcesses => render_widget_running_processes(git_info, interact, theme, frame, inner),
     }
 }
 
@@ -247,12 +230,13 @@ pub fn widget_selected_text(
 /// Render the project hub sidebar only (for the home workspace layout).
 pub fn render_sidebar_only(
     state: &ProjectHubState,
+    is_focused: bool,
     theme: &Theme,
     hover: Option<(u16, u16)>,
     frame: &mut Frame,
     area: Rect,
 ) {
-    render_sidebar(state, theme, hover, frame, area);
+    render_sidebar(state, is_focused, theme, hover, frame, area);
 }
 
 /// Render the project hub as a full workspace body: left sidebar + right widget panel.
@@ -279,25 +263,27 @@ pub fn render_body(
     ])
     .areas(area);
 
-    render_sidebar(state, theme, hover, frame, left);
+    render_sidebar(state, true, theme, hover, frame, left);
     render_widgets(state, theme, layout, frame, right);
 }
 
 fn render_sidebar(
     state: &ProjectHubState,
+    is_focused: bool,
     theme: &Theme,
     hover: Option<(u16, u16)>,
     frame: &mut Frame,
     area: Rect,
 ) {
+    let border_color = if is_focused { theme.accent } else { theme.border_inactive };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.accent))
+        .border_style(Style::default().fg(border_color))
         .title(Span::styled(
             " projects ",
             Style::default()
-                .fg(theme.accent)
+                .fg(border_color)
                 .add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
@@ -514,53 +500,10 @@ fn render_widgets(
             if cell.width < 6 {
                 continue;
             }
-            match widget {
-                HubWidget::ProjectInfo => {
-                    render_widget_project_info(project, git_info, false, theme, frame, cell);
-                }
-                HubWidget::RecentCommits => {
-                    render_widget_recent_commits(git_info, false, None, theme, frame, cell);
-                }
-                HubWidget::ChangedFiles => {
-                    render_widget_changed_files(git_info, false, None, theme, frame, cell);
-                }
-                HubWidget::Branches => {
-                    render_widget_branches(git_info, false, None, theme, frame, cell);
-                }
-                HubWidget::Stashes => {
-                    render_widget_stashes(git_info, false, None, theme, frame, cell);
-                }
-                HubWidget::Tags => {
-                    render_widget_tags(git_info, false, None, theme, frame, cell);
-                }
-                HubWidget::GitGraph => {
-                    render_widget_git_graph(git_info, false, None, theme, frame, cell);
-                }
-                HubWidget::Contributors => {
-                    render_widget_contributors(git_info, false, None, theme, frame, cell);
-                }
-                HubWidget::Todos => {
-                    render_widget_todos(git_info, false, None, theme, frame, cell);
-                }
-                HubWidget::Readme => {
-                    render_widget_readme(git_info, false, None, theme, frame, cell);
-                }
-                HubWidget::Languages => {
-                    render_widget_languages(git_info, false, None, theme, frame, cell);
-                }
-                HubWidget::DiskUsage => {
-                    render_widget_disk_usage(git_info, false, theme, frame, cell);
-                }
-                HubWidget::CiStatus => {
-                    render_widget_ci_status(git_info, false, None, theme, frame, cell);
-                }
-                HubWidget::OpenIssues => {
-                    render_widget_open_issues(git_info, false, None, theme, frame, cell);
-                }
-                HubWidget::RunningProcesses => {
-                    render_widget_running_processes(git_info, false, None, theme, frame, cell);
-                }
-            }
+            let block = widget_block(widget_title(widget), theme, false);
+            let cell_inner = block.inner(cell);
+            frame.render_widget(block, cell);
+            dispatch_widget_content(widget, project, git_info, None, theme, frame, cell_inner);
         }
     }
 }
@@ -572,15 +515,10 @@ fn render_widgets(
 fn render_widget_project_info(
     project: &crate::client::ProjectEntry,
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" project ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 2 || inner.width < 8 {
         return;
     }
@@ -697,16 +635,11 @@ fn render_widget_project_info(
 
 fn render_widget_recent_commits(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" recent commits ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -775,16 +708,11 @@ fn render_widget_recent_commits(
 
 fn render_widget_changed_files(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" changed files ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -866,16 +794,11 @@ fn render_widget_changed_files(
 
 fn render_widget_branches(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" branches ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -924,16 +847,11 @@ fn render_widget_branches(
 
 fn render_widget_stashes(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" stashes ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -972,16 +890,11 @@ fn render_widget_stashes(
 
 fn render_widget_tags(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" tags ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -1025,16 +938,11 @@ fn render_widget_tags(
 
 fn render_widget_git_graph(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" git graph ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -1085,16 +993,11 @@ fn render_widget_git_graph(
 
 fn render_widget_contributors(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" contributors ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -1147,16 +1050,11 @@ fn render_widget_contributors(
 
 fn render_widget_todos(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" todos ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -1222,16 +1120,11 @@ fn render_widget_todos(
 
 fn render_widget_readme(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" readme ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -1274,16 +1167,11 @@ fn render_widget_readme(
 
 fn render_widget_languages(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" languages ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -1331,15 +1219,10 @@ fn render_widget_languages(
 
 fn render_widget_disk_usage(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" disk usage ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -1407,16 +1290,11 @@ fn render_widget_disk_usage(
 
 fn render_widget_ci_status(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" ci status ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -1482,16 +1360,11 @@ fn render_widget_ci_status(
 
 fn render_widget_open_issues(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" open issues ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -1562,16 +1435,11 @@ fn render_widget_open_issues(
 
 fn render_widget_running_processes(
     git_info: Option<&ProjectGitInfo>,
-    is_focused: bool,
     interact: Option<&WidgetInteractState>,
     theme: &Theme,
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
 ) {
-    let block = widget_block(" running processes ", theme, is_focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if inner.height < 1 || inner.width < 10 {
         return;
     }
@@ -1620,6 +1488,26 @@ fn render_widget_running_processes(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn widget_title(widget: &HubWidget) -> &'static str {
+    match widget {
+        HubWidget::ProjectInfo      => " project ",
+        HubWidget::RecentCommits    => " recent commits ",
+        HubWidget::ChangedFiles     => " changed files ",
+        HubWidget::Branches         => " branches ",
+        HubWidget::Stashes          => " stashes ",
+        HubWidget::Tags             => " tags ",
+        HubWidget::GitGraph         => " git graph ",
+        HubWidget::Contributors     => " contributors ",
+        HubWidget::Todos            => " todos ",
+        HubWidget::Readme           => " readme ",
+        HubWidget::Languages        => " languages ",
+        HubWidget::DiskUsage        => " disk usage ",
+        HubWidget::CiStatus         => " ci status ",
+        HubWidget::OpenIssues       => " open issues ",
+        HubWidget::RunningProcesses => " running processes ",
+    }
+}
 
 fn widget_block<'a>(title: &'a str, theme: &Theme, is_focused: bool) -> Block<'a> {
     if is_focused {

@@ -13,6 +13,7 @@ pub const HEIGHT: u16 = 3;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceBarClick {
     Tab(usize),
+    NewWorkspace,
 }
 
 struct TabLayout {
@@ -65,6 +66,7 @@ fn truncate_name(name: &str, max: usize) -> String {
 
 const SEP_WIDTH: u16 = 3; // " · "
 const INDICATOR_WIDTH: u16 = 2; // "◂ " or " ▸"
+const PLUS_RESERVE: u16 = 3; // " + "
 
 fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
     let n = names.len();
@@ -83,13 +85,14 @@ fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
         .map(|name| truncate_name(name, 20).chars().count() as u16 + 2)
         .collect();
 
-    // Check if everything fits without overflow
+    // Check if everything fits without overflow (reserve space for + button)
     let total: u16 = label_widths.iter().sum::<u16>()
         + if n > 1 {
             SEP_WIDTH * (n as u16 - 1)
         } else {
             0
-        };
+        }
+        + PLUS_RESERVE;
 
     if total <= area.width {
         // Everything fits — lay out left-to-right
@@ -125,7 +128,7 @@ fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
         if hi < n - 1 {
             w += INDICATOR_WIDTH;
         }
-        w
+        w + PLUS_RESERVE
     };
 
     let mut lo = active;
@@ -247,6 +250,18 @@ pub fn render(
     if tab_area.width > 0 && tab_area.height > 0 {
         frame.render_widget(Paragraph::new(line), tab_area);
     }
+
+    // Render + button right-aligned directly into the buffer
+    if PLUS_RESERVE <= tab_area.width {
+        let plus_x = tab_area.x + tab_area.width - PLUS_RESERVE;
+        let plus_hovered = matches!(hovered, Some(WorkspaceBarClick::NewWorkspace));
+        let plus_style = if plus_hovered {
+            Style::default().fg(theme.fg)
+        } else {
+            Style::default().fg(theme.accent)
+        };
+        frame.buffer_mut().set_string(plus_x, tab_area.y, " + ", plus_style);
+    }
 }
 
 /// Hit test for the workspace bar area.
@@ -267,6 +282,14 @@ pub fn hit_test(
     }
 
     let layout = compute_layout(workspace_names, active_idx, tab_area);
+
+    // Check + button (right-aligned)
+    if PLUS_RESERVE <= tab_area.width {
+        let plus_x = tab_area.x + tab_area.width - PLUS_RESERVE;
+        if x >= plus_x && x < tab_area.x + tab_area.width {
+            return Some(WorkspaceBarClick::NewWorkspace);
+        }
+    }
 
     // Check tab bodies
     for (i, (start, end)) in layout.tab_ranges.iter().enumerate() {

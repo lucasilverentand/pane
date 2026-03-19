@@ -19,6 +19,8 @@ pub enum WidgetPickerMode {
     SplitHorizontal,
     /// Split the current window down and add a new widget.
     SplitVertical,
+    /// Add a new widget tab to the current window.
+    AddTab,
 }
 
 /// State for the widget picker overlay.
@@ -123,6 +125,7 @@ pub fn render(state: &WidgetPickerState, theme: &Theme, frame: &mut Frame, area:
         WidgetPickerMode::Change => " Change Widget ",
         WidgetPickerMode::SplitHorizontal => " Add Widget to the Right ",
         WidgetPickerMode::SplitVertical => " Add Widget Below ",
+        WidgetPickerMode::AddTab => " Add Widget Tab ",
     };
 
     let item_count = state.items.len() as u16;
