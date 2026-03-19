@@ -285,7 +285,7 @@ const TICKER_PAUSE_SECS: f64 = 2.0;
 
 /// Truncate a title for an inactive tab, adding "…" if it overflows.
 fn truncate_title(title: &str, max: usize) -> String {
-    if title.len() <= max {
+    if title.chars().count() <= max {
         title.to_string()
     } else {
         let mut s: String = title.chars().take(max.saturating_sub(1)).collect();
@@ -296,10 +296,11 @@ fn truncate_title(title: &str, max: usize) -> String {
 
 /// Produce a ticker-scrolling window into a long title.
 fn ticker_title(title: &str, max: usize) -> String {
-    if title.len() <= max {
+    let char_count = title.chars().count();
+    if char_count <= max {
         return title.to_string();
     }
-    let overflow = title.len() - max;
+    let overflow = char_count - max;
     let scroll_duration = overflow as f64 / TICKER_CHARS_PER_SEC;
     let cycle = TICKER_PAUSE_SECS + scroll_duration + TICKER_PAUSE_SECS + scroll_duration;
 
@@ -349,7 +350,7 @@ fn render_tab_bar_from_snapshot(
     let label_widths: Vec<u16> = group
         .tabs
         .iter()
-        .map(|tab| (tab.title.len().min(MAX_TAB_TITLE) as u16) + 2)
+        .map(|tab| (tab.title.chars().count().min(MAX_TAB_TITLE) as u16) + 2)
         .collect();
 
     // Check if everything fits
