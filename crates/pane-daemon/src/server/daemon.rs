@@ -831,11 +831,11 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
     // Check for split border hit (drag initiation)
     {
         let ws = state.active_workspace();
-        if let Some((path, direction)) = ws.layout.hit_test_split_border(body, x, y) {
+        if let Some((path, direction, split_rect)) = ws.layout.hit_test_split_border(body, x, y) {
             state.drag_state = Some(crate::server::state::DragState {
                 split_path: path,
                 direction,
-                body,
+                body: split_rect,
             });
             return;
         }

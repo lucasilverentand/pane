@@ -347,6 +347,9 @@ impl LayoutNode {
 
     /// Resize the split containing `target`. If `axis` is `Some`, only adjust
     /// splits whose direction matches the requested axis.
+    ///
+    /// After adjusting the split ratio, compensates same-direction child splits
+    /// so that only the two panes directly adjacent to the border change size.
     pub fn resize_dir(
         &mut self,
         target: TabId,
@@ -370,23 +373,49 @@ impl LayoutNode {
                 let axis_matches = axis.is_none_or(|a| a == *direction);
 
                 // If the target is directly in this split and axis matches, adjust
-                let is_direct = matches!(first.as_ref(), LayoutNode::Leaf(id) if *id == target)
-                    || matches!(second.as_ref(), LayoutNode::Leaf(id) if *id == target);
+                let is_direct =
+                    matches!(first.as_ref(), LayoutNode::Leaf(id) if *id == target)
+                        || matches!(second.as_ref(), LayoutNode::Leaf(id) if *id == target);
 
                 if is_direct && axis_matches {
+                    let old_ratio = *ratio;
                     let adjusted = if in_first { delta } else { -delta };
                     *ratio = (*ratio + adjusted).clamp(0.1, 0.9);
+                    let new_ratio = *ratio;
+                    let dir = *direction;
+                    compensate_child(first, dir, old_ratio, new_ratio, Side::Second);
+                    compensate_child(
+                        second,
+                        dir,
+                        1.0 - old_ratio,
+                        1.0 - new_ratio,
+                        Side::First,
+                    );
                     return true;
                 }
 
                 // Recurse into the subtree containing the target
-                let child = if in_first { first } else { second };
-                let resized = child.resize_dir(target, delta, axis);
+                let resized = if in_first {
+                    first.resize_dir(target, delta, axis)
+                } else {
+                    second.resize_dir(target, delta, axis)
+                };
 
                 // If recursion didn't find a matching axis, try this split
-                if !resized && axis_matches && (in_first || in_second) {
+                if !resized && axis_matches {
+                    let old_ratio = *ratio;
                     let adjusted = if in_first { delta } else { -delta };
                     *ratio = (*ratio + adjusted).clamp(0.1, 0.9);
+                    let new_ratio = *ratio;
+                    let dir = *direction;
+                    compensate_child(first, dir, old_ratio, new_ratio, Side::Second);
+                    compensate_child(
+                        second,
+                        dir,
+                        1.0 - old_ratio,
+                        1.0 - new_ratio,
+                        Side::First,
+                    );
                     return true;
                 }
 
@@ -554,14 +583,14 @@ impl LayoutNode {
         }
     }
 
-    /// Hit-test split borders. Returns the path to the split node and direction
-    /// if (x, y) is within 1 cell of a split border.
+    /// Hit-test split borders. Returns the path to the split node, direction,
+    /// and the rect of the split node if (x, y) is within 1 cell of a split border.
     pub fn hit_test_split_border(
         &self,
         area: Rect,
         x: u16,
         y: u16,
-    ) -> Option<(Vec<Side>, SplitDirection)> {
+    ) -> Option<(Vec<Side>, SplitDirection, Rect)> {
         self.hit_test_border_inner(area, x, y, &mut Vec::new())
     }
 
@@ -571,7 +600,7 @@ impl LayoutNode {
         x: u16,
         y: u16,
         path: &mut Vec<Side>,
-    ) -> Option<(Vec<Side>, SplitDirection)> {
+    ) -> Option<(Vec<Side>, SplitDirection, Rect)> {
         if let LayoutNode::Split {
             direction,
             ratio,
@@ -601,7 +630,7 @@ impl LayoutNode {
             };
 
             if on_border {
-                return Some((path.clone(), *direction));
+                return Some((path.clone(), *direction, area));
             }
 
             // Recurse into children
@@ -620,12 +649,24 @@ impl LayoutNode {
         None
     }
 
-    /// Set the ratio at a given path through the tree.
+    /// Set the ratio at a given path through the tree, compensating
+    /// same-direction child splits so that only the two panes directly
+    /// adjacent to the moved border change size.
     pub fn set_ratio_at_path(&mut self, path: &[Side], ratio: f64) {
         let ratio = ratio.clamp(0.05, 0.95);
         if path.is_empty() {
-            if let LayoutNode::Split { ratio: r, .. } = self {
+            if let LayoutNode::Split {
+                direction,
+                ratio: r,
+                first,
+                second,
+            } = self
+            {
+                let old = *r;
                 *r = ratio;
+                let dir = *direction;
+                compensate_child(first, dir, old, ratio, Side::Second);
+                compensate_child(second, dir, 1.0 - old, 1.0 - ratio, Side::First);
             }
             return;
         }
@@ -634,6 +675,111 @@ impl LayoutNode {
                 Side::First => first.set_ratio_at_path(&path[1..], ratio),
                 Side::Second => second.set_ratio_at_path(&path[1..], ratio),
             }
+        }
+    }
+
+    /// Compute the rect of the node at a given path through the tree.
+    /// An empty path returns `area` (the rect of the root split itself).
+    pub fn rect_at_path(&self, area: Rect, path: &[Side]) -> Rect {
+        if path.is_empty() {
+            return area;
+        }
+        if let LayoutNode::Split {
+            direction, ratio, first, second, ..
+        } = self
+        {
+            let (first_rect, second_rect) = Self::split_rects(direction, *ratio, area);
+            match path[0] {
+                Side::First => first.rect_at_path(first_rect, &path[1..]),
+                Side::Second => second.rect_at_path(second_rect, &path[1..]),
+            }
+        } else {
+            area
+        }
+    }
+
+    /// Find the path to the split whose border corresponds to the given pane's
+    /// edge. `side == Second` finds the bottom/right border; `side == First`
+    /// finds the top/left border.
+    pub fn find_border_path(
+        &self,
+        target: TabId,
+        axis: SplitDirection,
+        side: Side,
+    ) -> Option<Vec<Side>> {
+        self.find_border_inner(target, axis, side, &mut Vec::new())
+    }
+
+    fn find_border_inner(
+        &self,
+        target: TabId,
+        axis: SplitDirection,
+        side: Side,
+        path: &mut Vec<Side>,
+    ) -> Option<Vec<Side>> {
+        if let LayoutNode::Split {
+            direction,
+            first,
+            second,
+            ..
+        } = self
+        {
+            let in_first = first.contains(target);
+            let in_second = second.contains(target);
+            if !(in_first || in_second) {
+                return None;
+            }
+
+            // This split's border is a candidate if the axis matches and the
+            // target is on the correct side.
+            let is_candidate = *direction == axis
+                && match side {
+                    Side::Second => in_first, // border is below/right of target
+                    Side::First => in_second, // border is above/left of target
+                };
+
+            // Recurse deeper to find a closer border.
+            if in_first {
+                path.push(Side::First);
+                if let Some(result) = first.find_border_inner(target, axis, side, path) {
+                    return Some(result);
+                }
+                path.pop();
+            } else {
+                path.push(Side::Second);
+                if let Some(result) = second.find_border_inner(target, axis, side, path) {
+                    return Some(result);
+                }
+                path.pop();
+            }
+
+            // Deeper recursion failed — use this split if it's a candidate.
+            if is_candidate {
+                return Some(path.clone());
+            }
+        }
+        None
+    }
+
+    /// Get the ratio of the split at the given path.
+    pub fn ratio_at_path(&self, path: &[Side]) -> Option<f64> {
+        match self {
+            LayoutNode::Split {
+                ratio,
+                first,
+                second,
+                ..
+            } => {
+                if path.is_empty() {
+                    Some(*ratio)
+                } else {
+                    match path[0] {
+                        Side::First => first.ratio_at_path(&path[1..]),
+                        Side::Second => second.ratio_at_path(&path[1..]),
+                    }
+                }
+            }
+            LayoutNode::Leaf(_) => None,
         }
     }
 
@@ -700,6 +846,63 @@ impl LayoutNode {
             LayoutNode::Leaf(_) => 1,
             LayoutNode::Split { first, second, .. } => {
                 1 + first.depth().max(second.depth())
+            }
+        }
+    }
+}
+
+/// After a parent split's ratio changed, adjust a same-direction child split
+/// so that panes far from the moved border keep their absolute size.
+///
+/// `old_space` / `new_space`: the child's proportional share before/after.
+/// `border_side`: which side of this child is adjacent to the moved border.
+///   - `Side::Second` → border is below/right of this child; preserve the
+///     first sub-child (far from border).
+///   - `Side::First` → border is above/left of this child; preserve the
+///     second sub-child (far from border).
+fn compensate_child(
+    node: &mut LayoutNode,
+    parent_direction: SplitDirection,
+    old_space: f64,
+    new_space: f64,
+    border_side: Side,
+) {
+    if let LayoutNode::Split {
+        direction,
+        ratio,
+        first,
+        second,
+    } = node
+    {
+        if *direction != parent_direction {
+            return;
+        }
+        if (new_space - old_space).abs() < 1e-9 || new_space < 1e-9 {
+            return;
+        }
+
+        let old_ratio = *ratio;
+        match border_side {
+            Side::Second => {
+                // Border is on the second-child side of this node.
+                // Preserve first sub-child's absolute size.
+                let new_r = (old_space * old_ratio) / new_space;
+                *ratio = new_r.clamp(0.05, 0.95);
+                // Recurse into second sub-child (near the border).
+                let second_old = old_space * (1.0 - old_ratio);
+                let second_new = new_space * (1.0 - *ratio);
+                compensate_child(second, parent_direction, second_old, second_new, Side::Second);
+            }
+            Side::First => {
+                // Border is on the first-child side of this node.
+                // Preserve second sub-child's absolute size.
+                let old_second = old_space * (1.0 - old_ratio);
+                let new_r = 1.0 - old_second / new_space;
+                *ratio = new_r.clamp(0.05, 0.95);
+                // Recurse into first sub-child (near the border).
+                let first_old = old_space * old_ratio;
+                let first_new = new_space * *ratio;
+                compensate_child(first, parent_direction, first_old, first_new, Side::First);
             }
         }
     }
@@ -2163,6 +2366,155 @@ mod tests {
         assert!(!result);
     }
 
+    // --- compensation tests ---
+
+    /// Build 3 vertical panes: Split(V) → [Split(V) → [A, B], C]
+    /// This mimics splitting twice: start with one pane, split vertically,
+    /// then split the first pane again.
+    fn build_3_vertical() -> (LayoutNode, TabId, TabId, TabId) {
+        let a = TabId::new_v4();
+        let b = TabId::new_v4();
+        let c = TabId::new_v4();
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Vertical,
+            ratio: 2.0 / 3.0,
+            first: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(a)),
+                second: Box::new(LayoutNode::Leaf(b)),
+            }),
+            second: Box::new(LayoutNode::Leaf(c)),
+        };
+        (node, a, b, c)
+    }
+
+    #[test]
+    fn test_set_ratio_compensates_3_vertical_panes() {
+        let (mut node, a, _b, _c) = build_3_vertical();
+        // Use a large area to minimize integer rounding effects
+        let area = Rect::new(0, 0, 100, 3000);
+
+        let before = node.resolve(area);
+        let a_before = before.iter().find(|(id, _)| *id == a).unwrap().1.height;
+
+        // Drag outer border (between B and C) downward: increase outer ratio.
+        node.set_ratio_at_path(&[], 0.8);
+
+        let after = node.resolve(area);
+        let a_after = after.iter().find(|(id, _)| *id == a).unwrap().1.height;
+        // Allow small rounding tolerance (split_rects truncates to integer %)
+        let tolerance = (area.height as f64 * 0.01) as u32; // 1% of total
+        assert!(
+            (a_after as i32 - a_before as i32).unsigned_abs() <= tolerance,
+            "A should keep its size (got {} vs {}, tolerance {})",
+            a_after,
+            a_before,
+            tolerance,
+        );
+    }
+
+    #[test]
+    fn test_find_border_path_bottom_of_b() {
+        let (node, _a, b, _c) = build_3_vertical();
+        // B's bottom border should be the outer split (path [])
+        let path = node.find_border_path(b, SplitDirection::Vertical, Side::Second);
+        assert_eq!(path, Some(vec![]), "B's bottom border is the outer split");
+    }
+
+    #[test]
+    fn test_find_border_path_top_of_b() {
+        let (node, _a, b, _c) = build_3_vertical();
+        // B's top border should be the inner split (path [First])
+        let path = node.find_border_path(b, SplitDirection::Vertical, Side::First);
+        assert_eq!(
+            path,
+            Some(vec![Side::First]),
+            "B's top border is the inner split"
+        );
+    }
+
+    #[test]
+    fn test_find_border_path_bottom_of_a() {
+        let (node, a, _b, _c) = build_3_vertical();
+        // A's bottom border should be the inner split (path [First])
+        let path = node.find_border_path(a, SplitDirection::Vertical, Side::Second);
+        assert_eq!(
+            path,
+            Some(vec![Side::First]),
+            "A's bottom border is the inner split"
+        );
+    }
+
+    #[test]
+    fn test_find_border_path_top_of_c() {
+        let (node, _a, _b, c) = build_3_vertical();
+        // C's top border should be the outer split (path [])
+        let path = node.find_border_path(c, SplitDirection::Vertical, Side::First);
+        assert_eq!(path, Some(vec![]), "C's top border is the outer split");
+    }
+
+    #[test]
+    fn test_find_border_path_no_top_for_a() {
+        let (node, a, _b, _c) = build_3_vertical();
+        // A has no top border (it's at the edge of the layout)
+        let path = node.find_border_path(a, SplitDirection::Vertical, Side::First);
+        assert_eq!(path, None, "A has no top border");
+    }
+
+    #[test]
+    fn test_compensate_4_vertical_panes() {
+        // Split(V) → [Split(V) → [A, B], Split(V) → [C, D]]
+        let a = TabId::new_v4();
+        let b = TabId::new_v4();
+        let c = TabId::new_v4();
+        let d = TabId::new_v4();
+        let mut node = LayoutNode::Split {
+            direction: SplitDirection::Vertical,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(a)),
+                second: Box::new(LayoutNode::Leaf(b)),
+            }),
+            second: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(c)),
+                second: Box::new(LayoutNode::Leaf(d)),
+            }),
+        };
+
+        let area = Rect::new(0, 0, 100, 4000);
+        let before = node.resolve(area);
+        let a_h = before.iter().find(|(id, _)| *id == a).unwrap().1.height;
+        let d_h = before.iter().find(|(id, _)| *id == d).unwrap().1.height;
+
+        // Drag outer border (between B and C) downward
+        node.set_ratio_at_path(&[], 0.6);
+
+        let after = node.resolve(area);
+        let a_h2 = after.iter().find(|(id, _)| *id == a).unwrap().1.height;
+        let d_h2 = after.iter().find(|(id, _)| *id == d).unwrap().1.height;
+
+        let tolerance = (area.height as f64 * 0.01) as u32;
+        assert!(
+            (a_h2 as i32 - a_h as i32).unsigned_abs() <= tolerance,
+            "A should keep its size (got {} vs {}, tolerance {})",
+            a_h2,
+            a_h,
+            tolerance,
+        );
+        assert!(
+            (d_h2 as i32 - d_h as i32).unsigned_abs() <= tolerance,
+            "D should keep its size (got {} vs {}, tolerance {})",
+            d_h2,
+            d_h,
+            tolerance,
+        );
+    }
+
     // --- sanitize ---
 
     #[test]
@@ -2264,9 +2616,10 @@ mod tests {
         // The border should be around x=50
         let hit = node.hit_test_split_border(area, 50, 25);
         assert!(hit.is_some());
-        let (path, dir) = hit.unwrap();
+        let (path, dir, rect) = hit.unwrap();
         assert!(path.is_empty()); // Root split
         assert_eq!(dir, SplitDirection::Horizontal);
+        assert_eq!(rect, area); // Root split rect equals full area
     }
 
     #[test]

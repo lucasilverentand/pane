@@ -88,7 +88,8 @@ struct SidebarDragState {
 struct HomeWidgetDragState {
     split_path: Vec<Side>,
     direction: SplitDirection,
-    layout_body: Rect,
+    /// Rect of the split node being dragged (not the entire layout body).
+    split_rect: Rect,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -120,6 +121,19 @@ pub struct NewWorkspaceInputState {
     last_click: Option<(usize, std::time::Instant)>,
 }
 
+impl NewWorkspaceInputState {
+    /// Create for testing — no filesystem side effects.
+    #[cfg(test)]
+    pub fn for_test(stage: NewWorkspaceStage) -> Self {
+        Self {
+            stage,
+            name: String::new(),
+            browser: DirBrowser::for_test(),
+            last_click: None,
+        }
+    }
+}
+
 pub struct DirBrowser {
     pub current_dir: std::path::PathBuf,
     /// All directory entries in current_dir.
@@ -143,6 +157,22 @@ pub struct DirEntry {
 }
 
 impl DirBrowser {
+    /// Create a `DirBrowser` for testing — no filesystem scanning.
+    #[cfg(test)]
+    pub fn for_test() -> Self {
+        Self {
+            current_dir: std::path::PathBuf::from("/tmp"),
+            all_entries: Vec::new(),
+            filtered: Vec::new(),
+            input: String::new(),
+            selected: 0,
+            scroll_offset: 0,
+            has_zoxide: false,
+            search_mode: false,
+            zoxide_results: Vec::new(),
+        }
+    }
+
     pub fn new(path: std::path::PathBuf) -> Self {
         let has_zoxide = std::process::Command::new("sh")
             .args(["-c", "command -v zoxide >/dev/null 2>&1"])
@@ -607,6 +637,25 @@ impl ProjectHubState {
         };
         state.ensure_git_info();
         state
+    }
+
+    /// Create a `ProjectHubState` for testing — no filesystem scanning.
+    #[cfg(test)]
+    pub fn for_test() -> Self {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        ProjectHubState {
+            all_projects: Vec::new(),
+            filtered: Vec::new(),
+            input: String::new(),
+            selected: 0,
+            scroll_offset: 0,
+            git_cache: HashMap::new(),
+            last_git_fetch: None,
+            last_click: None,
+            focused_widget: None,
+            widget_interact: HashMap::new(),
+            event_tx: tx,
+        }
     }
 
     pub fn update_filter(&mut self) {
@@ -1225,6 +1274,48 @@ impl Client {
             copy_mode_state: None,
             system_programs: crate::ui::tab_picker::scan_system_programs(),
             favorites: crate::ui::tab_picker::load_favorites(),
+            tab_picker_state: None,
+            context_menu_state: None,
+            pending_confirm_action: None,
+            confirm_message: None,
+            resize_state: None,
+            focus_location: FocusLocation::WindowLayout,
+            focus_stack: Vec::new(),
+            hover: None,
+            should_quit: false,
+            needs_redraw: true,
+            rename_input: String::new(),
+            rename_target: RenameTarget::Window,
+            new_workspace_input: None,
+            project_hub_state: None,
+            sidebar_width: None,
+            sidebar_drag: None,
+            home_widget_drag: None,
+            widget_picker_state: None,
+            event_tx: None,
+        }
+    }
+
+    /// Create a `Client` for snapshot/render testing — no filesystem side effects.
+    #[cfg(test)]
+    pub fn for_test(config: Config) -> Self {
+        Self {
+            mode: Mode::Normal,
+            render_state: RenderState {
+                workspaces: Vec::new(),
+                active_workspace: 0,
+            },
+            screens: HashMap::new(),
+            system_stats: SystemStats::default(),
+            config,
+            client_count: 1,
+            plugin_segments: Vec::new(),
+
+            leader_state: None,
+            palette_state: None,
+            copy_mode_state: None,
+            system_programs: Vec::new(),
+            favorites: HashSet::new(),
             tab_picker_state: None,
             context_menu_state: None,
             pending_confirm_action: None,
@@ -1890,13 +1981,13 @@ impl Client {
                                 body.height,
                             );
                             if let Some(ws) = self.active_workspace() {
-                                if let Some((path, direction)) =
+                                if let Some((path, direction, split_rect)) =
                                     ws.layout.hit_test_split_border(layout_body, x, y)
                                 {
                                     self.home_widget_drag = Some(HomeWidgetDragState {
                                         split_path: path,
                                         direction,
-                                        layout_body,
+                                        split_rect,
                                     });
                                     return Ok(());
                                 }
@@ -2050,16 +2141,18 @@ impl Client {
                     ));
                     self.needs_redraw = true;
                 } else if let Some(ref drag) = self.home_widget_drag {
-                    // Compute new ratio based on cursor position within layout_body
-                    let lb = drag.layout_body;
+                    // Compute new ratio relative to the split node's own rect,
+                    // not the entire layout body. This ensures dragging a nested
+                    // split border only moves that border without affecting others.
+                    let sr = drag.split_rect;
                     let new_ratio = match drag.direction {
                         SplitDirection::Horizontal => {
-                            let clamped = x.clamp(lb.x, lb.x + lb.width);
-                            (clamped - lb.x) as f64 / lb.width.max(1) as f64
+                            let clamped = x.clamp(sr.x, sr.x + sr.width);
+                            (clamped - sr.x) as f64 / sr.width.max(1) as f64
                         }
                         SplitDirection::Vertical => {
-                            let clamped = y.clamp(lb.y, lb.y + lb.height);
-                            (clamped - lb.y) as f64 / lb.height.max(1) as f64
+                            let clamped = y.clamp(sr.y, sr.y + sr.height);
+                            (clamped - sr.y) as f64 / sr.height.max(1) as f64
                         }
                     };
                     let path = drag.split_path.clone();
@@ -3145,33 +3238,71 @@ impl Client {
             KeyCode::Char(c @ ('h' | 'j' | 'k' | 'l')) => {
                 if let Some(selected) = state.selected {
                     // Border already selected → h/l or j/k move it.
-                    // -R = grow active pane, -L = shrink. For the Left border,
-                    // pressing 'h' (push border left) grows the pane, so invert.
-                    let cmd = match selected {
+                    // Determine which border and which direction to push it.
+                    use pane_protocol::layout::{SplitDirection, Side};
+                    let (axis, border_side, delta) = match selected {
                         ResizeBorder::Right => match c {
-                            'l' => "resize-pane -R",
-                            'h' => "resize-pane -L",
+                            'l' => (SplitDirection::Horizontal, Side::Second, 0.05),
+                            'h' => (SplitDirection::Horizontal, Side::Second, -0.05),
                             _ => return Ok(()),
                         },
                         ResizeBorder::Left => match c {
-                            'h' => "resize-pane -R",
-                            'l' => "resize-pane -L",
+                            'h' => (SplitDirection::Horizontal, Side::First, -0.05),
+                            'l' => (SplitDirection::Horizontal, Side::First, 0.05),
                             _ => return Ok(()),
                         },
                         ResizeBorder::Bottom => match c {
-                            'j' => "resize-pane -D",
-                            'k' => "resize-pane -U",
+                            'j' => (SplitDirection::Vertical, Side::Second, 0.05),
+                            'k' => (SplitDirection::Vertical, Side::Second, -0.05),
                             _ => return Ok(()),
                         },
                         ResizeBorder::Top => match c {
-                            'k' => "resize-pane -D",
-                            'j' => "resize-pane -U",
+                            'k' => (SplitDirection::Vertical, Side::First, -0.05),
+                            'j' => (SplitDirection::Vertical, Side::First, 0.05),
                             _ => return Ok(()),
                         },
                     };
-                    let mut w = writer.lock().await;
-                    let _ =
-                        send_request(&mut w, &ClientRequest::Command(cmd.to_string())).await;
+
+                    // Find the correct split border for the active pane.
+                    if let Some(ws) = self.active_workspace() {
+                        let active = ws.active_group;
+                        if let Some(path) = ws.layout.find_border_path(active, axis, border_side) {
+                            if let Some(old_ratio) = ws.layout.ratio_at_path(&path) {
+                                // When target is in the second child of the split,
+                                // flip the delta so positive = push border away.
+                                let adjusted = if border_side == Side::First {
+                                    -delta
+                                } else {
+                                    delta
+                                };
+                                let new_ratio = (old_ratio + adjusted).clamp(0.05, 0.95);
+                                // Encode path as "0,1" (0=First, 1=Second)
+                                let path_str: String = path
+                                    .iter()
+                                    .map(|s| match s {
+                                        Side::First => "0",
+                                        Side::Second => "1",
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(",");
+                                let path_arg = if path_str.is_empty() {
+                                    "root".to_string()
+                                } else {
+                                    path_str
+                                };
+                                let cmd = format!(
+                                    "set-split-ratio {} {:.6}",
+                                    path_arg, new_ratio
+                                );
+                                let mut w = writer.lock().await;
+                                let _ = send_request(
+                                    &mut w,
+                                    &ClientRequest::Command(cmd),
+                                )
+                                .await;
+                            }
+                        }
+                    }
                 } else {
                     // No border selected yet → select this one
                     state.selected = Some(match c {
