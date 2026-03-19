@@ -51,11 +51,16 @@ fn padded_tab_area(area: Rect) -> Rect {
 }
 
 fn truncate_name(name: &str, max: usize) -> String {
-    if name.len() <= max {
-        name.to_string()
-    } else {
-        format!("{}...", &name[..max - 3])
+    let count = name.chars().count();
+    if count <= max {
+        return name.to_string();
     }
+    if max < 4 {
+        return name.chars().take(max).collect();
+    }
+    let mut s: String = name.chars().take(max - 3).collect();
+    s.push_str("...");
+    s
 }
 
 const SEP_WIDTH: u16 = 3; // " · "
@@ -75,7 +80,7 @@ fn compute_layout(names: &[&str], active_idx: usize, area: Rect) -> TabLayout {
     // Compute label widths
     let label_widths: Vec<u16> = names
         .iter()
-        .map(|name| truncate_name(name, 20).len() as u16 + 2)
+        .map(|name| truncate_name(name, 20).chars().count() as u16 + 2)
         .collect();
 
     // Check if everything fits without overflow
@@ -615,8 +620,9 @@ mod tests {
 
     #[test]
     fn test_truncate_name_max_3() {
+        // max < 4: truncate without ellipsis
         let result = truncate_name("abcdef", 3);
-        assert_eq!(result, "...");
+        assert_eq!(result, "abc");
     }
 
     #[test]
@@ -644,5 +650,52 @@ mod tests {
         let area = Rect::new(0, 0, 3, 3);
         let result = padded_tab_area(area);
         assert!(result.width == 0 || result.width <= 1);
+    }
+
+    #[test]
+    fn test_truncate_name_emoji() {
+        // Each emoji is 1 char but multi-byte in UTF-8
+        let name = "🔥🔥🔥🔥🔥🔥";
+        assert_eq!(truncate_name(name, 6), "🔥🔥🔥🔥🔥🔥");
+        assert_eq!(truncate_name(name, 5), "🔥🔥...");
+        assert_eq!(truncate_name(name, 4), "🔥...");
+    }
+
+    #[test]
+    fn test_truncate_name_cjk() {
+        let name = "日本語のワークスペース";
+        // 11 chars
+        assert_eq!(truncate_name(name, 11), name);
+        let result = truncate_name(name, 8);
+        assert_eq!(result, "日本語のワ...");
+        assert_eq!(result.chars().count(), 8);
+    }
+
+    #[test]
+    fn test_truncate_name_max_less_than_3() {
+        assert_eq!(truncate_name("hello", 2), "he");
+        assert_eq!(truncate_name("hello", 1), "h");
+    }
+
+    #[test]
+    fn test_truncate_name_max_zero() {
+        assert_eq!(truncate_name("hello", 0), "");
+        assert_eq!(truncate_name("", 0), "");
+    }
+
+    #[test]
+    fn test_truncate_name_ascii_exact() {
+        assert_eq!(truncate_name("abcde", 5), "abcde");
+        assert_eq!(truncate_name("abcdef", 5), "ab...");
+    }
+
+    #[test]
+    fn test_truncate_name_mixed_multibyte() {
+        let name = "a🔥b🔥c🔥d";
+        // 7 chars
+        assert_eq!(truncate_name(name, 7), name);
+        let result = truncate_name(name, 6);
+        assert_eq!(result.chars().count(), 6);
+        assert_eq!(result, "a🔥b...");
     }
 }

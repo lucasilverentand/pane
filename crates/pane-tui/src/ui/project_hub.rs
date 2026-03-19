@@ -383,8 +383,9 @@ fn render_sidebar(
 
             let prefix = if is_selected { " > " } else { "   " };
             let name_part = format!("{}{}", prefix, project.name);
-            let display = if name_part.len() > max_w {
-                format!("{}…", &name_part[..max_w - 1])
+            let display = if name_part.chars().count() > max_w {
+                let truncated: String = name_part.chars().take(max_w - 1).collect();
+                format!("{}…", truncated)
             } else {
                 name_part
             };
@@ -736,12 +737,13 @@ fn render_widget_recent_commits(
         let suffix = format!("{}  {}", commit.author, commit.age);
         let suffix_w = suffix.len() + 2;
         let msg_max = max_w.saturating_sub(hash_w + suffix_w + 2);
-        let msg = if commit.message.len() > msg_max {
-            format!("{}…", &commit.message[..msg_max.saturating_sub(1)])
+        let msg = if commit.message.chars().count() > msg_max {
+            let truncated: String = commit.message.chars().take(msg_max.saturating_sub(1)).collect();
+            format!("{}…", truncated)
         } else {
             commit.message.clone()
         };
-        let msg_pad = msg_max.saturating_sub(msg.len());
+        let msg_pad = msg_max.saturating_sub(msg.chars().count());
 
         let line = Line::from(vec![
             Span::raw(pad),
@@ -824,10 +826,14 @@ fn render_widget_changed_files(
             _ => Color::Yellow,
         };
 
-        let file_display = if file.len() + 5 > max_w {
-            format!("…{}", &file[file.len() + 6 - max_w..])
-        } else {
-            file.to_string()
+        let file_display = {
+            let chars: Vec<char> = file.chars().collect();
+            if chars.len() + 5 > max_w {
+                let skip = chars.len() + 6 - max_w;
+                format!("…{}", chars[skip..].iter().collect::<String>())
+            } else {
+                file.to_string()
+            }
         };
 
         let line = Line::from(vec![
@@ -1051,11 +1057,7 @@ fn render_widget_git_graph(
         let is_selected = item_idx == selected;
         let mut spans: Vec<Span> = Vec::new();
         spans.push(Span::raw(" "));
-        let display = if gline.len() > max_w.saturating_sub(1) {
-            &gline[..max_w.saturating_sub(1)]
-        } else {
-            gline.as_str()
-        };
+        let display: String = gline.chars().take(max_w.saturating_sub(1)).collect();
         for ch in display.chars() {
             match ch {
                 '*' | '|' | '/' | '\\' | '_' => {
@@ -1182,10 +1184,14 @@ fn render_widget_todos(
         };
         let max_w = inner.width as usize;
         let loc = format!("{}:{}", todo.file, todo.line_num);
-        let loc_display = if loc.len() > max_w / 3 {
-            format!("…{}", &loc[loc.len().saturating_sub(max_w / 3)..])
-        } else {
-            loc
+        let loc_display = {
+            let loc_chars: Vec<char> = loc.chars().collect();
+            if loc_chars.len() > max_w / 3 {
+                let skip = loc_chars.len().saturating_sub(max_w / 3);
+                format!("…{}", loc_chars[skip..].iter().collect::<String>())
+            } else {
+                loc
+            }
         };
         let line = Line::from(vec![
             Span::raw(pad),
