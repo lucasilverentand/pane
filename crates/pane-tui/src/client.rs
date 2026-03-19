@@ -1630,6 +1630,65 @@ impl Client {
                         self.tab_picker_state = None;
                         self.mode = Mode::Normal;
                     }
+                } else if self.mode == Mode::WidgetPicker {
+                    let full_area = {
+                        let size = tui.size()?;
+                        Rect::new(0, 0, size.width, size.height)
+                    };
+                    if let Some(ref mut wp) = self.widget_picker_state {
+                        if crate::ui::widget_picker::is_inside_popup(wp, full_area, x, y) {
+                            if let Some(idx) = crate::ui::widget_picker::hit_test(wp, full_area, x, y) {
+                                wp.selected = idx;
+                                // Confirm the clicked selection
+                                let wp = self.widget_picker_state.take().unwrap();
+                                self.pop_focus();
+                                self.mode = Mode::Normal;
+                                let widget_name = wp.selected_widget().map(|w| w.as_str().to_string());
+                                if let Some(name) = widget_name {
+                                    let mut w = writer.lock().await;
+                                    match wp.mode {
+                                        WidgetPickerMode::Change => {
+                                            let _ = send_request(
+                                                &mut w,
+                                                &ClientRequest::Command(format!("set-widget {}", name)),
+                                            )
+                                            .await;
+                                        }
+                                        WidgetPickerMode::SplitHorizontal => {
+                                            let _ = send_request(
+                                                &mut w,
+                                                &ClientRequest::Command("split-window -h".to_string()),
+                                            )
+                                            .await;
+                                            let _ = send_request(
+                                                &mut w,
+                                                &ClientRequest::Command(format!("set-widget {}", name)),
+                                            )
+                                            .await;
+                                        }
+                                        WidgetPickerMode::SplitVertical => {
+                                            let _ = send_request(
+                                                &mut w,
+                                                &ClientRequest::Command("split-window -v".to_string()),
+                                            )
+                                            .await;
+                                            let _ = send_request(
+                                                &mut w,
+                                                &ClientRequest::Command(format!("set-widget {}", name)),
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                }
+                            }
+                            // Click inside popup but not on an item — keep picker open
+                        } else {
+                            // Click outside popup — dismiss
+                            self.widget_picker_state = None;
+                            self.pop_focus();
+                            self.mode = Mode::Normal;
+                        }
+                    }
                 } else if self.mode == Mode::NewWorkspaceInput {
                     let size = tui.size()?;
                     let area = Rect::new(0, 0, size.width, size.height);
@@ -3347,6 +3406,16 @@ impl Client {
             KeyCode::Down | KeyCode::Char('j') => {
                 if let Some(ref mut wp) = self.widget_picker_state {
                     wp.move_down();
+                }
+            }
+            KeyCode::Home => {
+                if let Some(ref mut wp) = self.widget_picker_state {
+                    wp.move_home();
+                }
+            }
+            KeyCode::End => {
+                if let Some(ref mut wp) = self.widget_picker_state {
+                    wp.move_end();
                 }
             }
             KeyCode::Enter => {
