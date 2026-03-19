@@ -299,13 +299,13 @@ fn render_sidebar(
     let has_filter = !state.input.is_empty();
     let input_line = if has_filter {
         Line::from(vec![
-            Span::styled(" > ", Style::default().fg(theme.accent)),
-            Span::styled(&state.input, Style::default().fg(Color::White)),
-            Span::styled("_", Style::default().fg(Color::DarkGray)),
+            Span::styled("  ", Style::default()),
+            Span::styled(&state.input, Style::default().fg(theme.fg)),
+            Span::styled("_", Style::default().fg(theme.dim)),
         ])
     } else {
         Line::from(vec![
-            Span::styled(" > ", Style::default().fg(theme.accent)),
+            Span::styled("  ", Style::default()),
             Span::styled("search…", Style::default().fg(theme.dim)),
         ])
     };
@@ -316,13 +316,10 @@ fn render_sidebar(
     row += 1;
 
     // Separator
-    let sep_line = "─".repeat(inner.width as usize);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            sep_line,
-            Style::default().fg(theme.dim),
-        ))),
+    crate::ui::dialog::render_separator(
+        frame,
         Rect::new(inner.x, row, inner.width, 1),
+        theme,
     );
     row += 1;
 
@@ -378,8 +375,7 @@ fn render_sidebar(
                 })
                 .unwrap_or(false);
 
-            let prefix = if is_selected { " > " } else { "   " };
-            let name_part = format!("{}{}", prefix, project.name);
+            let name_part = format!("  {}", project.name);
             let display = if name_part.chars().count() > max_w {
                 let truncated: String = name_part.chars().take(max_w - 1).collect();
                 format!("{}…", truncated)
@@ -387,8 +383,10 @@ fn render_sidebar(
                 name_part
             };
 
-            let style = if is_selected || is_hovered {
+            let style = if is_selected {
                 selected_style
+            } else if is_hovered {
+                Style::default().fg(theme.accent)
             } else {
                 name_style
             };

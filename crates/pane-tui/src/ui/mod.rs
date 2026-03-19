@@ -1,14 +1,32 @@
+#[cfg(test)]
+mod snapshot_tests;
+#[cfg(test)]
+mod tests_context_menu;
 pub mod context_menu;
+#[cfg(test)]
+mod tests_dialog;
 pub mod dialog;
 #[allow(dead_code)]
 pub mod format;
+#[cfg(test)]
+mod tests_resize;
 pub mod layout_render;
+#[cfg(test)]
+mod tests_palette;
 pub mod palette;
 pub mod project_hub;
+#[cfg(test)]
+mod tests_status_bar;
 pub mod status_bar;
+#[cfg(test)]
+mod tests_tab_picker;
 pub mod tab_picker;
 pub mod widget_picker;
+#[cfg(test)]
+mod tests_window_view;
 pub mod window_view;
+#[cfg(test)]
+mod tests_workspace_bar;
 pub mod workspace_bar;
 
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -156,7 +174,14 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
             for rp in &resolved {
                 if let pane_protocol::layout::ResolvedPane::Visible { id: group_id, rect } = rp {
                     if let Some(group) = ws.groups.iter().find(|g| g.id == *group_id) {
-                        let is_active = *group_id == ws.active_group && !ws_bar_focused;
+                        // On the home workspace, only the focused widget window
+                        // is active. When the sidebar has focus
+                        // (focused_widget == None), no window should appear active.
+                        let is_active = if let Some(hub) = hub_state_ref {
+                            hub.focused_widget == Some(*group_id) && !ws_bar_focused
+                        } else {
+                            *group_id == ws.active_group && !ws_bar_focused
+                        };
                         let pane = group.tabs.get(group.active_tab);
                         let screen = pane.and_then(|p| client.pane_screen(p.id));
                         window_view::render_group_from_snapshot(
@@ -186,7 +211,11 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                     if rect.width == 0 || rect.height == 0 {
                         continue;
                     }
-                    let is_active = *group_id == ws.active_group && !ws_bar_focused;
+                    let is_active = if hub_state_ref.is_some() {
+                        false // Fold bars on home are never "active"
+                    } else {
+                        *group_id == ws.active_group && !ws_bar_focused
+                    };
                     window_view::render_folded(is_active, *direction, theme, frame, *rect);
                 }
             }
@@ -227,7 +256,11 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
         // Render floating windows on top of tiled layout
         for fw in &ws.floating_windows {
             if let Some(group) = ws.groups.iter().find(|g| g.id == fw.id) {
-                let is_active = fw.id == ws.active_group && !ws_bar_focused;
+                let is_active = if let Some(hub) = hub_state_ref {
+                    hub.focused_widget == Some(fw.id) && !ws_bar_focused
+                } else {
+                    fw.id == ws.active_group && !ws_bar_focused
+                };
                 let pane = group.tabs.get(group.active_tab);
                 let screen = pane.and_then(|p| client.pane_screen(p.id));
                 let fw_rect = ratatui::layout::Rect::new(fw.x, fw.y, fw.width, fw.height);
@@ -318,7 +351,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
         Mode::WidgetPicker => {
             if let Some(ref wp_state) = client.widget_picker_state {
                 dialog::dim_background(frame, frame.area());
-                widget_picker::render(wp_state, theme, frame, frame.area());
+                widget_picker::render(wp_state, theme, client.hover, frame, frame.area());
             }
         }
         Mode::Resize => {
@@ -417,7 +450,7 @@ fn render_rename_dialog(
     area: ratatui::layout::Rect,
 ) {
     use ratatui::{
-        style::{Color, Style},
+        style::Style,
         text::{Line, Span},
         widgets::Paragraph,
     };
@@ -440,11 +473,9 @@ fn render_rename_dialog(
 
     if inner.height >= 1 {
         let input_line = Line::from(vec![
-            Span::raw(" "),
-            Span::styled(
-                format!("{}_", client.rename_input),
-                Style::default().fg(Color::White),
-            ),
+            Span::raw("  "),
+            Span::styled(&client.rename_input, Style::default().fg(theme.fg)),
+            Span::styled("_", Style::default().fg(theme.dim)),
         ]);
         frame.render_widget(
             Paragraph::new(input_line),
@@ -485,7 +516,7 @@ fn render_new_workspace_dir_stage(
     area: ratatui::layout::Rect,
 ) {
     use ratatui::{
-        style::{Color, Modifier, Style},
+        style::{Modifier, Style},
         text::{Line, Span},
         widgets::Paragraph,
     };
@@ -533,8 +564,8 @@ fn render_new_workspace_dir_stage(
         if has_filter {
             Line::from(vec![
                 Span::styled(" > ", Style::default().fg(theme.accent)),
-                Span::styled(display, Style::default().fg(Color::White)),
-                Span::styled("_", Style::default().fg(Color::DarkGray)),
+                Span::styled(display, Style::default().fg(theme.fg)),
+                Span::styled("_", Style::default().fg(theme.dim)),
             ])
         } else {
             Line::from(vec![
@@ -562,10 +593,10 @@ fn render_new_workspace_dir_stage(
                     Style::default().fg(theme.dim)
                 },
             ),
-            Span::styled(display, Style::default().fg(Color::White)),
+            Span::styled(display, Style::default().fg(theme.fg)),
         ];
         if has_filter {
-            spans.push(Span::styled("_", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled("_", Style::default().fg(theme.dim)));
         } else {
             spans.push(Span::styled(" →", Style::default().fg(theme.accent)));
         }
@@ -581,6 +612,7 @@ fn render_new_workspace_dir_stage(
     dialog::render_separator(
         frame,
         ratatui::layout::Rect::new(inner.x, row, inner.width, 1),
+        theme,
     );
     row += 1;
 
@@ -647,9 +679,8 @@ fn render_new_workspace_dir_stage(
                 if visual_row >= scroll + list_height { break; }
                 if visual_row >= scroll {
                     let is_selected = zi == selected;
-                    let prefix = if is_selected { " > " } else { "   " };
                     let short = shorten_path(zpath);
-                    let display = format!("{}{}", prefix, short);
+                    let display = format!("  {}", short);
                     let display = if display.len() > max_w {
                         format!("{}…", &display[..max_w - 1])
                     } else {
@@ -671,8 +702,7 @@ fn render_new_workspace_dir_stage(
                 if visual_row >= scroll + list_height { break; }
                 if visual_row >= scroll {
                     let is_selected = i == selected;
-                    let prefix = if is_selected { " > " } else { "   " };
-                    let display = format!("{}{}/", prefix, entry.name);
+                    let display = format!("  {}/", entry.name);
                     let display = if display.len() > max_w {
                         format!("{}…", &display[..max_w - 1])
                     } else {
@@ -696,6 +726,7 @@ fn render_new_workspace_dir_stage(
     dialog::render_separator(
         frame,
         ratatui::layout::Rect::new(inner.x, hint_y, inner.width, 1),
+        theme,
     );
     let hint_line = if search_mode {
         Line::from(vec![

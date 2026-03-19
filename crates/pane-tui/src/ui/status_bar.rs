@@ -1,6 +1,6 @@
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -198,13 +198,13 @@ fn render_button_bar(
     area: Rect,
 ) {
     let key_style = Style::default()
-        .fg(Color::Black)
+        .fg(theme.bg)
         .bg(theme.accent)
         .add_modifier(Modifier::BOLD);
     let label_style = Style::default().fg(theme.dim);
     let sep_style = Style::default().fg(theme.dim);
     let hovered_key_style = Style::default()
-        .fg(Color::Black)
+        .fg(theme.bg)
         .bg(theme.fg)
         .add_modifier(Modifier::BOLD);
     let hovered_label_style = Style::default().fg(theme.fg);

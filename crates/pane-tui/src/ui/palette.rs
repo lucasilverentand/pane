@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -365,18 +365,13 @@ fn render_full_search(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Fr
     ])
     .areas(inner);
 
-    // Render filter input (palette uses slightly wider prefix)
-    let input_line = Line::from(vec![
-        Span::styled("  > ", Style::default().fg(theme.accent)),
-        Span::styled(
-            format!("{}_", state.input),
-            Style::default().fg(Color::White),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(input_line), input_area);
+    // Render filter input
+    dialog::render_filter_input_placeholder(
+        frame, input_area, &state.input, None, theme,
+    );
 
     // Separator
-    dialog::render_separator(frame, sep_area);
+    dialog::render_separator(frame, sep_area, theme);
 
     // Render filtered entries grouped by category
     let visible_count = list_area.height as usize;
@@ -420,10 +415,8 @@ fn render_full_search(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Fr
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.fg)
         };
-
-        let indicator = if is_selected { "  > " } else { "    " };
 
         let desc_text = if !entry.description.is_empty() {
             format!(" \u{2014} {}", entry.description)
@@ -433,15 +426,16 @@ fn render_full_search(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Fr
 
         let hint_text = entry.keybind.as_deref().unwrap_or("");
 
-        // Left side: indicator + name + description
-        let left_len = indicator.len() + entry.name.len() + desc_text.len();
+        // Left side: prefix + name + description
+        let prefix = "  ";
+        let left_len = prefix.len() + entry.name.len() + desc_text.len();
         // Right side: keybind + trailing space
         let right_len = if hint_text.is_empty() { 0 } else { hint_text.len() + 1 };
         let available = list_area.width as usize;
         let gap = available.saturating_sub(left_len + right_len);
 
         let mut spans = vec![
-            Span::styled(indicator, name_style),
+            Span::styled(prefix, name_style),
             Span::styled(entry.name.clone(), name_style),
             Span::styled(desc_text, Style::default().fg(theme.dim)),
         ];
@@ -545,7 +539,7 @@ fn render_compact_hints(
         let label_style = if *is_group {
             Style::default().fg(theme.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.fg)
         };
         let pad = " ".repeat(max_key_len.saturating_sub(key_str.len()));
         let line = Line::from(vec![

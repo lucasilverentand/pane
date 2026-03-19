@@ -8,7 +8,7 @@
 use pane_protocol::config::Theme;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
     Frame,
@@ -185,7 +185,7 @@ pub fn render_text_field(
         value.to_string()
     };
     let value_style = if focused {
-        Style::default().fg(Color::White)
+        Style::default().fg(theme.fg)
     } else {
         Style::default().fg(theme.dim)
     };
@@ -207,25 +207,25 @@ pub fn render_filter_input_placeholder(
     area: Rect,
     input: &str,
     placeholder: Option<&str>,
-    _theme: &Theme,
+    theme: &Theme,
 ) {
     let mut spans = vec![Span::styled("  ", Style::default())];
     if input.is_empty() {
         if let Some(ph) = placeholder {
-            spans.push(Span::styled(ph, Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(ph, Style::default().fg(theme.dim)));
         }
     } else {
         spans.push(Span::raw(input));
     }
-    spans.push(Span::styled("_", Style::default().fg(Color::DarkGray)));
+    spans.push(Span::styled("_", Style::default().fg(theme.dim)));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Render a horizontal separator line (thin rule).
-pub fn render_separator(frame: &mut Frame, area: Rect) {
+pub fn render_separator(frame: &mut Frame, area: Rect, theme: &Theme) {
     let sep = Line::from("\u{2500}".repeat(area.width as usize));
     frame.render_widget(
-        Paragraph::new(sep).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(sep).style(Style::default().fg(theme.dim)),
         area,
     );
 }
@@ -333,7 +333,7 @@ pub fn render_select_list(
         if !item.description.is_empty() {
             spans.push(Span::styled(
                 format!("  {}", item.description),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.dim),
             ));
         }
 
@@ -409,7 +409,7 @@ pub fn render_confirm(
     // Row 0: message
     let msg_line = Line::from(vec![
         Span::raw(" ".repeat(CONFIRM_MARGIN as usize)),
-        Span::styled(message, Style::default().fg(Color::White)),
+        Span::styled(message, Style::default().fg(theme.fg)),
     ]);
     frame.render_widget(
         Paragraph::new(msg_line),

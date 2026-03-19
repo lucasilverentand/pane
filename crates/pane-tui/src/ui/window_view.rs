@@ -47,10 +47,8 @@ fn render_search_bar(cms: &CopyModeState, theme: &Theme, frame: &mut Frame, area
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!("{}_", cms.search_query),
-            Style::default().fg(Color::White),
-        ),
+        Span::styled(&cms.search_query, Style::default().fg(theme.fg)),
+        Span::styled("_", Style::default().fg(theme.dim)),
     ]);
     let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);

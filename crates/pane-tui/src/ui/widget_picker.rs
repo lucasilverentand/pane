@@ -1,8 +1,5 @@
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::Paragraph,
     Frame,
 };
 
@@ -120,12 +117,18 @@ pub fn hit_test(state: &WidgetPickerState, area: Rect, x: u16, y: u16) -> Option
 }
 
 /// Render the widget picker as a popup overlay.
-pub fn render(state: &WidgetPickerState, theme: &Theme, frame: &mut Frame, area: Rect) {
+pub fn render(
+    state: &WidgetPickerState,
+    theme: &Theme,
+    hover: Option<(u16, u16)>,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let title = match state.mode {
-        WidgetPickerMode::Change => " Change Widget ",
-        WidgetPickerMode::SplitHorizontal => " Add Widget to the Right ",
-        WidgetPickerMode::SplitVertical => " Add Widget Below ",
-        WidgetPickerMode::AddTab => " Add Widget Tab ",
+        WidgetPickerMode::Change => "Change Widget",
+        WidgetPickerMode::SplitHorizontal => "Add Widget to the Right",
+        WidgetPickerMode::SplitVertical => "Add Widget Below",
+        WidgetPickerMode::AddTab => "Add Widget Tab",
     };
 
     let item_count = state.items.len() as u16;
@@ -143,33 +146,17 @@ pub fn render(state: &WidgetPickerState, theme: &Theme, frame: &mut Frame, area:
 
     let inner = dialog::render_popup(frame, popup_area, title, theme);
 
-    let visible = inner.height as usize;
-    let scroll = if state.selected >= visible {
-        state.selected + 1 - visible
-    } else {
-        0
-    };
+    let items: Vec<dialog::ListItem> = state
+        .items
+        .iter()
+        .map(|w| dialog::ListItem {
+            label: w.label(),
+            description: "",
+            section: None,
+            hint: None,
+        })
+        .collect();
 
-    for (vi, idx) in (scroll..state.items.len()).enumerate() {
-        if vi as u16 >= inner.height {
-            break;
-        }
-        let widget = &state.items[idx];
-        let is_selected = idx == state.selected;
-        let row_style = if is_selected {
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.fg)
-        };
-        let prefix = if is_selected { " > " } else { "   " };
-        let line = Line::from(Span::styled(
-            format!("{}{}", prefix, widget.label()),
-            row_style,
-        ));
-        let row = Rect::new(inner.x, inner.y + vi as u16, inner.width, 1);
-        frame.render_widget(Paragraph::new(line), row);
-    }
+    dialog::render_select_list(frame, inner, &items, state.selected, false, hover, theme);
 }
 

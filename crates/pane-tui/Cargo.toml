@@ -24,3 +24,6 @@ arboard = "3"
 unicode-width = "0.2.0"
 serde = { version = "1", features = ["derive"] }
 dirs = "5"
+
+[dev-dependencies]
+insta = "1"
