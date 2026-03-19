@@ -2511,6 +2511,7 @@ impl Client {
                 return Ok(());
             }
             Action::EnterNormal => {
+                self.focus_stack.clear();
                 self.focus_location = FocusLocation::WindowLayout;
                 self.mode = Mode::Normal;
                 return Ok(());
@@ -2730,7 +2731,7 @@ impl Client {
                     let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
                 }
                 self.tab_picker_state = None;
-                self.focus_stack.clear();
+                self.pop_focus();
                 self.focus_location = FocusLocation::WindowLayout;
                 self.mode = Mode::Interact;
             }
@@ -2749,6 +2750,8 @@ impl Client {
             KeyCode::Char(' ') if state.input.is_empty() => {
                 // Space on empty input → open command palette (leader key)
                 self.tab_picker_state = None;
+                self.pop_focus(); // balance the tab picker's push
+                self.push_focus(); // save state for palette
                 self.palette_state = Some(UnifiedPaletteState::new_full_search(
                     &self.config.keys,
                     &self.config.leader,
@@ -2914,7 +2917,7 @@ impl Client {
                     let name = state.name.clone();
                     let dir = state.browser.current_dir.to_string_lossy().to_string();
                     self.new_workspace_input = None;
-                    self.focus_stack.clear();
+                    self.pop_focus();
                     self.focus_location = FocusLocation::WindowLayout;
                     self.mode = Mode::Normal;
 
