@@ -3171,13 +3171,7 @@ impl Client {
             _ => {
                 self.pop_focus();
                 self.mode = Mode::Normal;
-                // Forward the key to PTY
-                let mut w = writer.lock().await;
-                let _ = send_request(
-                    &mut w,
-                    &ClientRequest::Key(SerializableKeyEvent::from(key)),
-                )
-                .await;
+                // Don't forward — the key was intended for scroll mode, not the PTY
             }
         }
         Ok(())
