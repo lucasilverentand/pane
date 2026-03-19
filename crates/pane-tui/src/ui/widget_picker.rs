@@ -38,14 +38,30 @@ impl WidgetPickerState {
     }
 
     pub fn move_up(&mut self) {
-        if self.selected > 0 {
+        if self.items.is_empty() {
+            return;
+        }
+        if self.selected == 0 {
+            self.selected = self.items.len() - 1;
+        } else {
             self.selected -= 1;
         }
     }
 
     pub fn move_down(&mut self) {
-        if self.selected + 1 < self.items.len() {
-            self.selected += 1;
+        if self.items.is_empty() {
+            return;
+        }
+        self.selected = (self.selected + 1) % self.items.len();
+    }
+
+    pub fn move_home(&mut self) {
+        self.selected = 0;
+    }
+
+    pub fn move_end(&mut self) {
+        if !self.items.is_empty() {
+            self.selected = self.items.len() - 1;
         }
     }
 
@@ -77,11 +93,19 @@ pub fn render(state: &WidgetPickerState, theme: &Theme, frame: &mut Frame, area:
 
     let inner = dialog::render_popup(frame, popup_area, title, theme);
 
-    for (i, widget) in state.items.iter().enumerate() {
-        if i as u16 >= inner.height {
+    let visible = inner.height as usize;
+    let scroll = if state.selected >= visible {
+        state.selected + 1 - visible
+    } else {
+        0
+    };
+
+    for (vi, idx) in (scroll..state.items.len()).enumerate() {
+        if vi as u16 >= inner.height {
             break;
         }
-        let is_selected = i == state.selected;
+        let widget = &state.items[idx];
+        let is_selected = idx == state.selected;
         let row_style = if is_selected {
             Style::default()
                 .fg(theme.accent)
@@ -94,7 +118,28 @@ pub fn render(state: &WidgetPickerState, theme: &Theme, frame: &mut Frame, area:
             format!("{}{}", prefix, widget.label()),
             row_style,
         ));
-        let row = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+        let row = Rect::new(inner.x, inner.y + vi as u16, inner.width, 1);
         frame.render_widget(Paragraph::new(line), row);
+    }
+}
+
+/// Hit-test a click position against the widget picker list rows.
+/// Returns the item index if the position falls on a valid row.
+pub fn hit_test(state: &WidgetPickerState, inner: Rect, x: u16, y: u16) -> Option<usize> {
+    if x < inner.x || x >= inner.x + inner.width || y < inner.y || y >= inner.y + inner.height {
+        return None;
+    }
+    let visible = inner.height as usize;
+    let scroll = if state.selected >= visible {
+        state.selected + 1 - visible
+    } else {
+        0
+    };
+    let row = (y - inner.y) as usize;
+    let idx = scroll + row;
+    if idx < state.items.len() {
+        Some(idx)
+    } else {
+        None
     }
 }
