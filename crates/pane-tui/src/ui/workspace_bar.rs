@@ -257,8 +257,10 @@ pub fn render(
         let plus_hovered = matches!(hovered, Some(WorkspaceBarClick::NewWorkspace));
         let plus_style = if plus_hovered {
             Style::default().fg(theme.fg)
-        } else {
+        } else if focused {
             Style::default().fg(theme.accent)
+        } else {
+            Style::default().fg(theme.dim)
         };
         frame.buffer_mut().set_string(plus_x, tab_area.y, " + ", plus_style);
     }

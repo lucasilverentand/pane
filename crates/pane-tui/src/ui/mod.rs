@@ -45,11 +45,18 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
 
     // Workspace bar
     if let Some(header) = header {
+        let nerd = client.config.behavior.nerd_fonts;
         let names: Vec<String> = client
             .render_state
             .workspaces
             .iter()
-            .map(|ws| ws.name.clone())
+            .map(|ws| {
+                if ws.is_home && nerd {
+                    "\u{f015}".to_string() // nf-fa-home
+                } else {
+                    ws.name.clone()
+                }
+            })
             .collect();
         let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
         let active_idx = client.render_state.active_workspace;
@@ -998,7 +1005,7 @@ fn render_resize_borders(
         None => return,
     };
 
-    let style = Style::default().fg(theme.border_interact);
+    let style = Style::default().fg(theme.accent);
     let buf = frame.buffer_mut();
 
     match selected {

@@ -47,11 +47,11 @@ Strict vim-style modal system:
 
 ---
 
-## 5. Mode-Dependent Border Colors
+## 5. Decoration-First Border System
 
 **Status: Done**
 
-Theme fields: `border_normal` (Cyan), `border_interact` (Green), `border_scroll` (Yellow). Active window border color changes based on current mode. Decoration overrides still take priority.
+Binary focus system: active window uses decoration color (full brightness in Interact, 65% in other modes), falling back to `theme.fg`. Inactive windows use `border_inactive`. No mode-driven color fields.
 
 ---
 

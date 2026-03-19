@@ -14,101 +14,6 @@ use crate::copy_mode::CopyModeState;
 use pane_protocol::layout::SplitDirection;
 use crate::window::terminal::{render_screen, render_screen_copy_mode};
 
-// Typewriter animation timing (milliseconds).
-const LABEL_HOLD_MS: u128 = 5000;
-const LABEL_TYPE_MS: u128 = 60;
-const LABEL_DELETE_MS: u128 = 30;
-const LABEL_PAUSE_MS: u128 = 200;
-
-fn interact_labels(foreground_process: Option<&str>) -> &'static [&'static str] {
-    match foreground_process {
-        Some("claude") => &["VIBING", "THINKING", "SCHEMING", "COOKING", "JAMMING"],
-        Some("aider" | "codex" | "goose" | "cline" | "mentat" | "gpt-engineer" | "gemini") =>
-            &["PROMPTING", "CONJURING", "SUMMONING", "CHANNELING"],
-        Some("nvim" | "vim" | "helix" | "hx" | "kak") =>
-            &["EDITING", "HACKING", "CRAFTING", "SHAPING"],
-        Some("nano" | "micro" | "emacs") =>
-            &["WRITING", "TYPING", "COMPOSING"],
-        Some("python3" | "python" | "node" | "bun" | "deno" | "irb" | "iex" | "erl"
-            | "ghci" | "julia" | "lua" | "luajit" | "R" | "swift" | "scala" | "amm") =>
-            &["REPL", "EVAL", "TINKERING"],
-        Some("htop" | "btop" | "top" | "btm" | "glances" | "zenith" | "bandwhich") =>
-            &["MONITORING", "WATCHING", "OBSERVING"],
-        Some("lazygit" | "tig" | "gitui") =>
-            &["GITTING", "COMMITTING", "BRANCHING", "REBASING"],
-        Some("yazi" | "ranger" | "lf" | "nnn" | "mc" | "broot" | "spf") =>
-            &["BROWSING", "EXPLORING", "NAVIGATING"],
-        Some("lazydocker") =>
-            &["DOCKING", "CONTAINING", "SHIPPING"],
-        Some("k9s" | "kdash") =>
-            &["STEERING", "HELMING", "ORCHESTRATING"],
-        Some("sqlite3" | "psql" | "mysql" | "redis-cli" | "mongosh" | "pgcli" | "mycli" | "litecli") =>
-            &["QUERYING", "SELECTING", "JOINING"],
-        Some("ssh") =>
-            &["REMOTE", "TUNNELING", "CONNECTING"],
-        Some("man" | "less" | "more") =>
-            &["READING", "STUDYING", "LEARNING"],
-        Some("make" | "cargo" | "npm" | "go" | "gradle" | "mvn") =>
-            &["BUILDING", "COMPILING", "ASSEMBLING"],
-        _ => &["INTERACT"],
-    }
-}
-
-/// Animate a typewriter cycling through labels.
-/// Returns the current display string with leading/trailing spaces for padding.
-fn animate_interact_label(foreground_process: Option<&str>) -> String {
-    let labels = interact_labels(foreground_process);
-    if labels.len() <= 1 {
-        return format!(" {} ", labels[0]);
-    }
-
-    // Compute per-label durations and total cycle time.
-    let durations: Vec<u128> = labels
-        .iter()
-        .map(|w| {
-            let n = w.len() as u128;
-            n * LABEL_TYPE_MS + LABEL_HOLD_MS + n * LABEL_DELETE_MS + LABEL_PAUSE_MS
-        })
-        .collect();
-    let total: u128 = durations.iter().sum();
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let mut t = now % total;
-
-    for (i, word) in labels.iter().enumerate() {
-        let dur = durations[i];
-        if t >= dur {
-            t -= dur;
-            continue;
-        }
-        let n = word.len();
-        // Phase 1: type in
-        let type_time = n as u128 * LABEL_TYPE_MS;
-        if t < type_time {
-            let chars = (t / LABEL_TYPE_MS) as usize;
-            return format!(" {} ", &word[..chars]);
-        }
-        t -= type_time;
-        // Phase 2: hold
-        if t < LABEL_HOLD_MS {
-            return format!(" {} ", word);
-        }
-        t -= LABEL_HOLD_MS;
-        // Phase 3: delete
-        let delete_time = n as u128 * LABEL_DELETE_MS;
-        if t < delete_time {
-            let remaining = n.saturating_sub((t / LABEL_DELETE_MS) as usize);
-            return format!(" {} ", &word[..remaining]);
-        }
-        // Phase 4: pause (empty)
-        return " ".to_string();
-    }
-    " ".to_string()
-}
-
 fn render_content(
     screen: &vt100::Screen,
     cms: Option<&CopyModeState>,
@@ -178,45 +83,21 @@ pub fn render_group_from_snapshot(
         .map(|d| d.border_color);
 
     let border_style = if is_active {
-        let mode_color = match mode {
-            Mode::Normal => theme.border_normal,
-            Mode::Interact => theme.border_interact,
-            Mode::Scroll => theme.border_scroll,
-            Mode::Copy => theme.border_scroll,
-            _ => theme.border_active,
+        let base = decoration_color.unwrap_or(Color::White);
+        let color = if matches!(mode, Mode::Interact) {
+            base
+        } else {
+            Theme::dim_color(base, 0.65)
         };
-        let color = decoration_color.unwrap_or(mode_color);
         Style::default().fg(color)
     } else {
         Style::default().fg(theme.border_inactive)
     };
 
-    let mut block = Block::default()
+    let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(border_style);
-
-    if is_active && matches!(mode, Mode::Interact) {
-        let fg_process = group
-            .tabs
-            .get(group.active_tab)
-            .and_then(|snap| snap.foreground_process.as_deref());
-        let label = animate_interact_label(fg_process);
-        let label_color = decoration_color.unwrap_or(theme.accent);
-        block = block.title_bottom(Line::styled(
-            label,
-            Style::default()
-                .fg(label_color)
-                .add_modifier(Modifier::BOLD),
-        ));
-    } else if is_active && matches!(mode, Mode::Resize) {
-        block = block.title_bottom(Line::styled(
-            " RESIZE ",
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -236,8 +117,8 @@ pub fn render_group_from_snapshot(
     let areas = Layout::vertical(constraints).split(padded);
 
     let tab_accent = decoration_color;
-    render_tab_bar_from_snapshot(group, theme, tab_accent, hover, frame, areas[0]);
-    render_tab_separator(theme, frame, areas[1]);
+    render_tab_bar_from_snapshot(group, theme, tab_accent, is_active, hover, frame, areas[0]);
+    render_tab_separator(theme, is_active, frame, areas[1]);
     let content_area = areas[2];
     let search_area = areas.get(3).copied();
 
@@ -258,8 +139,8 @@ pub fn render_group_from_snapshot(
     }
 }
 
-fn render_tab_separator(theme: &Theme, frame: &mut Frame, area: Rect) {
-    let style = Style::default().fg(theme.dim);
+fn render_tab_separator(theme: &Theme, is_active: bool, frame: &mut Frame, area: Rect) {
+    let style = Style::default().fg(if is_active { theme.dim } else { theme.border_inactive });
     let buf = frame.buffer_mut();
     for x in area.x..area.x + area.width {
         if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y: area.y }) {
@@ -326,6 +207,7 @@ fn render_tab_bar_from_snapshot(
     group: &pane_protocol::protocol::WindowSnapshot,
     theme: &Theme,
     decoration_color: Option<Color>,
+    is_active: bool,
     hover: Option<(u16, u16)>,
     frame: &mut Frame,
     area: Rect,
@@ -415,7 +297,8 @@ fn render_tab_bar_from_snapshot(
 
     // Left overflow indicator
     if hidden_left > 0 {
-        spans.push(Span::styled("\u{25C2} ", Style::default().fg(theme.dim)));
+        let indicator_color = if is_active { theme.dim } else { theme.border_inactive };
+        spans.push(Span::styled("\u{25C2} ", Style::default().fg(indicator_color)));
     }
 
     let mut first_visible = true;
@@ -426,14 +309,17 @@ fn render_tab_bar_from_snapshot(
             .enumerate()
         {
             if !first_visible {
-                spans.push(Span::styled(SEP, Style::default().fg(theme.dim)));
+                let sep_color = if is_active { theme.dim } else { theme.border_inactive };
+                spans.push(Span::styled(SEP, Style::default().fg(sep_color)));
             }
             first_visible = false;
 
             let is_hovered = hover_x.is_some_and(|hx| hx >= tab_start && hx < tab_end);
             let is_active_tab = (lo + i) == group.active_tab;
 
-            let style = if is_active_tab {
+            let style = if !is_active {
+                Style::default().fg(theme.border_inactive)
+            } else if is_active_tab {
                 let color = decoration_color.unwrap_or(theme.tab_active);
                 Style::default()
                     .fg(color)
@@ -456,7 +342,8 @@ fn render_tab_bar_from_snapshot(
 
     // Right overflow indicator
     if hidden_right > 0 {
-        spans.push(Span::styled(" \u{25B8}", Style::default().fg(theme.dim)));
+        let indicator_color = if is_active { theme.dim } else { theme.border_inactive };
+        spans.push(Span::styled(" \u{25B8}", Style::default().fg(indicator_color)));
     }
 
     let line = Line::from(spans);
@@ -467,7 +354,9 @@ fn render_tab_bar_from_snapshot(
     if PLUS_RESERVE <= max_x.saturating_sub(area.x) && !group.tabs.is_empty() {
         let plus_x = max_x - PLUS_RESERVE;
         let plus_hovered = hover_x.is_some_and(|hx| hx >= plus_x && hx < max_x);
-        let plus_style = if plus_hovered {
+        let plus_style = if !is_active {
+            Style::default().fg(theme.border_inactive)
+        } else if plus_hovered {
             Style::default().fg(theme.fg)
         } else {
             Style::default().fg(theme.dim)
@@ -484,8 +373,8 @@ pub fn render_folded(
     frame: &mut Frame,
     area: Rect,
 ) {
-    let fg = if is_active { theme.accent } else { theme.dim };
-    let style = Style::default().fg(fg);
+    let _ = is_active;
+    let style = Style::default().fg(theme.dim);
     let buf = frame.buffer_mut();
 
     match direction {

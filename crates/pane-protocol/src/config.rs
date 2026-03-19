@@ -69,36 +69,24 @@ pub enum Action {
 #[derive(Clone, Debug)]
 pub struct Theme {
     pub accent: Color,
-    pub border_active: Color,
     pub border_inactive: Color,
-    pub border_normal: Color,
-    pub border_interact: Color,
-    pub border_scroll: Color,
     pub bg: Color,
     pub fg: Color,
     pub dim: Color,
     pub tab_active: Color,
     pub tab_inactive: Color,
-    pub fold_bar_bg: Color,
-    pub fold_bar_active_bg: Color,
 }
 
 impl Default for Theme {
     fn default() -> Self {
         Self {
             accent: Color::Cyan,
-            border_active: Color::DarkGray,
-            border_inactive: Color::DarkGray,
-            border_normal: Color::Gray,
-            border_interact: Color::Green,
-            border_scroll: Color::Yellow,
+            border_inactive: Color::Rgb(70, 70, 70),
             bg: Color::Reset,
             fg: Color::Reset,
             dim: Color::DarkGray,
             tab_active: Color::Cyan,
             tab_inactive: Color::DarkGray,
-            fold_bar_bg: Color::Rgb(40, 40, 40),
-            fold_bar_active_bg: Color::DarkGray,
         }
     }
 }
@@ -110,51 +98,63 @@ impl Theme {
             "default" => Some(Self::default()),
             "dracula" => Some(Self {
                 accent: Color::Rgb(189, 147, 249),       // purple
-                border_active: Color::Rgb(68, 71, 90),
-                border_inactive: Color::Rgb(68, 71, 90),
-                border_normal: Color::Rgb(98, 114, 164),  // comment
-                border_interact: Color::Rgb(80, 250, 123), // green
-                border_scroll: Color::Rgb(241, 250, 140),  // yellow
+                border_inactive: Color::Rgb(60, 62, 74),
                 bg: Color::Rgb(40, 42, 54),
                 fg: Color::Rgb(248, 248, 242),
                 dim: Color::Rgb(98, 114, 164),
                 tab_active: Color::Rgb(189, 147, 249),
                 tab_inactive: Color::Rgb(98, 114, 164),
-                fold_bar_bg: Color::Rgb(40, 42, 54),
-                fold_bar_active_bg: Color::Rgb(68, 71, 90),
             }),
             "catppuccin" => Some(Self {
                 accent: Color::Rgb(203, 166, 247),       // mauve
-                border_active: Color::Rgb(69, 71, 90),
-                border_inactive: Color::Rgb(69, 71, 90),
-                border_normal: Color::Rgb(108, 112, 134), // overlay1
-                border_interact: Color::Rgb(166, 227, 161), // green
-                border_scroll: Color::Rgb(249, 226, 175),   // yellow
+                border_inactive: Color::Rgb(55, 55, 71),
                 bg: Color::Rgb(30, 30, 46),
                 fg: Color::Rgb(205, 214, 244),
                 dim: Color::Rgb(108, 112, 134),
                 tab_active: Color::Rgb(203, 166, 247),
                 tab_inactive: Color::Rgb(108, 112, 134),
-                fold_bar_bg: Color::Rgb(49, 50, 68),
-                fold_bar_active_bg: Color::Rgb(69, 71, 90),
             }),
             "tokyo-night" => Some(Self {
                 accent: Color::Rgb(122, 162, 247),       // blue
-                border_active: Color::Rgb(59, 66, 97),
-                border_inactive: Color::Rgb(59, 66, 97),
-                border_normal: Color::Rgb(86, 95, 137),   // comment
-                border_interact: Color::Rgb(158, 206, 106), // green
-                border_scroll: Color::Rgb(224, 175, 104),   // yellow
+                border_inactive: Color::Rgb(50, 51, 62),
                 bg: Color::Rgb(26, 27, 38),
                 fg: Color::Rgb(192, 202, 245),
                 dim: Color::Rgb(86, 95, 137),
                 tab_active: Color::Rgb(122, 162, 247),
                 tab_inactive: Color::Rgb(86, 95, 137),
-                fold_bar_bg: Color::Rgb(26, 27, 38),
-                fold_bar_active_bg: Color::Rgb(59, 66, 97),
             }),
             _ => None,
         }
+    }
+
+    /// Dim a color by a factor (0.0–1.0). Named ANSI colors are mapped to RGB
+    /// first. `Color::Reset` and `Color::Indexed` pass through unchanged.
+    pub fn dim_color(color: Color, factor: f32) -> Color {
+        let (r, g, b) = match color {
+            Color::Rgb(r, g, b) => (r, g, b),
+            Color::Black => (0, 0, 0),
+            Color::Red => (205, 0, 0),
+            Color::Green => (0, 205, 0),
+            Color::Yellow => (205, 205, 0),
+            Color::Blue => (0, 0, 238),
+            Color::Magenta => (205, 0, 205),
+            Color::Cyan => (0, 205, 205),
+            Color::Gray => (229, 229, 229),
+            Color::DarkGray => (127, 127, 127),
+            Color::White => (255, 255, 255),
+            Color::LightRed => (255, 0, 0),
+            Color::LightGreen => (0, 255, 0),
+            Color::LightYellow => (255, 255, 0),
+            Color::LightBlue => (92, 92, 255),
+            Color::LightMagenta => (255, 0, 255),
+            Color::LightCyan => (0, 255, 255),
+            _ => return color,
+        };
+        Color::Rgb(
+            (r as f32 * factor) as u8,
+            (g as f32 * factor) as u8,
+            (b as f32 * factor) as u8,
+        )
     }
 }
 
@@ -317,6 +317,8 @@ pub struct Behavior {
     pub show_project_hub_on_start: bool,
     /// Widget layout for the hub detail panel.
     pub hub_layout: HubLayout,
+    /// Whether the terminal font supports Nerd Font glyphs.
+    pub nerd_fonts: bool,
 }
 
 impl Default for Behavior {
@@ -331,6 +333,7 @@ impl Default for Behavior {
             projects_dirs: Vec::new(),
             show_project_hub_on_start: false,
             hub_layout: HubLayout::default(),
+            nerd_fonts: false,
         }
     }
 }
@@ -918,29 +921,9 @@ impl Config {
                     config.theme.accent = c;
                 }
             }
-            if let Some(s) = t.border_active {
-                if let Some(c) = parse_color(&s) {
-                    config.theme.border_active = c;
-                }
-            }
             if let Some(s) = t.border_inactive {
                 if let Some(c) = parse_color(&s) {
                     config.theme.border_inactive = c;
-                }
-            }
-            if let Some(s) = t.border_normal {
-                if let Some(c) = parse_color(&s) {
-                    config.theme.border_normal = c;
-                }
-            }
-            if let Some(s) = t.border_interact {
-                if let Some(c) = parse_color(&s) {
-                    config.theme.border_interact = c;
-                }
-            }
-            if let Some(s) = t.border_scroll {
-                if let Some(c) = parse_color(&s) {
-                    config.theme.border_scroll = c;
                 }
             }
             if let Some(s) = t.bg {
@@ -966,16 +949,6 @@ impl Config {
             if let Some(s) = t.tab_inactive {
                 if let Some(c) = parse_color(&s) {
                     config.theme.tab_inactive = c;
-                }
-            }
-            if let Some(s) = t.fold_bar_bg {
-                if let Some(c) = parse_color(&s) {
-                    config.theme.fold_bar_bg = c;
-                }
-            }
-            if let Some(s) = t.fold_bar_active_bg {
-                if let Some(c) = parse_color(&s) {
-                    config.theme.fold_bar_active_bg = c;
                 }
             }
         }
@@ -1024,6 +997,9 @@ impl Config {
                 if !rows.is_empty() {
                     config.behavior.hub_layout = HubLayout { rows };
                 }
+            }
+            if let Some(v) = b.nerd_fonts {
+                config.behavior.nerd_fonts = v;
             }
         }
 
@@ -1180,18 +1156,12 @@ struct RawDecoration {
 struct RawTheme {
     preset: Option<String>,
     accent: Option<String>,
-    border_active: Option<String>,
     border_inactive: Option<String>,
-    border_normal: Option<String>,
-    border_interact: Option<String>,
-    border_scroll: Option<String>,
     bg: Option<String>,
     fg: Option<String>,
     dim: Option<String>,
     tab_active: Option<String>,
     tab_inactive: Option<String>,
-    fold_bar_bg: Option<String>,
-    fold_bar_active_bg: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1211,6 +1181,7 @@ struct RawBehavior {
     /// Widget layout: array of arrays of widget names.
     /// e.g. `[["project_info"], ["recent_commits", "changed_files"]]`
     hub_layout: Option<Vec<Vec<String>>>,
+    nerd_fonts: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1571,7 +1542,7 @@ min_pane_width = 80
         let config = Config::from_raw(raw);
         assert_eq!(config.theme.accent, Color::Green);
         // Unchanged defaults
-        assert_eq!(config.theme.border_active, Color::DarkGray);
+        assert_eq!(config.theme.border_inactive, Color::Rgb(70, 70, 70));
         assert_eq!(config.behavior.fold_bar_size, 1);
     }
 
@@ -2129,5 +2100,42 @@ accent = "#ff0000"
         assert_eq!(config.theme.accent, Color::Rgb(255, 0, 0));
         // Other fields from dracula preset
         assert_eq!(config.theme.bg, Color::Rgb(40, 42, 54));
+    }
+
+    // --- dim_color ---
+
+    #[test]
+    fn test_dim_color_rgb() {
+        assert_eq!(
+            Theme::dim_color(Color::Rgb(200, 100, 50), 0.65),
+            Color::Rgb(130, 65, 32)
+        );
+    }
+
+    #[test]
+    fn test_dim_color_full_factor() {
+        assert_eq!(
+            Theme::dim_color(Color::Rgb(200, 100, 50), 1.0),
+            Color::Rgb(200, 100, 50)
+        );
+    }
+
+    #[test]
+    fn test_dim_color_zero_factor() {
+        assert_eq!(
+            Theme::dim_color(Color::Rgb(200, 100, 50), 0.0),
+            Color::Rgb(0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn test_dim_color_reset_passthrough() {
+        assert_eq!(Theme::dim_color(Color::Reset, 0.65), Color::Reset);
+    }
+
+    #[test]
+    fn test_dim_color_named_to_rgb() {
+        let dimmed = Theme::dim_color(Color::Green, 0.65);
+        assert!(matches!(dimmed, Color::Rgb(_, _, _)));
     }
 }

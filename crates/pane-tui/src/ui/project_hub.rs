@@ -320,7 +320,7 @@ fn render_sidebar(
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             sep_line,
-            Style::default().fg(theme.border_inactive),
+            Style::default().fg(theme.dim),
         ))),
         Rect::new(inner.x, row, inner.width, 1),
     );
@@ -1525,7 +1525,7 @@ fn widget_block<'a>(title: &'a str, theme: &Theme, is_focused: bool) -> Block<'a
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.border_inactive))
+            .border_style(Style::default().fg(theme.dim))
             .title(Span::styled(title, Style::default().fg(theme.dim)))
     }
 }
