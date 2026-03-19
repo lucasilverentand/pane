@@ -13,6 +13,17 @@ pub const SIDEBAR_MIN_WIDTH: u16 = 20;
 pub const SIDEBAR_MAX_WIDTH: u16 = 80;
 const SIDEBAR_DEFAULT_FRACTION: u16 = 4; // body.width / 4
 
+/// Compute scroll offset and visible count for a widget list.
+fn widget_scroll(total: usize, height: u16, selected: usize) -> (usize, usize) {
+    let visible = (height as usize).min(total);
+    let scroll = selected
+        .checked_sub(visible.saturating_sub(1))
+        .map(|v| v.saturating_add(1))
+        .unwrap_or(0)
+        .min(total.saturating_sub(visible));
+    (visible, scroll)
+}
+
 /// Compute the sidebar width for the home workspace.
 /// If `user_width` is set, clamp it to valid bounds; otherwise auto-calculate.
 pub fn sidebar_width(body_width: u16, user_width: Option<u16>) -> u16 {
@@ -720,9 +731,8 @@ fn render_widget_recent_commits(
     let pad = " ";
 
     let total = git.commits.len();
-    let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
+    let (visible, scroll) = widget_scroll(total, inner.height, selected);
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -798,9 +808,8 @@ fn render_widget_changed_files(
     let pad = " ";
 
     let total = git.status_lines.len();
-    let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
+    let (visible, scroll) = widget_scroll(total, inner.height, selected);
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -887,9 +896,8 @@ fn render_widget_branches(
     let pad = " ";
 
     let total = git.branches.len();
-    let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
+    let (visible, scroll) = widget_scroll(total, inner.height, selected);
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -942,9 +950,8 @@ fn render_widget_stashes(
     let pad = " ";
 
     let total = git.stashes.len();
-    let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
+    let (visible, scroll) = widget_scroll(total, inner.height, selected);
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -992,9 +999,8 @@ fn render_widget_tags(
     let pad = " ";
 
     let total = git.tags.len();
-    let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
+    let (visible, scroll) = widget_scroll(total, inner.height, selected);
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1046,9 +1052,8 @@ fn render_widget_git_graph(
     let max_w = inner.width as usize;
 
     let total = git.graph_lines.len();
-    let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
+    let (visible, scroll) = widget_scroll(total, inner.height, selected);
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1074,6 +1079,8 @@ fn render_widget_git_graph(
             Rect::new(inner.x, row, inner.width, 1),
         );
     }
+
+    render_overflow(total, scroll + visible, theme, frame, inner);
 }
 
 fn render_widget_contributors(
@@ -1108,9 +1115,8 @@ fn render_widget_contributors(
     let pad = " ";
 
     let total = git.contributors.len();
-    let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
+    let (visible, scroll) = widget_scroll(total, inner.height, selected);
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1168,9 +1174,8 @@ fn render_widget_todos(
     let pad = " ";
 
     let total = git.todos.len();
-    let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
+    let (visible, scroll) = widget_scroll(total, inner.height, selected);
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1245,9 +1250,8 @@ fn render_widget_readme(
         .add_modifier(Modifier::BOLD);
 
     let total = git.readme_lines.len();
-    let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
+    let (visible, scroll) = widget_scroll(total, inner.height, selected);
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1299,9 +1303,8 @@ fn render_widget_languages(
     let bar_max = 20usize.min(inner.width as usize / 3);
 
     let total = git.languages.len();
-    let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
+    let (visible, scroll) = widget_scroll(total, inner.height, selected);
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1441,9 +1444,8 @@ fn render_widget_ci_status(
     let pad = " ";
 
     let total = git.ci_runs.len();
-    let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
+    let (visible, scroll) = widget_scroll(total, inner.height, selected);
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1518,9 +1520,8 @@ fn render_widget_open_issues(
     let pad = " ";
 
     let total = git.gh_issues.len();
-    let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
+    let (visible, scroll) = widget_scroll(total, inner.height, selected);
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
@@ -1588,9 +1589,8 @@ fn render_widget_running_processes(
     let pad = " ";
 
     let total = git.processes.len();
-    let visible = (inner.height as usize).min(total);
     let selected = interact.map(|s| s.selected).unwrap_or(usize::MAX);
-    let scroll = selected.checked_sub(visible.saturating_sub(1)).map(|v| v.saturating_add(1)).unwrap_or(0).min(total.saturating_sub(visible));
+    let (visible, scroll) = widget_scroll(total, inner.height, selected);
 
     for vis_i in 0..visible {
         let item_idx = scroll + vis_i;
