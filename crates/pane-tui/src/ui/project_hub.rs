@@ -1523,8 +1523,8 @@ fn widget_block<'a>(title: &'a str, theme: &Theme, is_focused: bool) -> Block<'a
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.dim))
-            .title(Span::styled(title, Style::default().fg(theme.dim)))
+            .border_style(Style::default().fg(theme.border_inactive))
+            .title(Span::styled(title, Style::default().fg(theme.border_inactive)))
     }
 }
 

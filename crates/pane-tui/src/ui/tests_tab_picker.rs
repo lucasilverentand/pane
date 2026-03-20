@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
-use pane_protocol::app::Mode;
+use crate::client::Focus;
 use pane_protocol::config::{Config, TabPickerEntryConfig};
 use pane_protocol::layout::LayoutNode;
 use pane_protocol::protocol::{RenderState, TabSnapshot, WindowSnapshot, WorkspaceSnapshot};
@@ -147,7 +147,7 @@ fn test_programs() -> Vec<TabPickerEntry> {
 #[test]
 fn tab_picker_new_tab() {
     let mut client = base_client();
-    client.mode = Mode::TabPicker;
+    client.focus = Focus::TabPicker;
     let state = TabPickerState::new(&test_programs(), &[], &HashSet::new());
     client.tab_picker_state = Some(state);
 
@@ -158,7 +158,7 @@ fn tab_picker_new_tab() {
 #[test]
 fn tab_picker_split_right() {
     let mut client = base_client();
-    client.mode = Mode::TabPicker;
+    client.focus = Focus::TabPicker;
     let state = TabPickerState::with_mode(
         &test_programs(),
         &[],
@@ -174,7 +174,7 @@ fn tab_picker_split_right() {
 #[test]
 fn tab_picker_split_down() {
     let mut client = base_client();
-    client.mode = Mode::TabPicker;
+    client.focus = Focus::TabPicker;
     let state = TabPickerState::with_mode(
         &test_programs(),
         &[],
@@ -190,7 +190,7 @@ fn tab_picker_split_down() {
 #[test]
 fn tab_picker_custom_entries() {
     let mut client = base_client();
-    client.mode = Mode::TabPicker;
+    client.focus = Focus::TabPicker;
     let custom = vec![
         TabPickerEntryConfig {
             name: "dev-server".into(),
@@ -217,7 +217,7 @@ fn tab_picker_custom_entries() {
 #[test]
 fn tab_picker_filtered() {
     let mut client = base_client();
-    client.mode = Mode::TabPicker;
+    client.focus = Focus::TabPicker;
     let mut state = TabPickerState::new(&test_programs(), &[], &HashSet::new());
     state.input = "sh".into();
     state.update_filter();
@@ -230,7 +230,7 @@ fn tab_picker_filtered() {
 #[test]
 fn tab_picker_no_match_run_entry() {
     let mut client = base_client();
-    client.mode = Mode::TabPicker;
+    client.focus = Focus::TabPicker;
     let mut state = TabPickerState::new(&test_programs(), &[], &HashSet::new());
     state.input = "docker compose up".into();
     state.update_filter();
@@ -243,7 +243,7 @@ fn tab_picker_no_match_run_entry() {
 #[test]
 fn tab_picker_small_terminal() {
     let mut client = base_client();
-    client.mode = Mode::TabPicker;
+    client.focus = Focus::TabPicker;
     let state = TabPickerState::new(&test_programs(), &[], &HashSet::new());
     client.tab_picker_state = Some(state);
 

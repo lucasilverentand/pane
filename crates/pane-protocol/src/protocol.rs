@@ -149,6 +149,8 @@ pub enum ClientRequest {
     CommandSync(String),
     /// Focus a specific window by UUID without forwarding mouse coordinates.
     FocusWindow { id: WindowId },
+    /// Focus a window and switch to a specific tab by index.
+    SelectTab { window_id: WindowId, tab_index: usize },
 }
 
 // ---------------------------------------------------------------------------

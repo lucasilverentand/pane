@@ -6,7 +6,7 @@ use ratatui::backend::TestBackend;
 use ratatui::style::Color;
 use ratatui::Terminal;
 
-use pane_protocol::app::Mode;
+use crate::client::Focus;
 use pane_protocol::config::{Config, HubWidget};
 use pane_protocol::layout::{LayoutNode, SplitDirection, TabId};
 use pane_protocol::protocol::{
@@ -83,9 +83,18 @@ fn is_bright_fg(fg: Color) -> bool {
         Color::White => (255, 255, 255),
         Color::Gray => (229, 229, 229),
         Color::DarkGray => (127, 127, 127),
+        // Named accent colors used for active/focused borders
+        Color::Cyan | Color::Yellow | Color::Green | Color::Magenta | Color::Blue | Color::Red => {
+            return true;
+        }
         _ => return false,
     };
-    (r + g + b) / 3 > 100
+    let avg = (r + g + b) / 3;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let saturation = max - min;
+    // Bright grayscale (dimmed white, DarkGray) or saturated color (accent / dimmed accent)
+    avg > 100 || (max > 80 && saturation > 30)
 }
 
 fn render_to_styled_string(client: &mut Client, cols: u16, rows: u16) -> String {
@@ -299,7 +308,7 @@ fn interact_mode_border() {
         )],
         active_workspace: 0,
     };
-    client.mode = Mode::Interact;
+    client.focus = Focus::Interact;
 
     let output = render_to_styled_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("interact_mode_border", output);

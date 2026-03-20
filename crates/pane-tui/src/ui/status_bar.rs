@@ -7,80 +7,86 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use pane_protocol::app::Mode;
-use crate::client::Client;
+use crate::client::{Client, Focus};
 use pane_protocol::config::Theme;
 
 /// Return the button definitions for the current client state.
 pub fn get_buttons(client: &Client) -> &'static [(&'static str, &'static str)] {
     let is_home = client.is_home_active();
 
-    match &client.mode {
-        Mode::Normal if client.is_workspace_bar_focused() => &[
+    match &client.focus {
+        Focus::WorkspaceBar => &[
             ("h/l", "switch"),
             ("d", "close"),
             ("n", "new"),
             ("j", "exit bar"),
         ],
-        Mode::Normal if is_home && client.project_hub_state.as_ref().is_some_and(|h| h.focused_widget.is_some()) => &[
+        Focus::Widget(_) if is_home => &[
             ("j/k", "navigate"),
             ("Enter", "copy"),
             ("Esc", "back"),
         ],
-        Mode::Normal if is_home => &[
+        Focus::Sidebar if is_home => &[
             ("/", "search"),
             ("Enter", "open"),
             ("n", "new"),
             (":", "commands"),
             ("q", "quit"),
         ],
-        Mode::Normal => &[
+        Focus::Normal if is_home => &[
+            ("/", "search"),
+            ("Enter", "open"),
+            ("n", "new"),
+            (":", "commands"),
+            ("q", "quit"),
+        ],
+        Focus::Normal => &[
             ("\u{2423}", "leader"),
             (":", "commands"),
             ("n", "new tab"),
             ("s/v", "split"),
             ("q", "quit"),
         ],
-        Mode::Interact => &[
+        Focus::Interact => &[
             ("^\u{2423}", "normal"),
             ("\u{2423}", "leader"),
             (":", "commands"),
         ],
-        Mode::Scroll => &[
+        Focus::Scroll => &[
             ("j/k", "up/down"),
             ("u/d", "page"),
             ("g/G", "top/end"),
             ("Esc", "quit"),
         ],
-        Mode::Copy => &[
+        Focus::Copy => &[
             ("hjkl", "move"),
             ("v", "select"),
             ("y", "yank"),
             ("/", "search"),
             ("Esc", "quit"),
         ],
-        Mode::Palette => &[
+        Focus::Palette => &[
             ("type", "filter"),
             ("Enter", "run"),
             ("Esc", "cancel"),
         ],
-        Mode::Confirm => &[
+        Focus::Confirm => &[
             ("Enter/y", "confirm"),
             ("Esc/n", "cancel"),
         ],
-        Mode::Leader => &[
+        Focus::Leader => &[
             ("Esc", "cancel"),
         ],
-        Mode::TabPicker => &[
+        Focus::TabPicker => &[
             ("type", "filter"),
             ("Enter", "spawn"),
             ("Esc", "cancel"),
         ],
-        Mode::Rename => &[
+        Focus::Rename => &[
             ("Enter", "confirm"),
             ("Esc", "cancel"),
         ],
-        Mode::NewWorkspaceInput => {
+        Focus::NewWorkspace => {
             if let Some(ref nw) = client.new_workspace_input {
                 match nw.stage {
                     crate::client::NewWorkspaceStage::Directory => &[
@@ -98,22 +104,17 @@ pub fn get_buttons(client: &Client) -> &'static [(&'static str, &'static str)] {
                 &[("Esc", "cancel")]
             }
         }
-        Mode::ContextMenu => &[
+        Focus::ContextMenu => &[
             ("j/k", "navigate"),
             ("Enter", "select"),
             ("Esc", "cancel"),
         ],
-        Mode::ProjectHub => &[
-            ("type", "search"),
-            ("Enter", "open"),
-            ("Esc", "cancel"),
-        ],
-        Mode::WidgetPicker => &[
+        Focus::WidgetPicker => &[
             ("j/k", "navigate"),
             ("Enter", "select"),
             ("Esc", "cancel"),
         ],
-        Mode::Resize => {
+        Focus::Resize => {
             let selected = client.resize_state.as_ref().and_then(|rs| rs.selected);
             match selected {
                 None => &[
@@ -135,6 +136,14 @@ pub fn get_buttons(client: &Client) -> &'static [(&'static str, &'static str)] {
                 },
             }
         }
+        // Sidebar/Widget when not on home — fall through to Normal
+        Focus::Sidebar | Focus::Widget(_) => &[
+            ("\u{2423}", "leader"),
+            (":", "commands"),
+            ("n", "new tab"),
+            ("s/v", "split"),
+            ("q", "quit"),
+        ],
     }
 }
 
@@ -201,7 +210,7 @@ fn render_button_bar(
         .fg(theme.bg)
         .bg(theme.accent)
         .add_modifier(Modifier::BOLD);
-    let label_style = Style::default().fg(theme.dim);
+    let label_style = Style::default().fg(theme.fg);
     let sep_style = Style::default().fg(theme.dim);
     let hovered_key_style = Style::default()
         .fg(theme.bg)

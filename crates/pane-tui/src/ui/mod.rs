@@ -32,8 +32,7 @@ pub mod workspace_bar;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::Frame;
 
-use pane_protocol::app::Mode;
-use crate::client::Client;
+use crate::client::{Client, Focus};
 
 /// Cursor X offset within a window: 1 (border) + 1 (padding).
 const WINDOW_CONTENT_X_OFFSET: u16 = 2;
@@ -101,7 +100,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
     };
 
     if let Some(ws) = client.active_workspace() {
-        let copy_mode_state = if client.mode == Mode::Copy {
+        let copy_mode_state = if client.focus == Focus::Copy {
             client.copy_mode_state.as_ref()
         } else {
             None
@@ -120,7 +119,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
 
             if let Some(ref hub) = client.project_hub_state {
                 let sidebar_focused = !client.is_workspace_bar_focused()
-                    && hub.focused_widget.is_none();
+                    && client.focused_widget_id().is_none();
                 project_hub::render_sidebar_only(hub, sidebar_focused, theme, client.hover, frame, left);
             }
             right
@@ -137,7 +136,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                     group,
                     screen,
                     !ws_bar_focused,
-                    &client.mode,
+                    client.focus == Focus::Interact,
                     copy_mode_state,
                     &client.config,
                     client.hover,
@@ -146,7 +145,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                     layout_body,
                 );
 
-                if !ws_bar_focused && (client.mode == Mode::Interact || client.mode == Mode::Normal) {
+                if !ws_bar_focused && matches!(client.focus, Focus::Normal | Focus::Interact | Focus::Sidebar | Focus::Widget(_)) {
                     if let Some(pane) = group.tabs.get(group.active_tab) {
                         if let Some(screen) = client.pane_screen(pane.id) {
                             if !screen.hide_cursor() {
@@ -177,8 +176,8 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                         // On the home workspace, only the focused widget window
                         // is active. When the sidebar has focus
                         // (focused_widget == None), no window should appear active.
-                        let is_active = if let Some(hub) = hub_state_ref {
-                            hub.focused_widget == Some(*group_id) && !ws_bar_focused
+                        let is_active = if hub_state_ref.is_some() {
+                            client.focused_widget_id() == Some(*group_id) && !ws_bar_focused
                         } else {
                             *group_id == ws.active_group && !ws_bar_focused
                         };
@@ -188,7 +187,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                             group,
                             screen,
                             is_active,
-                            &client.mode,
+                            client.focus == Focus::Interact,
                             copy_mode_state,
                             &client.config,
                             client.hover,
@@ -221,7 +220,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
             }
 
             // Cursor position (only for non-home workspaces with terminal tabs)
-            if !is_home && !ws_bar_focused && (client.mode == Mode::Interact || client.mode == Mode::Normal) {
+            if !is_home && !ws_bar_focused && matches!(client.focus, Focus::Normal | Focus::Interact) {
                 if let Some(group) = ws.groups.iter().find(|g| g.id == ws.active_group) {
                     if let Some(pane) = group.tabs.get(group.active_tab) {
                         if let Some(screen) = client.pane_screen(pane.id) {
@@ -256,8 +255,8 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
         // Render floating windows on top of tiled layout
         for fw in &ws.floating_windows {
             if let Some(group) = ws.groups.iter().find(|g| g.id == fw.id) {
-                let is_active = if let Some(hub) = hub_state_ref {
-                    hub.focused_widget == Some(fw.id) && !ws_bar_focused
+                let is_active = if hub_state_ref.is_some() {
+                    client.focused_widget_id() == Some(fw.id) && !ws_bar_focused
                 } else {
                     fw.id == ws.active_group && !ws_bar_focused
                 };
@@ -270,7 +269,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                     group,
                     screen,
                     is_active,
-                    &client.mode,
+                    client.focus == Focus::Interact,
                     copy_mode_state,
                     &client.config,
                     client.hover,
@@ -283,18 +282,18 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
     }
 
     // Overlays
-    match &client.mode {
-        Mode::Palette => {
+    match &client.focus {
+        Focus::Palette => {
             if let Some(ref palette_state) = client.palette_state {
                 dialog::dim_background(frame, frame.area());
                 palette::render(palette_state, theme, frame, frame.area());
             }
         }
-        Mode::Confirm => {
+        Focus::Confirm => {
             dialog::dim_background(frame, frame.area());
             render_confirm_dialog(client, theme, frame, frame.area());
         }
-        Mode::Leader => {
+        Focus::Leader => {
             if let Some(ref ls) = client.leader_state {
                 if ls.popup_visible {
                     if let pane_protocol::config::LeaderNode::Group { ref children, .. } =
@@ -323,7 +322,7 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                 }
             }
         }
-        Mode::TabPicker => {
+        Focus::TabPicker => {
             if let Some(ref tp_state) = client.tab_picker_state {
                 let picker_area = active_window_rect(client, body)
                     .unwrap_or(frame.area());
@@ -331,30 +330,27 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                 tab_picker::render(tp_state, theme, client.hover, frame, picker_area);
             }
         }
-        Mode::ContextMenu => {
+        Focus::ContextMenu => {
             if let Some(ref cm_state) = client.context_menu_state {
                 dialog::dim_background(frame, frame.area());
                 context_menu::render(cm_state, theme, client.hover, frame, frame.area());
             }
         }
-        Mode::Rename => {
+        Focus::Rename => {
             dialog::dim_background(frame, frame.area());
             render_rename_dialog(client, theme, frame, frame.area());
         }
-        Mode::NewWorkspaceInput => {
+        Focus::NewWorkspace => {
             dialog::dim_background(frame, frame.area());
             render_new_workspace_dialog(client, theme, frame, frame.area());
         }
-        Mode::ProjectHub => {
-            // Legacy: hub is now rendered as workspace body, not overlay
-        }
-        Mode::WidgetPicker => {
+        Focus::WidgetPicker => {
             if let Some(ref wp_state) = client.widget_picker_state {
                 dialog::dim_background(frame, frame.area());
                 widget_picker::render(wp_state, theme, client.hover, frame, frame.area());
             }
         }
-        Mode::Resize => {
+        Focus::Resize => {
             if let Some(ref rs) = client.resize_state {
                 if let Some(ws) = client.active_workspace() {
                     // Find the active window's rect

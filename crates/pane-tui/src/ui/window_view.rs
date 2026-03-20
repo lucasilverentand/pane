@@ -6,7 +6,6 @@ use ratatui::{
     Frame,
 };
 
-use pane_protocol::app::Mode;
 use pane_protocol::config::{Config, Theme};
 use pane_protocol::window_types::TabKind;
 use crate::client::ProjectHubState;
@@ -62,7 +61,7 @@ pub fn render_group_from_snapshot(
     group: &pane_protocol::protocol::WindowSnapshot,
     screen: Option<&vt100::Screen>,
     is_active: bool,
-    mode: &Mode,
+    is_interact: bool,
     copy_mode_state: Option<&CopyModeState>,
     config: &Config,
     hover: Option<(u16, u16)>,
@@ -81,8 +80,8 @@ pub fn render_group_from_snapshot(
         .map(|d| d.border_color);
 
     let border_style = if is_active {
-        let base = decoration_color.unwrap_or(Color::White);
-        let color = if matches!(mode, Mode::Interact) {
+        let base = decoration_color.unwrap_or(theme.accent);
+        let color = if is_interact {
             base
         } else {
             Theme::dim_color(base, 0.65)

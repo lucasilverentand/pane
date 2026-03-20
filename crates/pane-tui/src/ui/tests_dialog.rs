@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
-use pane_protocol::app::Mode;
+use crate::client::Focus;
 use pane_protocol::config::Config;
 use pane_protocol::layout::{LayoutNode, TabId};
 use pane_protocol::protocol::{RenderState, TabSnapshot, WindowSnapshot, WorkspaceSnapshot};
@@ -105,7 +105,7 @@ fn base_client() -> Client {
 #[test]
 fn confirm_default() {
     let mut client = base_client();
-    client.mode = Mode::Confirm;
+    client.focus = Focus::Confirm;
     client.confirm_message = Some("Are you sure?".into());
 
     let output = render_to_string(&mut client, COLS, ROWS);
@@ -115,7 +115,7 @@ fn confirm_default() {
 #[test]
 fn confirm_long_message() {
     let mut client = base_client();
-    client.mode = Mode::Confirm;
+    client.focus = Focus::Confirm;
     client.confirm_message = Some(
         "Are you sure you want to close this workspace? All running processes will be terminated."
             .into(),
@@ -128,7 +128,7 @@ fn confirm_long_message() {
 #[test]
 fn confirm_small_terminal() {
     let mut client = base_client();
-    client.mode = Mode::Confirm;
+    client.focus = Focus::Confirm;
     client.confirm_message = Some("Are you sure?".into());
 
     let output = render_to_string(&mut client, 60, 20);
@@ -142,7 +142,7 @@ fn confirm_small_terminal() {
 #[test]
 fn rename_window_empty() {
     let mut client = base_client();
-    client.mode = Mode::Rename;
+    client.focus = Focus::Rename;
     client.rename_target = RenameTarget::Window;
     client.rename_input = String::new();
 
@@ -153,7 +153,7 @@ fn rename_window_empty() {
 #[test]
 fn rename_window_with_text() {
     let mut client = base_client();
-    client.mode = Mode::Rename;
+    client.focus = Focus::Rename;
     client.rename_target = RenameTarget::Window;
     client.rename_input = "my-server".into();
 
@@ -164,7 +164,7 @@ fn rename_window_with_text() {
 #[test]
 fn rename_workspace() {
     let mut client = base_client();
-    client.mode = Mode::Rename;
+    client.focus = Focus::Rename;
     client.rename_target = RenameTarget::Workspace;
     client.rename_input = "production".into();
 
@@ -179,7 +179,7 @@ fn rename_workspace() {
 #[test]
 fn new_workspace_dir_stage() {
     let mut client = base_client();
-    client.mode = Mode::NewWorkspaceInput;
+    client.focus = Focus::NewWorkspace;
     client.new_workspace_input =
         Some(NewWorkspaceInputState::for_test(NewWorkspaceStage::Directory));
 
@@ -190,7 +190,7 @@ fn new_workspace_dir_stage() {
 #[test]
 fn new_workspace_name_stage() {
     let mut client = base_client();
-    client.mode = Mode::NewWorkspaceInput;
+    client.focus = Focus::NewWorkspace;
     let mut state = NewWorkspaceInputState::for_test(NewWorkspaceStage::Name);
     state.name = "my-project".into();
     client.new_workspace_input = Some(state);

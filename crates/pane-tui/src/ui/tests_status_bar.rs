@@ -1,6 +1,6 @@
 //! Snapshot tests for status bar mode rendering.
 //!
-//! Each test sets the client to a specific `Mode` and captures a full-frame
+//! Each test sets the client to a specific `Focus` and captures a full-frame
 //! snapshot so we can verify the status bar reflects the correct mode label.
 
 use std::collections::HashSet;
@@ -8,13 +8,13 @@ use std::collections::HashSet;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
-use pane_protocol::app::{Mode, ResizeBorder, ResizeState};
+use pane_protocol::app::{ResizeBorder, ResizeState};
 use pane_protocol::config::Config;
 use pane_protocol::layout::{LayoutNode, TabId};
 use pane_protocol::protocol::{RenderState, TabSnapshot, WindowSnapshot, WorkspaceSnapshot};
 use pane_protocol::window_types::{TabKind, WindowId};
 
-use crate::client::{Client, FocusLocation};
+use crate::client::{Client, Focus};
 use crate::ui;
 
 const COLS: u16 = 120;
@@ -109,7 +109,7 @@ fn base_client() -> Client {
 #[test]
 fn status_bar_normal_mode() {
     let mut client = base_client();
-    // Mode::Normal is the default from for_test
+    // Focus::Normal is the default from for_test
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("status_bar_normal_mode", output);
 }
@@ -117,7 +117,7 @@ fn status_bar_normal_mode() {
 #[test]
 fn status_bar_interact_mode() {
     let mut client = base_client();
-    client.mode = Mode::Interact;
+    client.focus = Focus::Interact;
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("status_bar_interact_mode", output);
 }
@@ -125,7 +125,7 @@ fn status_bar_interact_mode() {
 #[test]
 fn status_bar_scroll_mode() {
     let mut client = base_client();
-    client.mode = Mode::Scroll;
+    client.focus = Focus::Scroll;
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("status_bar_scroll_mode", output);
 }
@@ -133,7 +133,7 @@ fn status_bar_scroll_mode() {
 #[test]
 fn status_bar_copy_mode() {
     let mut client = base_client();
-    client.mode = Mode::Copy;
+    client.focus = Focus::Copy;
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("status_bar_copy_mode", output);
 }
@@ -141,7 +141,7 @@ fn status_bar_copy_mode() {
 #[test]
 fn status_bar_palette_mode() {
     let mut client = base_client();
-    client.mode = Mode::Palette;
+    client.focus = Focus::Palette;
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("status_bar_palette_mode", output);
 }
@@ -149,7 +149,7 @@ fn status_bar_palette_mode() {
 #[test]
 fn status_bar_confirm_mode() {
     let mut client = base_client();
-    client.mode = Mode::Confirm;
+    client.focus = Focus::Confirm;
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("status_bar_confirm_mode", output);
 }
@@ -157,7 +157,7 @@ fn status_bar_confirm_mode() {
 #[test]
 fn status_bar_leader_mode() {
     let mut client = base_client();
-    client.mode = Mode::Leader;
+    client.focus = Focus::Leader;
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("status_bar_leader_mode", output);
 }
@@ -165,7 +165,7 @@ fn status_bar_leader_mode() {
 #[test]
 fn status_bar_rename_mode() {
     let mut client = base_client();
-    client.mode = Mode::Rename;
+    client.focus = Focus::Rename;
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("status_bar_rename_mode", output);
 }
@@ -173,8 +173,7 @@ fn status_bar_rename_mode() {
 #[test]
 fn status_bar_ws_bar_focused() {
     let mut client = base_client();
-    // Mode stays Normal, but focus goes to workspace bar
-    client.focus_location = FocusLocation::WorkspaceBar;
+    client.focus = Focus::WorkspaceBar;
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("status_bar_ws_bar_focused", output);
 }
@@ -182,7 +181,7 @@ fn status_bar_ws_bar_focused() {
 #[test]
 fn status_bar_resize_mode() {
     let mut client = base_client();
-    client.mode = Mode::Resize;
+    client.focus = Focus::Resize;
     client.resize_state = Some(ResizeState {
         selected: Some(ResizeBorder::Left),
     });

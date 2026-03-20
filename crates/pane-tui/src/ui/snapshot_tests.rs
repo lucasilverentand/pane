@@ -20,7 +20,7 @@ use pane_protocol::layout::{LayoutNode, Side, SplitDirection, TabId};
 use pane_protocol::protocol::{RenderState, TabSnapshot, WindowSnapshot, WorkspaceSnapshot};
 use pane_protocol::window_types::{TabKind, WindowId};
 
-use crate::client::{Client, FocusLocation, ProjectHubState};
+use crate::client::{Client, Focus, ProjectHubState};
 use crate::ui;
 
 /// Standard terminal size for snapshot tests.
@@ -83,10 +83,18 @@ fn is_bright_fg(fg: Color) -> bool {
         Color::White => (255, 255, 255),
         Color::Gray => (229, 229, 229),
         Color::DarkGray => (127, 127, 127),
+        // Named accent colors used for active/focused borders
+        Color::Cyan | Color::Yellow | Color::Green | Color::Magenta | Color::Blue | Color::Red => {
+            return true;
+        }
         _ => return false,
     };
-    // Active borders: Rgb(166,166,166) or brighter. Inactive: Rgb(70,70,70).
-    (r + g + b) / 3 > 100
+    let avg = (r + g + b) / 3;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let saturation = max - min;
+    // Bright grayscale (dimmed white, DarkGray) or saturated color (accent / dimmed accent)
+    avg > 100 || (max > 80 && saturation > 30)
 }
 
 /// Box-drawing characters (rounded)
@@ -733,9 +741,8 @@ fn home_widget_focused() {
         workspaces: vec![ws],
         active_workspace: 0,
     };
-    let mut hub = ProjectHubState::for_test();
-    hub.focused_widget = Some(w1);
-    client.project_hub_state = Some(hub);
+    client.project_hub_state = Some(ProjectHubState::for_test());
+    client.focus = Focus::Widget(w1);
 
     let output = render_to_styled_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("home_widget_focused", output);
@@ -761,9 +768,8 @@ fn home_second_widget_focused() {
         workspaces: vec![ws],
         active_workspace: 0,
     };
-    let mut hub = ProjectHubState::for_test();
-    hub.focused_widget = Some(w2);
-    client.project_hub_state = Some(hub);
+    client.project_hub_state = Some(ProjectHubState::for_test());
+    client.focus = Focus::Widget(w2);
 
     let output = render_to_styled_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("home_second_widget_focused", output);
@@ -790,7 +796,7 @@ fn home_workspace_bar_focused() {
         active_workspace: 0,
     };
     client.project_hub_state = Some(ProjectHubState::for_test());
-    client.focus_location = FocusLocation::WorkspaceBar;
+    client.focus = Focus::WorkspaceBar;
 
     let output = render_to_styled_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("home_ws_bar_focused", output);
@@ -820,9 +826,8 @@ fn home_three_widgets_middle_focused() {
         workspaces: vec![ws],
         active_workspace: 0,
     };
-    let mut hub = ProjectHubState::for_test();
-    hub.focused_widget = Some(w2); // middle widget focused
-    client.project_hub_state = Some(hub);
+    client.project_hub_state = Some(ProjectHubState::for_test());
+    client.focus = Focus::Widget(w2); // middle widget focused
 
     let output = render_to_styled_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("home_three_widgets_middle_focused", output);
@@ -875,7 +880,7 @@ fn normal_workspace_bar_focused() {
         )],
         active_workspace: 0,
     };
-    client.focus_location = FocusLocation::WorkspaceBar;
+    client.focus = Focus::WorkspaceBar;
 
     let output = render_to_styled_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("normal_ws_bar_focused", output);
@@ -905,9 +910,8 @@ fn home_four_widgets_bottom_right_focused() {
         workspaces: vec![ws],
         active_workspace: 0,
     };
-    let mut hub = ProjectHubState::for_test();
-    hub.focused_widget = Some(w4); // bottom-right focused
-    client.project_hub_state = Some(hub);
+    client.project_hub_state = Some(ProjectHubState::for_test());
+    client.focus = Focus::Widget(w4); // bottom-right focused
 
     let output = render_to_styled_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("home_four_widgets_br_focused", output);
@@ -935,10 +939,8 @@ fn home_focus_returned_to_sidebar() {
         workspaces: vec![ws],
         active_workspace: 0,
     };
-    // But focused_widget is None — sidebar has focus now
-    let hub = ProjectHubState::for_test();
-    // hub.focused_widget = None (default)
-    client.project_hub_state = Some(hub);
+    // Sidebar has focus now (Focus::Normal is default, which means no widget is focused)
+    client.project_hub_state = Some(ProjectHubState::for_test());
 
     let output = render_to_styled_string(&mut client, COLS, ROWS);
     // ALL borders should be inactive (thin) — the bug was that w1 still showed active
@@ -994,9 +996,8 @@ fn home_small_terminal() {
         workspaces: vec![ws],
         active_workspace: 0,
     };
-    let mut hub = ProjectHubState::for_test();
-    hub.focused_widget = Some(w1);
-    client.project_hub_state = Some(hub);
+    client.project_hub_state = Some(ProjectHubState::for_test());
+    client.focus = Focus::Widget(w1);
 
     let output = render_to_styled_string(&mut client, 60, 20);
     insta::assert_snapshot!("home_small_terminal", output);

@@ -6,7 +6,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifi
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
-use pane_protocol::app::{LeaderState, Mode};
+use pane_protocol::app::LeaderState;
+use crate::client::Focus;
 use pane_protocol::config::{Action, Config, LeaderConfig, LeaderNode};
 use pane_protocol::layout::{LayoutNode, TabId};
 use pane_protocol::protocol::{RenderState, TabSnapshot, WindowSnapshot, WorkspaceSnapshot};
@@ -116,7 +117,7 @@ fn make_key(c: char) -> KeyEvent {
 #[test]
 fn palette_full_search_empty() {
     let mut client = base_client();
-    client.mode = Mode::Palette;
+    client.focus = Focus::Palette;
     client.palette_state = Some(UnifiedPaletteState::new_full_search(
         &Config::default().keys,
         &LeaderConfig::default(),
@@ -129,7 +130,7 @@ fn palette_full_search_empty() {
 #[test]
 fn palette_filtered_split() {
     let mut client = base_client();
-    client.mode = Mode::Palette;
+    client.focus = Focus::Palette;
     let mut palette_state = UnifiedPaletteState::new_full_search(
         &Config::default().keys,
         &LeaderConfig::default(),
@@ -145,7 +146,7 @@ fn palette_filtered_split() {
 #[test]
 fn palette_no_match() {
     let mut client = base_client();
-    client.mode = Mode::Palette;
+    client.focus = Focus::Palette;
     let mut palette_state = UnifiedPaletteState::new_full_search(
         &Config::default().keys,
         &LeaderConfig::default(),
@@ -161,7 +162,7 @@ fn palette_no_match() {
 #[test]
 fn palette_selected_third() {
     let mut client = base_client();
-    client.mode = Mode::Palette;
+    client.focus = Focus::Palette;
     let mut palette_state = UnifiedPaletteState::new_full_search(
         &Config::default().keys,
         &LeaderConfig::default(),
@@ -218,7 +219,7 @@ fn leader_compact_hints_root() {
         },
     );
 
-    client.mode = Mode::Leader;
+    client.focus = Focus::Leader;
     client.leader_state = Some(LeaderState {
         path: vec![],
         current_node: LeaderNode::Group {
@@ -259,7 +260,7 @@ fn leader_subgroup() {
         },
     );
 
-    client.mode = Mode::Leader;
+    client.focus = Focus::Leader;
     client.leader_state = Some(LeaderState {
         path: vec![make_key('w')],
         current_node: LeaderNode::Group {
@@ -276,7 +277,7 @@ fn leader_subgroup() {
 #[test]
 fn palette_small_terminal() {
     let mut client = base_client();
-    client.mode = Mode::Palette;
+    client.focus = Focus::Palette;
     client.palette_state = Some(UnifiedPaletteState::new_full_search(
         &Config::default().keys,
         &LeaderConfig::default(),

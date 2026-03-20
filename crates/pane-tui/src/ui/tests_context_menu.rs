@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
-use pane_protocol::app::Mode;
+use crate::client::Focus;
 use pane_protocol::config::{Config, HubWidget};
 use pane_protocol::layout::{LayoutNode, TabId};
 use pane_protocol::protocol::{RenderState, TabSnapshot, WindowSnapshot, WorkspaceSnapshot};
@@ -142,7 +142,7 @@ fn base_client() -> Client {
 #[test]
 fn ctx_menu_tab_bar() {
     let mut client = base_client();
-    client.mode = Mode::ContextMenu;
+    client.focus = Focus::ContextMenu;
     client.context_menu_state = Some(context_menu::tab_bar_menu(40, 5));
 
     let output = render_to_string(&mut client, COLS, ROWS);
@@ -152,7 +152,7 @@ fn ctx_menu_tab_bar() {
 #[test]
 fn ctx_menu_workspace_bar() {
     let mut client = base_client();
-    client.mode = Mode::ContextMenu;
+    client.focus = Focus::ContextMenu;
     client.context_menu_state = Some(context_menu::workspace_bar_menu(20, 1));
 
     let output = render_to_string(&mut client, COLS, ROWS);
@@ -162,7 +162,7 @@ fn ctx_menu_workspace_bar() {
 #[test]
 fn ctx_menu_pane_body() {
     let mut client = base_client();
-    client.mode = Mode::ContextMenu;
+    client.focus = Focus::ContextMenu;
     client.context_menu_state = Some(context_menu::home_body_menu(60, 18));
     client.project_hub_state = Some(ProjectHubState::for_test());
 
@@ -183,7 +183,7 @@ fn ctx_menu_home_body() {
         active_workspace: 0,
     };
     client.project_hub_state = Some(ProjectHubState::for_test());
-    client.mode = Mode::ContextMenu;
+    client.focus = Focus::ContextMenu;
     client.context_menu_state = Some(context_menu::home_body_menu(30, 10));
 
     let output = render_to_string(&mut client, COLS, ROWS);
@@ -193,7 +193,7 @@ fn ctx_menu_home_body() {
 #[test]
 fn ctx_menu_clamped_position() {
     let mut client = base_client();
-    client.mode = Mode::ContextMenu;
+    client.focus = Focus::ContextMenu;
     client.context_menu_state = Some(context_menu::tab_bar_menu(115, 30));
 
     let output = render_to_string(&mut client, COLS, ROWS);
@@ -203,7 +203,7 @@ fn ctx_menu_clamped_position() {
 #[test]
 fn ctx_menu_selected_second() {
     let mut client = base_client();
-    client.mode = Mode::ContextMenu;
+    client.focus = Focus::ContextMenu;
     let mut menu = context_menu::workspace_bar_menu(20, 1);
     menu.selected = 1;
     client.context_menu_state = Some(menu);
@@ -219,7 +219,7 @@ fn ctx_menu_selected_second() {
 #[test]
 fn widget_picker_change_mode() {
     let mut client = base_client();
-    client.mode = Mode::WidgetPicker;
+    client.focus = Focus::WidgetPicker;
     client.widget_picker_state = Some(WidgetPickerState::new(WidgetPickerMode::Change));
 
     let output = render_to_string(&mut client, COLS, ROWS);
@@ -229,7 +229,7 @@ fn widget_picker_change_mode() {
 #[test]
 fn widget_picker_split_h() {
     let mut client = base_client();
-    client.mode = Mode::WidgetPicker;
+    client.focus = Focus::WidgetPicker;
     client.widget_picker_state = Some(WidgetPickerState::new(WidgetPickerMode::SplitHorizontal));
 
     let output = render_to_string(&mut client, COLS, ROWS);
@@ -239,7 +239,7 @@ fn widget_picker_split_h() {
 #[test]
 fn widget_picker_selected_fifth() {
     let mut client = base_client();
-    client.mode = Mode::WidgetPicker;
+    client.focus = Focus::WidgetPicker;
     let mut state = WidgetPickerState::new(WidgetPickerMode::Change);
     state.selected = 4;
     client.widget_picker_state = Some(state);

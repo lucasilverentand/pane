@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use ratatui::style::Color;
@@ -77,6 +78,31 @@ pub struct Theme {
     pub tab_inactive: Color,
 }
 
+/// Detect whether the terminal uses a light background (cached).
+fn is_light_terminal() -> bool {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        // Check COLORFGBG env var (format "fg;bg")
+        if let Ok(val) = std::env::var("COLORFGBG") {
+            if let Some(bg) = val.rsplit(';').next().and_then(|s| s.parse::<u8>().ok()) {
+                // ANSI palette: 7 = white, 9-15 = bright colors → light background
+                return bg == 7 || bg >= 9;
+            }
+        }
+        // macOS: absence of AppleInterfaceStyle means light mode
+        #[cfg(target_os = "macos")]
+        {
+            return std::process::Command::new("defaults")
+                .args(["read", "-g", "AppleInterfaceStyle"])
+                .output()
+                .map(|o| !o.status.success())
+                .unwrap_or(false);
+        }
+        #[cfg(not(target_os = "macos"))]
+        false
+    })
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self {
@@ -89,6 +115,11 @@ impl Default for Theme {
             tab_inactive: Color::DarkGray,
         }
     }
+}
+
+impl Theme {
+    /// Light-mode border color for the default theme.
+    const BORDER_INACTIVE_LIGHT: Color = Color::Rgb(195, 195, 195);
 }
 
 impl Theme {
@@ -871,18 +902,32 @@ impl Config {
 
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
-            Err(_) => return Self::default(),
+            Err(_) => {
+                let mut c = Self::default();
+                c.adjust_for_terminal();
+                return c;
+            }
         };
 
         let raw: RawConfig = match toml::from_str(&content) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("pane: invalid config at {}: {}", path.display(), e);
-                return Self::default();
+                let mut c = Self::default();
+                c.adjust_for_terminal();
+                return c;
             }
         };
 
         Self::from_raw(raw)
+    }
+
+    /// Adjust theme defaults based on terminal light/dark detection.
+    /// Only changes values that weren't explicitly set in the config.
+    fn adjust_for_terminal(&mut self) {
+        if is_light_terminal() {
+            self.theme.border_inactive = Theme::BORDER_INACTIVE_LIGHT;
+        }
     }
 
     pub fn decoration_for(&self, process: &str) -> Option<&PaneDecoration> {
@@ -908,13 +953,19 @@ impl Config {
         let mut config = Self::default();
 
         // Theme
+        let mut border_inactive_explicit = false;
         if let Some(t) = raw.theme {
             // Load preset as base if specified
-            if let Some(ref preset_name) = t.preset {
+            let has_preset = if let Some(ref preset_name) = t.preset {
                 if let Some(preset_theme) = Theme::preset(preset_name) {
                     config.theme = preset_theme;
+                    true
+                } else {
+                    false
                 }
-            }
+            } else {
+                false
+            };
             // Apply per-field overrides on top of preset (or default)
             if let Some(s) = t.accent {
                 if let Some(c) = parse_color(&s) {
@@ -924,7 +975,12 @@ impl Config {
             if let Some(s) = t.border_inactive {
                 if let Some(c) = parse_color(&s) {
                     config.theme.border_inactive = c;
+                    border_inactive_explicit = true;
                 }
+            }
+            // Auto-detect light terminal for default theme when not explicitly set
+            if !border_inactive_explicit && !has_preset {
+                config.adjust_for_terminal();
             }
             if let Some(s) = t.bg {
                 if let Some(c) = parse_color(&s) {
@@ -951,6 +1007,9 @@ impl Config {
                     config.theme.tab_inactive = c;
                 }
             }
+        } else {
+            // No [theme] section — apply terminal detection on default theme
+            config.adjust_for_terminal();
         }
 
         // Behavior
@@ -1541,8 +1600,14 @@ min_pane_width = 80
         let raw: RawConfig = toml::from_str(toml_str).unwrap();
         let config = Config::from_raw(raw);
         assert_eq!(config.theme.accent, Color::Green);
-        // Unchanged defaults
-        assert_eq!(config.theme.border_inactive, Color::Rgb(70, 70, 70));
+        // Unchanged defaults — from_raw applies terminal detection, so compare
+        // against what load() would produce rather than Theme::default()
+        let expected = if is_light_terminal() {
+            Theme::BORDER_INACTIVE_LIGHT
+        } else {
+            Color::Rgb(70, 70, 70)
+        };
+        assert_eq!(config.theme.border_inactive, expected);
         assert_eq!(config.behavior.fold_bar_size, 1);
     }
 

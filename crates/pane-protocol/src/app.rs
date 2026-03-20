@@ -2,24 +2,6 @@
 
 use crossterm::event::KeyEvent;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Mode {
-    Normal,
-    Interact,
-    Scroll,
-    Copy,
-    Palette,
-    Confirm,
-    Leader,
-    TabPicker,
-    Rename,
-    ContextMenu,
-    Resize,
-    NewWorkspaceInput,
-    ProjectHub,
-    WidgetPicker,
-}
-
 pub struct LeaderState {
     pub path: Vec<KeyEvent>,
     pub current_node: crate::config::LeaderNode,
@@ -43,55 +25,6 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
     use std::collections::HashMap;
-
-    #[test]
-    fn mode_equality() {
-        assert_eq!(Mode::Normal, Mode::Normal);
-        assert_ne!(Mode::Normal, Mode::Interact);
-        assert_ne!(Mode::Scroll, Mode::Copy);
-    }
-
-    #[test]
-    fn mode_clone() {
-        let mode = Mode::Leader;
-        let cloned = mode.clone();
-        assert_eq!(mode, cloned);
-    }
-
-    #[test]
-    fn all_mode_variants_are_distinct() {
-        let modes = vec![
-            Mode::Normal,
-            Mode::Interact,
-            Mode::Scroll,
-            Mode::Copy,
-            Mode::Palette,
-            Mode::Confirm,
-            Mode::Leader,
-            Mode::TabPicker,
-            Mode::Rename,
-            Mode::ContextMenu,
-            Mode::Resize,
-            Mode::NewWorkspaceInput,
-            Mode::ProjectHub,
-            Mode::WidgetPicker,
-        ];
-        // Every pair should be different
-        for (i, a) in modes.iter().enumerate() {
-            for (j, b) in modes.iter().enumerate() {
-                if i != j {
-                    assert_ne!(a, b, "Mode variants at {} and {} should differ", i, j);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn mode_debug_format() {
-        let mode = Mode::Interact;
-        let debug = format!("{:?}", mode);
-        assert_eq!(debug, "Interact");
-    }
 
     #[test]
     fn resize_border_equality() {

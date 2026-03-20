@@ -12,13 +12,13 @@ use ratatui::backend::TestBackend;
 use ratatui::style::Color;
 use ratatui::Terminal;
 
-use pane_protocol::app::{Mode, ResizeBorder, ResizeState};
+use pane_protocol::app::{ResizeBorder, ResizeState};
 use pane_protocol::config::Config;
 use pane_protocol::layout::{LayoutNode, SplitDirection, TabId};
 use pane_protocol::protocol::{RenderState, TabSnapshot, WindowSnapshot, WorkspaceSnapshot};
 use pane_protocol::window_types::{TabKind, WindowId};
 
-use crate::client::Client;
+use crate::client::{Client, Focus};
 use crate::ui;
 
 const COLS: u16 = 120;
@@ -79,11 +79,14 @@ const BORDER_CHARS: &[&str] = &["╭", "╮", "╰", "╯", "│", "─", "┤",
 /// Both variants are handled here.
 fn is_accent_fg(fg: Color) -> bool {
     match fg {
-        Color::Cyan => true,
+        Color::Cyan | Color::Yellow | Color::Green | Color::Magenta | Color::Blue | Color::Red => {
+            true
+        }
         Color::Rgb(r, g, b) => {
             let max = r.max(g).max(b);
             let min = r.min(g).min(b);
-            max > 100 && (max - min) > 30
+            // Threshold high enough to exclude dim_color(accent, 0.65) variants
+            max > 150 && (max - min) > 30
         }
         _ => false,
     }
@@ -188,7 +191,7 @@ fn resize_no_border_selected() {
         )],
         active_workspace: 0,
     };
-    client.mode = Mode::Resize;
+    client.focus = Focus::Resize;
     client.resize_state = Some(ResizeState { selected: None });
 
     let output = render_to_string(&mut client, COLS, ROWS);
@@ -209,7 +212,7 @@ fn resize_border_left() {
         )],
         active_workspace: 0,
     };
-    client.mode = Mode::Resize;
+    client.focus = Focus::Resize;
     client.resize_state = Some(ResizeState {
         selected: Some(ResizeBorder::Left),
     });
@@ -232,7 +235,7 @@ fn resize_border_right() {
         )],
         active_workspace: 0,
     };
-    client.mode = Mode::Resize;
+    client.focus = Focus::Resize;
     client.resize_state = Some(ResizeState {
         selected: Some(ResizeBorder::Right),
     });
@@ -255,7 +258,7 @@ fn resize_border_top() {
         )],
         active_workspace: 0,
     };
-    client.mode = Mode::Resize;
+    client.focus = Focus::Resize;
     client.resize_state = Some(ResizeState {
         selected: Some(ResizeBorder::Top),
     });
@@ -278,7 +281,7 @@ fn resize_border_bottom() {
         )],
         active_workspace: 0,
     };
-    client.mode = Mode::Resize;
+    client.focus = Focus::Resize;
     client.resize_state = Some(ResizeState {
         selected: Some(ResizeBorder::Bottom),
     });
@@ -309,7 +312,7 @@ fn resize_hsplit_left_pane() {
         workspaces: vec![ws],
         active_workspace: 0,
     };
-    client.mode = Mode::Resize;
+    client.focus = Focus::Resize;
     client.resize_state = Some(ResizeState {
         selected: Some(ResizeBorder::Right),
     });
@@ -340,7 +343,7 @@ fn resize_vsplit_top_pane() {
         workspaces: vec![ws],
         active_workspace: 0,
     };
-    client.mode = Mode::Resize;
+    client.focus = Focus::Resize;
     client.resize_state = Some(ResizeState {
         selected: Some(ResizeBorder::Bottom),
     });
@@ -363,7 +366,7 @@ fn resize_small_terminal() {
         )],
         active_workspace: 0,
     };
-    client.mode = Mode::Resize;
+    client.focus = Focus::Resize;
     client.resize_state = Some(ResizeState {
         selected: Some(ResizeBorder::Left),
     });

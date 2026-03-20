@@ -791,6 +791,24 @@ async fn handle_client(
                 let render_state = render_state_for_client(&state, cws);
                 let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
             }
+            ClientRequest::SelectTab { window_id, tab_index } => {
+                let mut state = state.lock().await;
+                if state.workspaces.is_empty() { continue; }
+                if let Some(cws) = clients.get_active_workspace(client_id).await {
+                    state.active_workspace = cws;
+                }
+                let bar_h = state.workspace_bar_height();
+                state.focus_group(window_id, bar_h);
+                let ws = state.active_workspace_mut();
+                if let Some(group) = ws.groups.get_mut(&window_id) {
+                    if tab_index < group.tabs.len() {
+                        group.active_tab = tab_index;
+                    }
+                }
+                let cws = state.active_workspace;
+                let render_state = render_state_for_client(&state, cws);
+                let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
+            }
             ClientRequest::Attach => {
                 // Already attached, ignore
             }
