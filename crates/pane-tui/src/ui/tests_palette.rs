@@ -1,4 +1,4 @@
-//! Snapshot tests for the palette and leader overlay rendering.
+//! Snapshot tests for the palette rendering.
 
 use std::collections::{HashMap, HashSet};
 
@@ -6,7 +6,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifi
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
-use pane_protocol::app::LeaderState;
 use crate::client::Focus;
 use pane_protocol::config::{Action, Config, LeaderConfig, LeaderNode};
 use pane_protocol::layout::{LayoutNode, TabId};
@@ -118,7 +117,7 @@ fn make_key(c: char) -> KeyEvent {
 fn palette_full_search_empty() {
     let mut client = base_client();
     client.focus = Focus::Palette;
-    client.palette_state = Some(UnifiedPaletteState::new_full_search(
+    client.palette_state = Some(UnifiedPaletteState::new_command(
         &Config::default().keys,
         &LeaderConfig::default(),
     ));
@@ -131,7 +130,7 @@ fn palette_full_search_empty() {
 fn palette_filtered_split() {
     let mut client = base_client();
     client.focus = Focus::Palette;
-    let mut palette_state = UnifiedPaletteState::new_full_search(
+    let mut palette_state = UnifiedPaletteState::new_command(
         &Config::default().keys,
         &LeaderConfig::default(),
     );
@@ -147,7 +146,7 @@ fn palette_filtered_split() {
 fn palette_no_match() {
     let mut client = base_client();
     client.focus = Focus::Palette;
-    let mut palette_state = UnifiedPaletteState::new_full_search(
+    let mut palette_state = UnifiedPaletteState::new_command(
         &Config::default().keys,
         &LeaderConfig::default(),
     );
@@ -163,7 +162,7 @@ fn palette_no_match() {
 fn palette_selected_third() {
     let mut client = base_client();
     client.focus = Focus::Palette;
-    let mut palette_state = UnifiedPaletteState::new_full_search(
+    let mut palette_state = UnifiedPaletteState::new_command(
         &Config::default().keys,
         &LeaderConfig::default(),
     );
@@ -175,7 +174,7 @@ fn palette_selected_third() {
 }
 
 // ---------------------------------------------------------------------------
-// Leader overlay snapshot tests
+// Shortcut mode snapshot tests
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -219,15 +218,12 @@ fn leader_compact_hints_root() {
         },
     );
 
-    client.focus = Focus::Leader;
-    client.leader_state = Some(LeaderState {
-        path: vec![],
-        current_node: LeaderNode::Group {
-            label: "root".into(),
-            children: children.clone(),
-        },
-        popup_visible: true,
-    });
+    let node = LeaderNode::Group {
+        label: "root".into(),
+        children,
+    };
+    client.focus = Focus::Palette;
+    client.palette_state = Some(UnifiedPaletteState::new_shortcut_for_test(&node, Vec::new()));
 
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("leader_compact_hints_root", output);
@@ -260,15 +256,12 @@ fn leader_subgroup() {
         },
     );
 
-    client.focus = Focus::Leader;
-    client.leader_state = Some(LeaderState {
-        path: vec![make_key('w')],
-        current_node: LeaderNode::Group {
-            label: "window".into(),
-            children: sub,
-        },
-        popup_visible: true,
-    });
+    let node = LeaderNode::Group {
+        label: "window".into(),
+        children: sub,
+    };
+    client.focus = Focus::Palette;
+    client.palette_state = Some(UnifiedPaletteState::new_shortcut_for_test(&node, vec![make_key('w')]));
 
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("leader_subgroup", output);
@@ -278,7 +271,7 @@ fn leader_subgroup() {
 fn palette_small_terminal() {
     let mut client = base_client();
     client.focus = Focus::Palette;
-    client.palette_state = Some(UnifiedPaletteState::new_full_search(
+    client.palette_state = Some(UnifiedPaletteState::new_command(
         &Config::default().keys,
         &LeaderConfig::default(),
     ));

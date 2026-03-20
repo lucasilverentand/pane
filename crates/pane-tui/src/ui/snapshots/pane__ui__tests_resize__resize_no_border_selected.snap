@@ -37,4 +37,4 @@ expression: output
 │                                                                                                                      │
 │                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  hjkl  select border ·  =  equalize ·  Esc  quit
+ ( hjkl ) select border · ( = ) equalize · ( Esc ) quit

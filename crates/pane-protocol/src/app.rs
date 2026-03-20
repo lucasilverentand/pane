@@ -1,13 +1,5 @@
 //! Shared types used by both the TUI client and UI rendering.
 
-use crossterm::event::KeyEvent;
-
-pub struct LeaderState {
-    pub path: Vec<KeyEvent>,
-    pub current_node: crate::config::LeaderNode,
-    pub popup_visible: bool,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResizeBorder {
     Left,
@@ -23,8 +15,6 @@ pub struct ResizeState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
-    use std::collections::HashMap;
 
     #[test]
     fn resize_border_equality() {
@@ -59,56 +49,5 @@ mod tests {
             selected: Some(ResizeBorder::Bottom),
         };
         assert_eq!(state.selected, Some(ResizeBorder::Bottom));
-    }
-
-    #[test]
-    fn leader_state_construction_empty_path() {
-        let state = LeaderState {
-            path: vec![],
-            current_node: crate::config::LeaderNode::PassThrough,
-            popup_visible: false,
-        };
-        assert!(state.path.is_empty());
-        assert!(!state.popup_visible);
-    }
-
-    #[test]
-    fn leader_state_with_key_path() {
-        let key = KeyEvent {
-            code: KeyCode::Char('w'),
-            modifiers: KeyModifiers::NONE,
-            kind: KeyEventKind::Press,
-            state: KeyEventState::NONE,
-        };
-        let state = LeaderState {
-            path: vec![key],
-            current_node: crate::config::LeaderNode::Group {
-                label: "window".to_string(),
-                children: HashMap::new(),
-            },
-            popup_visible: true,
-        };
-        assert_eq!(state.path.len(), 1);
-        assert_eq!(state.path[0].code, KeyCode::Char('w'));
-        assert!(state.popup_visible);
-    }
-
-    #[test]
-    fn leader_state_with_leaf_node() {
-        let state = LeaderState {
-            path: vec![],
-            current_node: crate::config::LeaderNode::Leaf {
-                action: crate::config::Action::Quit,
-                label: "quit".to_string(),
-            },
-            popup_visible: false,
-        };
-        match &state.current_node {
-            crate::config::LeaderNode::Leaf { action, label } => {
-                assert_eq!(*action, crate::config::Action::Quit);
-                assert_eq!(label, "quit");
-            }
-            _ => panic!("Expected Leaf node"),
-        }
     }
 }

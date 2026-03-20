@@ -260,7 +260,7 @@ pub fn render(
         } else if focused {
             Style::default().fg(theme.accent)
         } else {
-            Style::default().fg(theme.dim)
+            Style::default().fg(theme.border_inactive)
         };
         frame.buffer_mut().set_string(plus_x, tab_area.y, " + ", plus_style);
     }

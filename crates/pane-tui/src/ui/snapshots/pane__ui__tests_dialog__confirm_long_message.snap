@@ -20,7 +20,7 @@ expression: output
 │            ╭ Confirm ───────────────────────────────────────────────────────────────────────────────────╮            │
 │            │   Are you sure you want to close this workspace? All running processes will be terminated. │            │
 │            │                                                                                            │            │
-│            │    Cancel    Confirm                                                                       │            │
+│            │   ( Cancel )  ( Confirm )                                                                  │            │
 │            ╰────────────────────────────────────────────────────────────────────────────────────────────╯            │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -37,4 +37,4 @@ expression: output
 │                                                                                                                      │
 │                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  Enter/y  confirm ·  Esc/n  cancel
+ ( Enter/y ) confirm · ( Esc/n ) cancel

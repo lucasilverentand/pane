@@ -58,7 +58,7 @@ final class AppState {
     func selectWorkspace(_ index: Int) {
         selectedWorkspaceIndex = index
         Task {
-            try? await client.setActiveWorkspace(index)
+            try? await client.sendCommand("select-workspace \(index)")
         }
     }
 }

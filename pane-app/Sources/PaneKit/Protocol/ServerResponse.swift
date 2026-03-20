@@ -3,30 +3,26 @@ import Foundation
 /// Mirrors Rust `ServerResponse` enum.
 ///
 /// Serde externally tagged format:
-/// - `{"Attached": {"client_id": 0}}`
+/// - `"Attached"` / `"SessionEnded"` (unit variants)
 /// - `{"PaneOutput": {"pane_id": "uuid", "data": [27, 91, ...]}}`
 /// - `{"PaneExited": {"pane_id": "uuid"}}`
 /// - `{"LayoutChanged": {"render_state": {...}}}`
 /// - `{"StatsUpdate": {"cpu_percent": 42.5, ...}}`
 /// - `{"PluginSegments": [[{...}]]}`
-/// - `"SessionEnded"` / `"AllWorkspacesClosed"`
-/// - `{"FullScreenDump": {"pane_id": "uuid", "data": [...]}`
-/// - `{"ClientListChanged": [...]}`
-/// - `{"Kicked": 42}`
+/// - `{"FullScreenDump": {"pane_id": "uuid", "data": [...]}}`
+/// - `{"ClientCountChanged": 3}`
 /// - `{"Error": "message"}`
 /// - `{"CommandOutput": {"output": "...", "pane_id": null, "window_id": null, "success": true}}`
 public enum ServerResponse: Codable, Sendable {
-    case attached(clientId: UInt64)
+    case attached
     case paneOutput(paneId: TabId, data: [UInt8])
     case paneExited(paneId: TabId)
     case layoutChanged(renderState: RenderState)
     case statsUpdate(SerializableSystemStats)
     case pluginSegments([[PluginSegment]])
     case sessionEnded
-    case allWorkspacesClosed
     case fullScreenDump(paneId: TabId, data: [UInt8])
-    case clientListChanged([ClientListEntry])
-    case kicked(UInt64)
+    case clientCountChanged(UInt32)
     case error(String)
     case commandOutput(output: String, paneId: UInt32?, windowId: UInt32?, success: Bool)
 
@@ -38,16 +34,10 @@ public enum ServerResponse: Codable, Sendable {
         case statsUpdate = "StatsUpdate"
         case pluginSegments = "PluginSegments"
         case sessionEnded = "SessionEnded"
-        case allWorkspacesClosed = "AllWorkspacesClosed"
         case fullScreenDump = "FullScreenDump"
-        case clientListChanged = "ClientListChanged"
-        case kicked = "Kicked"
+        case clientCountChanged = "ClientCountChanged"
         case error = "Error"
         case commandOutput = "CommandOutput"
-    }
-
-    private struct AttachedPayload: Codable {
-        let client_id: UInt64
     }
 
     private struct PaneOutputPayload: Codable {
@@ -81,17 +71,15 @@ public enum ServerResponse: Codable, Sendable {
            let str = try? container.decode(String.self)
         {
             switch str {
+            case "Attached": self = .attached; return
             case "SessionEnded": self = .sessionEnded; return
-            case "AllWorkspacesClosed": self = .allWorkspacesClosed; return
             default: break
             }
         }
 
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
-        if let payload = try container.decodeIfPresent(AttachedPayload.self, forKey: .attached) {
-            self = .attached(clientId: payload.client_id)
-        } else if let payload = try container.decodeIfPresent(PaneOutputPayload.self, forKey: .paneOutput) {
+        if let payload = try container.decodeIfPresent(PaneOutputPayload.self, forKey: .paneOutput) {
             self = .paneOutput(paneId: payload.pane_id, data: payload.data)
         } else if let payload = try container.decodeIfPresent(PaneExitedPayload.self, forKey: .paneExited) {
             self = .paneExited(paneId: payload.pane_id)
@@ -103,10 +91,8 @@ public enum ServerResponse: Codable, Sendable {
             self = .pluginSegments(segments)
         } else if let payload = try container.decodeIfPresent(FullScreenDumpPayload.self, forKey: .fullScreenDump) {
             self = .fullScreenDump(paneId: payload.pane_id, data: payload.data)
-        } else if let entries = try container.decodeIfPresent([ClientListEntry].self, forKey: .clientListChanged) {
-            self = .clientListChanged(entries)
-        } else if let id = try container.decodeIfPresent(UInt64.self, forKey: .kicked) {
-            self = .kicked(id)
+        } else if let count = try container.decodeIfPresent(UInt32.self, forKey: .clientCountChanged) {
+            self = .clientCountChanged(count)
         } else if let msg = try container.decodeIfPresent(String.self, forKey: .error) {
             self = .error(msg)
         } else if let payload = try container.decodeIfPresent(CommandOutputPayload.self, forKey: .commandOutput) {
@@ -125,9 +111,9 @@ public enum ServerResponse: Codable, Sendable {
 
     public func encode(to encoder: any Encoder) throws {
         switch self {
-        case .attached(let clientId):
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(AttachedPayload(client_id: clientId), forKey: .attached)
+        case .attached:
+            var container = encoder.singleValueContainer()
+            try container.encode("Attached")
         case .paneOutput(let paneId, let data):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(PaneOutputPayload(pane_id: paneId, data: data), forKey: .paneOutput)
@@ -146,18 +132,12 @@ public enum ServerResponse: Codable, Sendable {
         case .sessionEnded:
             var container = encoder.singleValueContainer()
             try container.encode("SessionEnded")
-        case .allWorkspacesClosed:
-            var container = encoder.singleValueContainer()
-            try container.encode("AllWorkspacesClosed")
         case .fullScreenDump(let paneId, let data):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(FullScreenDumpPayload(pane_id: paneId, data: data), forKey: .fullScreenDump)
-        case .clientListChanged(let entries):
+        case .clientCountChanged(let count):
             var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(entries, forKey: .clientListChanged)
-        case .kicked(let id):
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(id, forKey: .kicked)
+            try container.encode(count, forKey: .clientCountChanged)
         case .error(let msg):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(msg, forKey: .error)

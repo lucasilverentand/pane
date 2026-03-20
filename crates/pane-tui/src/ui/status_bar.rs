@@ -65,17 +65,26 @@ pub fn get_buttons(client: &Client) -> &'static [(&'static str, &'static str)] {
             ("/", "search"),
             ("Esc", "quit"),
         ],
-        Focus::Palette => &[
-            ("type", "filter"),
-            ("Enter", "run"),
-            ("Esc", "cancel"),
-        ],
+        Focus::Palette => {
+            if client.palette_state.as_ref().is_some_and(|p| {
+                p.view == crate::ui::palette::PaletteView::Shortcut
+            }) {
+                &[
+                    ("key", "shortcut"),
+                    ("\u{2423}", "search"),
+                    ("Esc", "cancel"),
+                ]
+            } else {
+                &[
+                    ("type", "filter"),
+                    ("Enter", "run"),
+                    ("Esc", "cancel"),
+                ]
+            }
+        }
         Focus::Confirm => &[
             ("Enter/y", "confirm"),
             ("Esc/n", "cancel"),
-        ],
-        Focus::Leader => &[
-            ("Esc", "cancel"),
         ],
         Focus::TabPicker => &[
             ("type", "filter"),
@@ -152,7 +161,7 @@ pub fn get_buttons(client: &Client) -> &'static [(&'static str, &'static str)] {
 pub fn render_client(client: &Client, theme: &Theme, frame: &mut Frame, area: Rect) {
     let buttons = get_buttons(client);
     let hovered = client.hover.and_then(|(hx, hy)| hit_test(buttons, area, hx, hy));
-    render_button_bar(buttons, hovered, theme, frame, area);
+    render_button_bar(buttons, hovered, theme, client.config.behavior.nerd_fonts, frame, area);
 }
 
 #[allow(dead_code)]
@@ -177,7 +186,7 @@ fn compute_button_ranges(buttons: &[(&str, &str)], area: Rect) -> Vec<(u16, u16)
             offset += 3; // " · " separator
         }
         let start = offset;
-        offset += key.width() as u16 + 2; // " key "
+        offset += key.width() as u16 + 2 + 2; // ▐ + " key " + ▌
         offset += label.width() as u16 + 1; // " label"
         ranges.push((area.x + start, area.x + offset));
     }
@@ -203,18 +212,17 @@ fn render_button_bar(
     buttons: &[(&str, &str)],
     hovered: Option<usize>,
     theme: &Theme,
+    nerd_fonts: bool,
     frame: &mut Frame,
     area: Rect,
 ) {
     let key_style = Style::default()
-        .fg(theme.bg)
-        .bg(theme.accent)
+        .fg(theme.accent)
         .add_modifier(Modifier::BOLD);
     let label_style = Style::default().fg(theme.fg);
     let sep_style = Style::default().fg(theme.dim);
     let hovered_key_style = Style::default()
-        .fg(theme.bg)
-        .bg(theme.fg)
+        .fg(theme.fg)
         .add_modifier(Modifier::BOLD);
     let hovered_label_style = Style::default().fg(theme.fg);
 
@@ -226,7 +234,7 @@ fn render_button_bar(
         let is_hovered = hovered == Some(i);
         let ks = if is_hovered { hovered_key_style } else { key_style };
         let ls = if is_hovered { hovered_label_style } else { label_style };
-        spans.push(Span::styled(format!(" {} ", key), ks));
+        spans.extend(super::dialog::pill_spans(&format!(" {} ", key), ks, nerd_fonts));
         spans.push(Span::styled(format!(" {}", label), ls));
     }
 
@@ -290,12 +298,12 @@ mod tests {
 
     #[test]
     fn hit_test_returns_correct_button() {
-        // Normal mode buttons with ⎵ (display width 1):
-        // " " (1) | " ⎵ " (3) " leader" (7) = [1,11)
-        // " · " (3) | " : " (3) " commands" (9) = [14,26)
-        // " · " (3) | " n " (3) " new tab" (8) = [29,40)
-        // " · " (3) | " s/v " (5) " split" (6) = [43,54)
-        // " · " (3) | " q " (3) " quit" (5) = [57,65)
+        // Normal mode buttons with ⎵ (display width 1), pill caps add +2 per key:
+        // " " (1) | ▐" ⎵ "▌ (5) " leader" (7) = [1,13)
+        // " · " (3) | ▐" : "▌ (5) " commands" (9) = [16,30)
+        // " · " (3) | ▐" n "▌ (5) " new tab" (8) = [33,46)
+        // " · " (3) | ▐" s/v "▌ (7) " split" (6) = [49,62)
+        // " · " (3) | ▐" q "▌ (5) " quit" (5) = [65,75)
         let buttons: &[(&str, &str)] = &[
             ("\u{2423}", "leader"),
             (":", "commands"),
@@ -307,32 +315,32 @@ mod tests {
 
         // Verify ranges to understand layout
         let ranges = compute_button_ranges(buttons, a);
-        assert_eq!(ranges[0], (1, 11));  // ⎵ leader
-        assert_eq!(ranges[1], (14, 26)); // : commands
+        assert_eq!(ranges[0], (1, 13));  // ⎵ leader
+        assert_eq!(ranges[1], (16, 30)); // : commands
 
         // Click on first button key area
         assert_eq!(hit_test(buttons, a, 1, 24), Some(0));
         assert_eq!(hit_test(buttons, a, 3, 24), Some(0));
         // Click on first button label
-        assert_eq!(hit_test(buttons, a, 5, 24), Some(0));
+        assert_eq!(hit_test(buttons, a, 7, 24), Some(0));
 
         // Click on "commands" button
-        assert_eq!(hit_test(buttons, a, 14, 24), Some(1));
-        assert_eq!(hit_test(buttons, a, 25, 24), Some(1));
+        assert_eq!(hit_test(buttons, a, 16, 24), Some(1));
+        assert_eq!(hit_test(buttons, a, 29, 24), Some(1));
 
         // Click on "new tab" button
-        assert_eq!(hit_test(buttons, a, 29, 24), Some(2));
+        assert_eq!(hit_test(buttons, a, 33, 24), Some(2));
 
         // Click on "quit" button (last)
-        assert_eq!(hit_test(buttons, a, 57, 24), Some(4));
+        assert_eq!(hit_test(buttons, a, 65, 24), Some(4));
 
         // Click in separator area → None
-        assert_eq!(hit_test(buttons, a, 11, 24), None);
-        assert_eq!(hit_test(buttons, a, 12, 24), None);
         assert_eq!(hit_test(buttons, a, 13, 24), None);
+        assert_eq!(hit_test(buttons, a, 14, 24), None);
+        assert_eq!(hit_test(buttons, a, 15, 24), None);
 
         // Click past all buttons → None
-        assert_eq!(hit_test(buttons, a, 65, 24), None);
+        assert_eq!(hit_test(buttons, a, 75, 24), None);
 
         // Click on padding → None
         assert_eq!(hit_test(buttons, a, 0, 24), None);
@@ -352,8 +360,8 @@ mod tests {
         let buttons: &[(&str, &str)] = &[("Esc", "cancel")];
         let a = Rect::new(0, 0, 80, 1);
         let ranges = compute_button_ranges(buttons, a);
-        // " " (1) + " Esc " (5) + " cancel" (7) = range [1, 13)
-        assert_eq!(ranges, vec![(1, 13)]);
+        // " " (1) + ▐" Esc "▌ (7) + " cancel" (7) = range [1, 15)
+        assert_eq!(ranges, vec![(1, 15)]);
     }
 
     #[test]
@@ -361,9 +369,9 @@ mod tests {
         let buttons: &[(&str, &str)] = &[("Enter", "confirm"), ("Esc", "cancel")];
         let a = Rect::new(0, 0, 80, 1);
         let ranges = compute_button_ranges(buttons, a);
-        // Button 0: offset=1, " Enter " (7) + " confirm" (8) → [1, 16)
-        // Button 1: offset=16+3=19, " Esc " (5) + " cancel" (7) → [19, 31)
-        assert_eq!(ranges, vec![(1, 16), (19, 31)]);
+        // Button 0: offset=1, ▐" Enter "▌ (9) + " confirm" (8) → [1, 18)
+        // Button 1: offset=18+3=21, ▐" Esc "▌ (7) + " cancel" (7) → [21, 35)
+        assert_eq!(ranges, vec![(1, 18), (21, 35)]);
     }
 
     #[test]
@@ -371,10 +379,10 @@ mod tests {
         // Status bar at x=5 (e.g. in a split)
         let buttons: &[(&str, &str)] = &[("q", "quit")];
         let a = Rect::new(5, 10, 80, 1);
-        // Button range: [5+1, 5+9) = [6, 14)
+        // Button range: ▐" q "▌ (5) + " quit" (5) → [5+1, 5+11) = [6, 16)
         assert_eq!(hit_test(buttons, a, 5, 10), None); // padding
         assert_eq!(hit_test(buttons, a, 6, 10), Some(0));
-        assert_eq!(hit_test(buttons, a, 13, 10), Some(0));
-        assert_eq!(hit_test(buttons, a, 14, 10), None);
+        assert_eq!(hit_test(buttons, a, 15, 10), Some(0));
+        assert_eq!(hit_test(buttons, a, 16, 10), None);
     }
 }

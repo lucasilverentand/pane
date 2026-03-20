@@ -1,13 +1,16 @@
 import SwiftUI
 import PaneKit
 
-/// Combined sidebar: workspace list at the top, windows/tabs for selected workspace below.
+/// Sidebar: workspace list with windows/tabs for the selected workspace.
 struct SidebarView: View {
     @Environment(AppState.self) private var appState
     @Environment(PaneClient.self) private var client
 
     var body: some View {
-        List {
+        List(selection: Binding(
+            get: { appState.selectedWorkspaceIndex },
+            set: { appState.selectWorkspace($0) }
+        )) {
             workspacesSection
             if let workspace = appState.currentWorkspace {
                 windowsSection(workspace)
@@ -15,6 +18,15 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("Pane")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    Task { try? await client.sendCommand("new-workspace") }
+                } label: {
+                    Label("New Workspace", systemImage: "plus")
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -22,12 +34,12 @@ struct SidebarView: View {
         if let state = client.renderState, !state.workspaces.isEmpty {
             Section("Workspaces") {
                 ForEach(Array(state.workspaces.enumerated()), id: \.offset) { index, workspace in
-                    Button {
-                        appState.selectWorkspace(index)
-                    } label: {
-                        Label(workspace.name, systemImage: "rectangle.stack")
+                    Label {
+                        Text(workspace.name)
+                    } icon: {
+                        Image(systemName: workspace.isHome ? "house" : "rectangle.stack")
                     }
-                    .buttonStyle(.plain)
+                    .tag(index)
                     .fontWeight(index == appState.selectedWorkspaceIndex ? .semibold : .regular)
                 }
             }
@@ -63,7 +75,7 @@ struct SidebarView: View {
         } label: {
             HStack {
                 Image(systemName: "rectangle.split.3x1")
-                Text("Window")
+                Text(window.name ?? "Window")
                     .fontWeight(isActive ? .semibold : .regular)
                 Spacer()
                 Text("\(window.tabs.count) tabs")
@@ -79,6 +91,7 @@ struct SidebarView: View {
         case .agent: "sparkles"
         case .nvim: "doc.text"
         case .devServer: "server.rack"
+        case .widget: "square.grid.2x2"
         }
     }
 }

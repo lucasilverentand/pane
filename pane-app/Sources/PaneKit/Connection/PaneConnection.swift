@@ -10,9 +10,20 @@ public final class PaneConnection: Sendable {
     private let writeQueue = DispatchQueue(label: "pane.connection.write")
 
     /// The default socket path for the current user.
+    /// Matches the Rust daemon's `socket_path()`: `$TMPDIR/pane-{uid}/pane.sock`
+    /// (or `pane-{PANE_SOCKET}.sock` if env set).
+    /// The Swift app always uses the release socket name since it spawns
+    /// the installed `pane` binary (which is a release build).
     public static var defaultSocketPath: String {
         let uid = getuid()
-        return "/tmp/pane-\(uid)/pane.sock"
+        let base = ProcessInfo.processInfo.environment["TMPDIR"] ?? "/tmp"
+        let prefix: String
+        if let custom = ProcessInfo.processInfo.environment["PANE_SOCKET"], !custom.isEmpty {
+            prefix = "pane-\(custom)"
+        } else {
+            prefix = "pane"
+        }
+        return "\(base)/pane-\(uid)/\(prefix).sock"
     }
 
     private init(fd: Int32) {

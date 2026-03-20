@@ -22,6 +22,7 @@ public struct WorkspaceSnapshot: Codable, Hashable, Sendable {
     public let foldedWindows: Set<WindowId>
     public let zoomedWindow: WindowId?
     public let floatingWindows: [FloatingWindowSnapshot]
+    public let isHome: Bool
 
     private enum CodingKeys: String, CodingKey {
         case name
@@ -33,6 +34,7 @@ public struct WorkspaceSnapshot: Codable, Hashable, Sendable {
         case foldedWindows = "folded_windows"
         case zoomedWindow = "zoomed_window"
         case floatingWindows = "floating_windows"
+        case isHome = "is_home"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -46,6 +48,7 @@ public struct WorkspaceSnapshot: Codable, Hashable, Sendable {
         foldedWindows = try container.decodeIfPresent(Set<WindowId>.self, forKey: .foldedWindows) ?? []
         zoomedWindow = try container.decodeIfPresent(WindowId.self, forKey: .zoomedWindow)
         floatingWindows = try container.decode([FloatingWindowSnapshot].self, forKey: .floatingWindows)
+        isHome = try container.decodeIfPresent(Bool.self, forKey: .isHome) ?? false
     }
 }
 
@@ -63,11 +66,13 @@ public struct WindowSnapshot: Codable, Hashable, Sendable {
     public let id: WindowId
     public let tabs: [TabSnapshot]
     public let activeTab: Int
+    public let name: String?
 
     private enum CodingKeys: String, CodingKey {
         case id
         case tabs
         case activeTab = "active_tab"
+        case name
     }
 }
 
@@ -79,6 +84,8 @@ public struct TabSnapshot: Codable, Hashable, Sendable {
     public let exited: Bool
     public let foregroundProcess: String?
     public let cwd: String
+    public let cols: UInt16
+    public let rows: UInt16
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -87,5 +94,19 @@ public struct TabSnapshot: Codable, Hashable, Sendable {
         case exited
         case foregroundProcess = "foreground_process"
         case cwd
+        case cols
+        case rows
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(TabId.self, forKey: .id)
+        kind = try container.decode(TabKind.self, forKey: .kind)
+        title = try container.decode(String.self, forKey: .title)
+        exited = try container.decode(Bool.self, forKey: .exited)
+        foregroundProcess = try container.decodeIfPresent(String.self, forKey: .foregroundProcess)
+        cwd = try container.decode(String.self, forKey: .cwd)
+        cols = try container.decodeIfPresent(UInt16.self, forKey: .cols) ?? 80
+        rows = try container.decodeIfPresent(UInt16.self, forKey: .rows) ?? 24
     }
 }

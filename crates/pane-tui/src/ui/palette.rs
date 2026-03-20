@@ -9,7 +9,7 @@ use ratatui::{
 
 use std::collections::HashMap;
 
-use pane_protocol::config::{Action, KeyMap, LeaderConfig, LeaderNode, Theme};
+use pane_protocol::config::{normalize_key, Action, KeyMap, LeaderConfig, LeaderNode, Theme};
 use pane_protocol::registry;
 
 use super::dialog;
@@ -20,10 +20,22 @@ use super::dialog;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaletteView {
-    /// Full-screen centered overlay with search and all actions listed
-    FullSearch,
-    /// Small popup (bottom-right) showing a leader group's available keys
-    CompactHints,
+    /// Shortcut mode: shows leader tree shortcuts, keys navigate the tree
+    Shortcut,
+    /// Command mode: text search through all commands
+    Command,
+}
+
+/// Result of navigating a shortcut key in the leader tree.
+pub enum ShortcutResult {
+    /// Matched a leaf action — execute it.
+    Action(Action),
+    /// Navigated into a subgroup — state already updated.
+    Navigated,
+    /// PassThrough node — send leader key to PTY.
+    PassThrough,
+    /// Key not found in current group.
+    NoMatch,
 }
 
 // ---------------------------------------------------------------------------
@@ -49,68 +61,155 @@ pub struct UnifiedPaletteState {
     pub selected: usize,
     all_entries: Vec<PaletteEntry>,
     pub filtered: Vec<usize>,
-    /// Current leader group children for compact hints view
+    /// Current leader group children for shortcut view (groups first, then leaves).
     pub leader_group: Option<Vec<(KeyEvent, String, bool)>>, // (key, label, is_group)
-    /// Display path for which-key header (e.g. "⎵ w" for leader → window)
-    pub leader_path: Option<String>,
+    /// Current leader tree node for key lookups in shortcut mode.
+    pub leader_node: Option<LeaderNode>,
+    /// Key path through the leader tree (for building the display title).
+    pub leader_key_path: Vec<KeyEvent>,
     /// Pre-selected action from a leader key match (highlighted in palette)
     pub highlighted_action: Option<Action>,
 }
 
 impl UnifiedPaletteState {
-    /// Create a full-search palette with all actions.
-    pub fn new_full_search(keymap: &KeyMap, leader: &LeaderConfig) -> Self {
+    /// Create a command-mode palette with all actions.
+    pub fn new_command(keymap: &KeyMap, leader: &LeaderConfig) -> Self {
         let all_entries = build_palette_entries(keymap, leader);
         let filtered: Vec<usize> = (0..all_entries.len()).collect();
         Self {
-            view: PaletteView::FullSearch,
+            view: PaletteView::Command,
             input: String::new(),
             selected: 0,
             all_entries,
             filtered,
             leader_group: None,
-            leader_path: None,
+            leader_node: None,
+            leader_key_path: Vec::new(),
             highlighted_action: None,
         }
     }
 
-    /// Create a compact-hints palette showing a leader group's children.
-    pub fn new_compact_hints(children: &HashMap<KeyEvent, LeaderNode>, path: String) -> Self {
-        let entries: Vec<(KeyEvent, String, bool)> = {
-            let mut v: Vec<_> = children
-                .iter()
-                .filter(|(_, node)| !matches!(node, LeaderNode::PassThrough))
-                .map(|(key, node)| {
-                    let (label, is_group) = match node {
-                        LeaderNode::Leaf { label, .. } => (label.clone(), false),
-                        LeaderNode::Group { label, .. } => (format!("+{}", label), true),
-                        LeaderNode::PassThrough => unreachable!(),
-                    };
-                    (*key, label, is_group)
-                })
-                .collect();
-            v.sort_by(|a, b| format_key_short(&a.0).cmp(&format_key_short(&b.0)));
-            v
+    /// Create a shortcut-mode palette from the leader tree root.
+    pub fn new_shortcut(leader: &LeaderConfig) -> Self {
+        Self::new_shortcut_from_node(&leader.root, Vec::new())
+    }
+
+    /// Build a shortcut-mode palette from a specific leader tree node.
+    fn new_shortcut_from_node(node: &LeaderNode, key_path: Vec<KeyEvent>) -> Self {
+        let children = match node {
+            LeaderNode::Group { children, .. } => children,
+            _ => {
+                return Self {
+                    view: PaletteView::Shortcut,
+                    input: String::new(),
+                    selected: 0,
+                    all_entries: Vec::new(),
+                    filtered: Vec::new(),
+                    leader_group: Some(Vec::new()),
+                    leader_node: Some(node.clone()),
+                    leader_key_path: key_path,
+                    highlighted_action: None,
+                };
+            }
         };
+
+        let mut groups = Vec::new();
+        let mut leaves = Vec::new();
+        for (key, child) in children {
+            if matches!(child, LeaderNode::PassThrough) {
+                continue;
+            }
+            let (label, is_group) = match child {
+                LeaderNode::Leaf { label, .. } => (label.clone(), false),
+                LeaderNode::Group { label, .. } => (label.clone(), true),
+                LeaderNode::PassThrough => unreachable!(),
+            };
+            if is_group {
+                groups.push((*key, label, true));
+            } else {
+                leaves.push((*key, label, false));
+            }
+        }
+        groups.sort_by(|a, b| format_key_short(&a.0).cmp(&format_key_short(&b.0)));
+        leaves.sort_by(|a, b| format_key_short(&a.0).cmp(&format_key_short(&b.0)));
+
+        let mut entries = groups;
+        entries.extend(leaves);
+
         Self {
-            view: PaletteView::CompactHints,
+            view: PaletteView::Shortcut,
             input: String::new(),
             selected: 0,
             all_entries: Vec::new(),
             filtered: Vec::new(),
             leader_group: Some(entries),
-            leader_path: Some(path),
+            leader_node: Some(node.clone()),
+            leader_key_path: key_path,
             highlighted_action: None,
         }
     }
 
-    /// Transition from compact hints to full search, carrying over typed chars as query.
-    #[allow(dead_code)]
-    pub fn transition_to_full_search(&mut self, keymap: &KeyMap, leader: &LeaderConfig) {
+    /// Transition from shortcut mode to command mode.
+    pub fn transition_to_command(&mut self, keymap: &KeyMap, leader: &LeaderConfig) {
         self.all_entries = build_palette_entries(keymap, leader);
-        self.view = PaletteView::FullSearch;
+        self.view = PaletteView::Command;
         self.leader_group = None;
+        self.leader_node = None;
+        self.leader_key_path.clear();
         self.update_filter();
+    }
+
+    /// Navigate a key press in shortcut mode. Returns what happened.
+    pub fn navigate_shortcut(&mut self, key: KeyEvent) -> ShortcutResult {
+        let node = match &self.leader_node {
+            Some(n) => n,
+            None => return ShortcutResult::NoMatch,
+        };
+        let children = match node {
+            LeaderNode::Group { children, .. } => children,
+            _ => return ShortcutResult::NoMatch,
+        };
+
+        let normalized = normalize_key(key);
+        match children.get(&normalized).cloned() {
+            Some(LeaderNode::Leaf { action, .. }) => ShortcutResult::Action(action),
+            Some(LeaderNode::PassThrough) => ShortcutResult::PassThrough,
+            Some(group @ LeaderNode::Group { .. }) => {
+                let mut key_path = self.leader_key_path.clone();
+                key_path.push(normalized);
+                *self = Self::new_shortcut_from_node(&group, key_path);
+                ShortcutResult::Navigated
+            }
+            None => ShortcutResult::NoMatch,
+        }
+    }
+
+    /// Get the key event for the currently selected shortcut entry.
+    pub fn selected_shortcut_key(&self) -> Option<KeyEvent> {
+        self.leader_group
+            .as_ref()
+            .and_then(|entries| entries.get(self.selected))
+            .map(|(key, _, _)| *key)
+    }
+
+    /// Create a shortcut-mode palette from a node and key path (for tests).
+    #[cfg(test)]
+    pub fn new_shortcut_for_test(node: &LeaderNode, key_path: Vec<KeyEvent>) -> Self {
+        Self::new_shortcut_from_node(node, key_path)
+    }
+
+    /// Build the display title for shortcut mode (e.g. "⎵" or "⎵ w → window").
+    pub fn shortcut_title(&self) -> String {
+        let mut parts = vec!["⎵".to_string()];
+        for k in &self.leader_key_path {
+            parts.push(key_event_to_string(k));
+        }
+        match &self.leader_node {
+            Some(LeaderNode::Group { label, .. }) if !self.leader_key_path.is_empty() => {
+                format!("{} → {}", parts.join(" "), label)
+            }
+            _ => parts.join(" "),
+        }
     }
 
     pub fn update_filter(&mut self) {
@@ -341,12 +440,12 @@ fn format_key_short(key: &KeyEvent) -> String {
 
 pub fn render(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Frame, area: Rect) {
     match state.view {
-        PaletteView::FullSearch => render_full_search(state, theme, frame, area),
-        PaletteView::CompactHints => render_compact_hints(state, theme, frame, area),
+        PaletteView::Command => render_command(state, theme, frame, area),
+        PaletteView::Shortcut => render_shortcut(state, theme, frame, area),
     }
 }
 
-fn render_full_search(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Frame, area: Rect) {
+fn render_command(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Frame, area: Rect) {
     let popup_area = dialog::popup_rect(
         dialog::PopupSize::Percent { width: 60, height: 50 },
         dialog::PopupAnchor::Center,
@@ -459,99 +558,107 @@ fn render_full_search(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Fr
     frame.render_widget(paragraph, list_area);
 }
 
-fn render_compact_hints(
+fn render_shortcut(
     state: &UnifiedPaletteState,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
     let entries = match &state.leader_group {
-        Some(e) => e,
-        None => return,
+        Some(e) if !e.is_empty() => e,
+        _ => return,
     };
 
-    if entries.is_empty() {
+    let popup_area = dialog::popup_rect(
+        dialog::PopupSize::Percent { width: 60, height: 50 },
+        dialog::PopupAnchor::Center,
+        area,
+    );
+
+    let title = state.shortcut_title();
+    let inner = dialog::render_popup(frame, popup_area, &title, theme);
+
+    if inner.height < 3 {
         return;
     }
 
-    // Separate groups and leaves for display
-    let groups: Vec<_> = entries.iter().filter(|(_, _, is_group)| *is_group).collect();
-    let leaves: Vec<_> = entries.iter().filter(|(_, _, is_group)| !*is_group).collect();
+    let [hint_area, sep_area, list_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+    ])
+    .areas(inner);
+
+    // Hint line
+    let hint_line = Line::from(vec![
+        Span::styled("  type a key", Style::default().fg(theme.dim)),
+        Span::raw("  "),
+        Span::styled(
+            "\u{2423}",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" search all commands", Style::default().fg(theme.dim)),
+    ]);
+    frame.render_widget(Paragraph::new(hint_line), hint_area);
+
+    dialog::render_separator(frame, sep_area, theme);
+
+    // List entries
+    let visible_count = list_area.height as usize;
+    let scroll_offset = if state.selected >= visible_count {
+        state.selected - visible_count + 1
+    } else {
+        0
+    };
 
     let max_key_len = entries
         .iter()
         .map(|(k, _, _)| format_key_short(k).len())
         .max()
         .unwrap_or(1);
-    let max_label_len = entries
-        .iter()
-        .map(|(_, l, _)| l.len())
-        .max()
-        .unwrap_or(1);
 
-    // Multi-column layout: fit entries in columns
-    let item_width = (max_key_len + 2 + max_label_len + 2) as u16;
-    let max_popup_width = (area.width * 60 / 100).max(30);
-    let cols = ((max_popup_width - 2) / item_width).clamp(1, 4) as usize;
-    let total_items = entries.len();
-    let rows = total_items.div_ceil(cols);
-
-    let popup_width = ((item_width * cols as u16) + 4).min(max_popup_width);
-    let popup_height = (rows as u16 + 4).min(area.height.saturating_sub(4));
-
-    let popup_area = dialog::popup_rect(
-        dialog::PopupSize::Fixed { width: popup_width, height: popup_height },
-        dialog::PopupAnchor::BottomCenter,
-        area,
-    );
-
-    let title = match &state.leader_path {
-        Some(path) if !path.is_empty() => path.clone(),
-        _ => "which key".to_string(),
-    };
-
-    let inner = dialog::render_popup(frame, popup_area, &title, theme);
-
-    if inner.height == 0 || inner.width < 4 {
-        return;
-    }
-
-    let max_visible_rows = inner.height as usize;
-    let col_width = inner.width / cols as u16;
-
-    // Render entries in column-major order (groups first, then leaves)
-    let all_items: Vec<&(KeyEvent, String, bool)> = groups.into_iter().chain(leaves).collect();
-    for (idx, (key, label, is_group)) in all_items.iter().enumerate() {
-        let row = idx % rows;
-        let col = idx / rows;
-        if row >= max_visible_rows || col >= cols {
-            continue;
-        }
-
-        let cell_x = inner.x + (col as u16 * col_width);
-        let cell_y = inner.y + row as u16;
-        let cell_width = col_width.min(inner.x + inner.width - cell_x);
+    let mut lines: Vec<Line> = Vec::new();
+    for (idx, (key, label, is_group)) in entries.iter().enumerate() {
+        let is_selected = idx == state.selected;
 
         let key_str = format_key_short(key);
+        let pad = " ".repeat(max_key_len.saturating_sub(key_str.len()));
+
         let key_style = Style::default()
             .fg(theme.accent)
             .add_modifier(Modifier::BOLD);
-        let label_style = if *is_group {
+
+        let label_style = if is_selected {
+            Style::default()
+                .fg(theme.fg)
+                .add_modifier(Modifier::BOLD)
+        } else if *is_group {
             Style::default().fg(theme.accent)
         } else {
             Style::default().fg(theme.fg)
         };
-        let pad = " ".repeat(max_key_len.saturating_sub(key_str.len()));
-        let line = Line::from(vec![
-            Span::raw(" "),
+
+        let prefix = if *is_group { "+" } else { " " };
+
+        lines.push(Line::from(vec![
+            Span::raw("  "),
             Span::styled(key_str, key_style),
             Span::raw(pad),
-            Span::raw(" "),
-            Span::styled(label.clone(), label_style),
-        ]);
-        let cell_area = Rect::new(cell_x, cell_y, cell_width, 1);
-        frame.render_widget(Paragraph::new(line), cell_area);
+            Span::raw("  "),
+            Span::styled(format!("{}{}", prefix, label), label_style),
+        ]));
     }
+
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(scroll_offset)
+        .take(visible_count)
+        .collect();
+
+    let paragraph = Paragraph::new(visible_lines);
+    frame.render_widget(paragraph, list_area);
 }
 
 
@@ -594,9 +701,9 @@ mod tests {
     }
 
     #[test]
-    fn test_palette_state_full_search_navigation() {
+    fn test_palette_state_command_navigation() {
         let (km, lc) = defaults();
-        let mut state = UnifiedPaletteState::new_full_search(&km, &lc);
+        let mut state = UnifiedPaletteState::new_command(&km, &lc);
         assert_eq!(state.selected, 0);
         state.move_down();
         assert_eq!(state.selected, 1);
@@ -609,7 +716,7 @@ mod tests {
     #[test]
     fn test_palette_state_filter() {
         let (km, lc) = defaults();
-        let mut state = UnifiedPaletteState::new_full_search(&km, &lc);
+        let mut state = UnifiedPaletteState::new_command(&km, &lc);
         let total = state.filtered.len();
         state.input = "tab".to_string();
         state.update_filter();
@@ -617,33 +724,57 @@ mod tests {
     }
 
     #[test]
-    fn test_compact_hints_from_leader_root() {
+    fn test_shortcut_from_leader_root() {
         let lc = LeaderConfig::default();
-        if let LeaderNode::Group { children, .. } = &lc.root {
-            let state = UnifiedPaletteState::new_compact_hints(children, "⎵".into());
-            assert_eq!(state.view, PaletteView::CompactHints);
-            assert!(state.leader_group.as_ref().unwrap().len() > 0);
-        }
+        let state = UnifiedPaletteState::new_shortcut(&lc);
+        assert_eq!(state.view, PaletteView::Shortcut);
+        assert!(!state.leader_group.as_ref().unwrap().is_empty());
+        assert_eq!(state.shortcut_title(), "⎵");
     }
 
     #[test]
-    fn test_transition_to_full_search() {
+    fn test_shortcut_navigate_into_group() {
+        let lc = LeaderConfig::default();
+        let mut state = UnifiedPaletteState::new_shortcut(&lc);
+        // Navigate into the 'w' (window) group
+        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
+        let result = state.navigate_shortcut(key);
+        assert!(matches!(result, ShortcutResult::Navigated));
+        assert!(state.shortcut_title().contains("Window"));
+    }
+
+    #[test]
+    fn test_shortcut_navigate_leaf() {
+        let lc = LeaderConfig::default();
+        let mut state = UnifiedPaletteState::new_shortcut(&lc);
+        // 'd' is Split H at root level
+        let key = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        let result = state.navigate_shortcut(key);
+        assert!(matches!(result, ShortcutResult::Action(Action::SplitHorizontal)));
+    }
+
+    #[test]
+    fn test_shortcut_navigate_no_match() {
+        let lc = LeaderConfig::default();
+        let mut state = UnifiedPaletteState::new_shortcut(&lc);
+        let key = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE);
+        let result = state.navigate_shortcut(key);
+        assert!(matches!(result, ShortcutResult::NoMatch));
+    }
+
+    #[test]
+    fn test_transition_to_command() {
         let (km, lc) = defaults();
-        let mut state = if let LeaderNode::Group { children, .. } = &lc.root {
-            UnifiedPaletteState::new_compact_hints(children, "⎵".into())
-        } else {
-            panic!("expected group root");
-        };
-        state.input = "split".to_string();
-        state.transition_to_full_search(&km, &lc);
-        assert_eq!(state.view, PaletteView::FullSearch);
+        let mut state = UnifiedPaletteState::new_shortcut(&lc);
+        state.transition_to_command(&km, &lc);
+        assert_eq!(state.view, PaletteView::Command);
         assert!(!state.filtered.is_empty());
     }
 
     #[test]
     fn test_highlighted_action_sorts_to_front() {
         let (km, lc) = defaults();
-        let mut state = UnifiedPaletteState::new_full_search(&km, &lc);
+        let mut state = UnifiedPaletteState::new_command(&km, &lc);
         state.highlighted_action = Some(Action::Quit);
         state.update_filter();
         if let Some(&first_idx) = state.filtered.first() {
@@ -678,14 +809,14 @@ mod tests {
     #[test]
     fn test_filter_empty_query_returns_all() {
         let (km, lc) = defaults();
-        let state = UnifiedPaletteState::new_full_search(&km, &lc);
+        let state = UnifiedPaletteState::new_command(&km, &lc);
         assert_eq!(state.filtered.len(), state.all_entries.len());
     }
 
     #[test]
     fn test_filter_no_match() {
         let (km, lc) = defaults();
-        let mut state = UnifiedPaletteState::new_full_search(&km, &lc);
+        let mut state = UnifiedPaletteState::new_command(&km, &lc);
         state.input = "zzzzzzzzz".to_string();
         state.update_filter();
         assert!(state.filtered.is_empty());

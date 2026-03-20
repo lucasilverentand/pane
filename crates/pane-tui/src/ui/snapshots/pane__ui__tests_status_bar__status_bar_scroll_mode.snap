@@ -37,4 +37,4 @@ expression: output
 │                                                                                                                      │
 │                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  j/k  up/down ·  u/d  page ·  g/G  top/end ·  Esc  quit
+ ( j/k ) up/down · ( u/d ) page · ( g/G ) top/end · ( Esc ) quit

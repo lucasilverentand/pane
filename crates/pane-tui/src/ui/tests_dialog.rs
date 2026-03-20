@@ -188,6 +188,38 @@ fn new_workspace_dir_stage() {
 }
 
 #[test]
+fn new_workspace_dir_stage_zoxide() {
+    let mut client = base_client();
+    client.focus = Focus::NewWorkspace;
+    let mut state = NewWorkspaceInputState::for_test(NewWorkspaceStage::Directory);
+    state.browser.has_zoxide = true;
+    state.browser.search_mode = true;
+    state.browser.zoxide_results = vec![
+        "/Users/luca/Developer/pane".into(),
+        "/Users/luca/Developer/ellie".into(),
+        "/Users/luca/Developer/canaveral".into(),
+    ];
+    state.browser.input = "pa".into();
+    client.new_workspace_input = Some(state);
+
+    let output = render_to_string(&mut client, COLS, ROWS);
+    insta::assert_snapshot!("new_workspace_dir_stage_zoxide", output);
+}
+
+#[test]
+fn new_workspace_dir_stage_browse_with_toggle() {
+    let mut client = base_client();
+    client.focus = Focus::NewWorkspace;
+    let mut state = NewWorkspaceInputState::for_test(NewWorkspaceStage::Directory);
+    state.browser.has_zoxide = true;
+    state.browser.search_mode = false;
+    client.new_workspace_input = Some(state);
+
+    let output = render_to_string(&mut client, COLS, ROWS);
+    insta::assert_snapshot!("new_workspace_dir_stage_browse_with_toggle", output);
+}
+
+#[test]
 fn new_workspace_name_stage() {
     let mut client = base_client();
     client.focus = Focus::NewWorkspace;

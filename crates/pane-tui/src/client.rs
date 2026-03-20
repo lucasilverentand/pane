@@ -10,7 +10,7 @@ use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 
 use crate::event::AppEvent;
-use pane_protocol::app::{LeaderState, ResizeBorder, ResizeState};
+use pane_protocol::app::{ResizeBorder, ResizeState};
 use crate::clipboard;
 use pane_protocol::config::{self, Action, Config, HubWidget};
 use pane_protocol::window_types::{TabKind, WindowId};
@@ -49,7 +49,6 @@ pub struct Client {
     pub plugin_segments: Vec<Vec<pane_protocol::plugin::PluginSegment>>,
 
     // Client-only UI state
-    pub leader_state: Option<LeaderState>,
     pub palette_state: Option<UnifiedPaletteState>,
     pub copy_mode_state: Option<CopyModeState>,
     pub system_programs: Vec<TabPickerEntry>,
@@ -94,7 +93,7 @@ struct HomeWidgetDragState {
 /// Unified focus state: replaces the old Mode + FocusLocation + focused_widget.
 ///
 /// Each variant implies both *what* is focused and *which keybinds* are active.
-/// Modal variants (Palette, Leader, …) are pushed onto the focus stack and
+/// Modal variants (Palette, …) are pushed onto the focus stack and
 /// popped on dismiss.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Focus {
@@ -114,7 +113,6 @@ pub enum Focus {
 
     // Modals (pushed onto focus_stack)
     Palette,
-    Leader,
     Confirm,
     Rename,
     TabPicker,
@@ -227,7 +225,7 @@ impl DirBrowser {
             selected: 0,
             scroll_offset: 0,
             has_zoxide,
-            search_mode: false,
+            search_mode: has_zoxide,
             zoxide_results: Vec::new(),
         };
         browser.refresh();
@@ -1305,7 +1303,6 @@ impl Client {
             client_count: 1,
             plugin_segments: Vec::new(),
 
-            leader_state: None,
             palette_state: None,
             copy_mode_state: None,
             system_programs: crate::ui::tab_picker::scan_system_programs(),
@@ -1346,7 +1343,6 @@ impl Client {
             client_count: 1,
             plugin_segments: Vec::new(),
 
-            leader_state: None,
             palette_state: None,
             copy_mode_state: None,
             system_programs: Vec::new(),
@@ -1877,15 +1873,20 @@ impl Client {
                                             state.stage = NewWorkspaceStage::Name;
                                         }
                                         ui::DirPickerClick::HintOpen => {
-                                            state.browser.enter_selected();
-                                            state.last_click = None;
+                                            if state.browser.has_zoxide {
+                                                state.browser.toggle_search();
+                                            } else {
+                                                state.browser.enter_selected();
+                                                state.last_click = None;
+                                            }
                                         }
-                                        ui::DirPickerClick::HintSearch => {
+                                        ui::DirPickerClick::ToggleMode => {
                                             state.browser.toggle_search();
                                         }
                                         ui::DirPickerClick::HintEsc => {
-                                            if state.browser.search_mode {
-                                                state.browser.toggle_search();
+                                            if !state.browser.input.is_empty() {
+                                                state.browser.input.clear();
+                                                state.browser.update_filter();
                                             } else {
                                                 self.new_workspace_input = None;
                                                 self.focus = Focus::Normal;
@@ -2412,7 +2413,6 @@ impl Client {
             Focus::Palette => return self.handle_palette_key(key, tui, writer).await,
             Focus::TabPicker => return self.handle_tab_picker_key(key, writer).await,
             Focus::Confirm => return self.handle_confirm_key(key, writer).await,
-            Focus::Leader => return self.handle_leader_key(key, tui, writer).await,
             Focus::Rename => return self.handle_rename_key(key, writer).await,
             Focus::NewWorkspace => return self.handle_new_workspace_key(key, writer).await,
             Focus::ContextMenu => return self.handle_context_menu_key(key, tui, writer).await,
@@ -2480,10 +2480,12 @@ impl Client {
             return Ok(());
         }
 
-        // Leader key
+        // Leader key → open palette in shortcut mode
         let leader_key = config::normalize_key(self.config.leader.key);
         if normalized == leader_key {
-            self.enter_leader_mode();
+            self.push_focus();
+            self.palette_state = Some(UnifiedPaletteState::new_shortcut(&self.config.leader));
+            self.focus = Focus::Palette;
             return Ok(());
         }
 
@@ -2606,7 +2608,11 @@ impl Client {
         writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     ) -> Result<()> {
         match label {
-            "leader" => self.enter_leader_mode(),
+            "leader" => {
+                self.push_focus();
+                self.palette_state = Some(UnifiedPaletteState::new_shortcut(&self.config.leader));
+                self.focus = Focus::Palette;
+            }
             "normal" => {
                 self.focus = Focus::Normal;
             }
@@ -2642,17 +2648,6 @@ impl Client {
             _ => {} // Buttons like "search", "switch" that need keyboard input
         }
         Ok(())
-    }
-
-    fn enter_leader_mode(&mut self) {
-        self.push_focus();
-        let root = self.config.leader.root.clone();
-        self.leader_state = Some(LeaderState {
-            path: Vec::new(),
-            current_node: root,
-            popup_visible: true,
-        });
-        self.focus = Focus::Leader;
     }
 
     async fn execute_action(
@@ -2900,9 +2895,8 @@ impl Client {
                 return Ok(());
             }
             Action::Help => {
-                // Help opens the command palette (unified palette)
                 self.push_focus();
-                self.palette_state = Some(UnifiedPaletteState::new_full_search(&self.config.keys, &self.config.leader));
+                self.palette_state = Some(UnifiedPaletteState::new_command(&self.config.keys, &self.config.leader));
                 self.focus = Focus::Palette;
                 return Ok(());
             }
@@ -2936,7 +2930,7 @@ impl Client {
             }
             Action::CommandPalette => {
                 self.push_focus();
-                self.palette_state = Some(UnifiedPaletteState::new_full_search(&self.config.keys, &self.config.leader));
+                self.palette_state = Some(UnifiedPaletteState::new_command(&self.config.keys, &self.config.leader));
                 self.focus = Focus::Palette;
                 return Ok(());
             }
@@ -3182,11 +3176,11 @@ impl Client {
                 }
             }
             KeyCode::Char(' ') if state.input.is_empty() => {
-                // Space on empty input → open command palette (leader key)
+                // Space on empty input → open command palette
                 self.tab_picker_state = None;
                 self.pop_focus(); // balance the tab picker's push
                 self.push_focus(); // save state for palette
-                self.palette_state = Some(UnifiedPaletteState::new_full_search(
+                self.palette_state = Some(UnifiedPaletteState::new_command(
                     &self.config.keys,
                     &self.config.leader,
                 ));
@@ -3282,10 +3276,7 @@ impl Client {
                     state.browser.toggle_search();
                 }
                 (KeyCode::Esc, _) => {
-                    if state.browser.search_mode {
-                        // Exit search mode back to browse
-                        state.browser.toggle_search();
-                    } else if !state.browser.input.is_empty() {
+                    if !state.browser.input.is_empty() {
                         state.browser.input.clear();
                         state.browser.update_filter();
                     } else {
@@ -3316,8 +3307,15 @@ impl Client {
                 }
                 (KeyCode::Up, _) => state.browser.move_up(),
                 (KeyCode::Down, _) => state.browser.move_down(),
+                (KeyCode::Tab, _) if state.browser.search_mode && state.browser.has_zoxide => {
+                    state.browser.toggle_search();
+                }
                 (KeyCode::Tab, _) | (KeyCode::Right, _) if !state.browser.search_mode => {
-                    state.browser.enter_selected();
+                    if state.browser.has_zoxide && state.browser.input.is_empty() && state.browser.total_count() == 0 {
+                        state.browser.toggle_search();
+                    } else {
+                        state.browser.enter_selected();
+                    }
                 }
                 (KeyCode::Left, _) if !state.browser.search_mode => {
                     state.browser.go_up();
@@ -3654,90 +3652,108 @@ impl Client {
         tui: &Tui,
         writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     ) -> Result<()> {
+        use crate::ui::palette::{PaletteView, ShortcutResult};
+
         if let Some(ref mut cp) = self.palette_state {
-            match key.code {
-                KeyCode::Esc => {
-                    self.palette_state = None;
-                    self.pop_focus();
-                    self.focus = Focus::Normal;
-                }
-                KeyCode::Enter => {
-                    if let Some(action) = cp.selected_action() {
-                        self.palette_state = None;
-                        self.pop_focus();
-                        self.focus = Focus::Normal;
-                        return self.execute_action(action, tui, writer).await;
+            match &cp.view {
+                PaletteView::Shortcut => {
+                    match key.code {
+                        KeyCode::Esc => {
+                            self.palette_state = None;
+                            self.pop_focus();
+                            self.focus = Focus::Normal;
+                        }
+                        KeyCode::Up => cp.move_up(),
+                        KeyCode::Down => cp.move_down(),
+                        KeyCode::Enter => {
+                            // Execute selected shortcut entry via its key
+                            if let Some(shortcut_key) = cp.selected_shortcut_key() {
+                                match cp.navigate_shortcut(shortcut_key) {
+                                    ShortcutResult::Action(action) => {
+                                        self.palette_state = None;
+                                        self.pop_focus();
+                                        self.focus = Focus::Normal;
+                                        return self.execute_action(action, tui, writer).await;
+                                    }
+                                    ShortcutResult::Navigated => {} // state updated, stay in palette
+                                    ShortcutResult::PassThrough => {
+                                        self.palette_state = None;
+                                        self.pop_focus();
+                                        self.focus = Focus::Normal;
+                                        let leader_key = self.config.leader.key;
+                                        let mut w = writer.lock().await;
+                                        let _ = send_request(
+                                            &mut w,
+                                            &ClientRequest::Key(SerializableKeyEvent::from(leader_key)),
+                                        )
+                                        .await;
+                                    }
+                                    ShortcutResult::NoMatch => {}
+                                }
+                            }
+                        }
+                        _ => {
+                            // Leader key → switch to command mode
+                            let leader_key = config::normalize_key(self.config.leader.key);
+                            let normalized = config::normalize_key(key);
+                            if normalized == leader_key {
+                                cp.transition_to_command(&self.config.keys, &self.config.leader);
+                            } else {
+                                // Try shortcut navigation
+                                match cp.navigate_shortcut(key) {
+                                    ShortcutResult::Action(action) => {
+                                        self.palette_state = None;
+                                        self.pop_focus();
+                                        self.focus = Focus::Normal;
+                                        return self.execute_action(action, tui, writer).await;
+                                    }
+                                    ShortcutResult::Navigated => {} // state updated
+                                    ShortcutResult::PassThrough => {
+                                        self.palette_state = None;
+                                        self.pop_focus();
+                                        self.focus = Focus::Normal;
+                                        let leader_key = self.config.leader.key;
+                                        let mut w = writer.lock().await;
+                                        let _ = send_request(
+                                            &mut w,
+                                            &ClientRequest::Key(SerializableKeyEvent::from(leader_key)),
+                                        )
+                                        .await;
+                                    }
+                                    ShortcutResult::NoMatch => {}
+                                }
+                            }
+                        }
                     }
                 }
-                KeyCode::Up => cp.move_up(),
-                KeyCode::Down => cp.move_down(),
-                _ => {
-                    if ui::dialog::handle_text_input(key.code, &mut cp.input) {
-                        cp.update_filter();
+                PaletteView::Command => {
+                    match key.code {
+                        KeyCode::Esc => {
+                            self.palette_state = None;
+                            self.pop_focus();
+                            self.focus = Focus::Normal;
+                        }
+                        KeyCode::Enter => {
+                            if let Some(action) = cp.selected_action() {
+                                self.palette_state = None;
+                                self.pop_focus();
+                                self.focus = Focus::Normal;
+                                return self.execute_action(action, tui, writer).await;
+                            }
+                        }
+                        KeyCode::Up => cp.move_up(),
+                        KeyCode::Down => cp.move_down(),
+                        _ => {
+                            if ui::dialog::handle_text_input(key.code, &mut cp.input) {
+                                cp.update_filter();
+                            }
+                        }
                     }
                 }
             }
         } else {
             self.pop_focus();
             self.focus = Focus::Normal;
-        }
-        Ok(())
-    }
-
-    async fn handle_leader_key(
-        &mut self,
-        key: KeyEvent,
-        tui: &Tui,
-        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
-    ) -> Result<()> {
-        use pane_protocol::config::LeaderNode;
-
-        if key.code == KeyCode::Esc {
-            self.leader_state = None;
-            self.pop_focus();
-            self.focus = Focus::Normal;
-            return Ok(());
-        }
-
-        let normalized = config::normalize_key(key);
-        let next = {
-            let ls = self.leader_state.as_ref().unwrap();
-            if let LeaderNode::Group { children, .. } = &ls.current_node {
-                children.get(&normalized).cloned()
-            } else {
-                None
-            }
-        };
-
-        match next {
-            Some(LeaderNode::Leaf { action, .. }) => {
-                self.leader_state = None;
-                self.pop_focus();
-                self.focus = Focus::Normal;
-                return self.execute_action(action, tui, writer).await;
-            }
-            Some(LeaderNode::PassThrough) => {
-                self.leader_state = None;
-                self.pop_focus();
-                self.focus = Focus::Normal;
-                let leader_key = self.config.leader.key;
-                let mut w = writer.lock().await;
-                let _ = send_request(
-                    &mut w,
-                    &ClientRequest::Key(SerializableKeyEvent::from(leader_key)),
-                )
-                .await;
-            }
-            Some(group @ LeaderNode::Group { .. }) => {
-                let ls = self.leader_state.as_mut().unwrap();
-                ls.path.push(normalized);
-                ls.current_node = group;
-            }
-            None => {
-                self.leader_state = None;
-                self.pop_focus();
-                self.focus = Focus::Normal;
-            }
         }
         Ok(())
     }

@@ -157,7 +157,10 @@ fn status_bar_confirm_mode() {
 #[test]
 fn status_bar_leader_mode() {
     let mut client = base_client();
-    client.focus = Focus::Leader;
+    client.focus = Focus::Palette;
+    client.palette_state = Some(crate::ui::palette::UnifiedPaletteState::new_shortcut(
+        &pane_protocol::config::LeaderConfig::default(),
+    ));
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("status_bar_leader_mode", output);
 }

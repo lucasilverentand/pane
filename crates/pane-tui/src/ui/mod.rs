@@ -293,35 +293,6 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
             dialog::dim_background(frame, frame.area());
             render_confirm_dialog(client, theme, frame, frame.area());
         }
-        Focus::Leader => {
-            if let Some(ref ls) = client.leader_state {
-                if ls.popup_visible {
-                    if let pane_protocol::config::LeaderNode::Group { ref children, .. } =
-                        ls.current_node
-                    {
-                        // Build display path: "⎵" for root, "⎵ w" for leader→w, etc.
-                        let mut path_parts = vec!["⎵".to_string()];
-                        for k in &ls.path {
-                            path_parts.push(palette::key_event_to_string(k));
-                        }
-                        // If in a subgroup, show the group label
-                        let path = if let pane_protocol::config::LeaderNode::Group { ref label, .. } = ls.current_node {
-                            if ls.path.is_empty() {
-                                "⎵".to_string()
-                            } else {
-                                format!("{} → {}", path_parts.join(" "), label)
-                            }
-                        } else {
-                            path_parts.join(" ")
-                        };
-                        let compact =
-                            palette::UnifiedPaletteState::new_compact_hints(children, path);
-                        dialog::dim_background(frame, frame.area());
-                        palette::render(&compact, theme, frame, frame.area());
-                    }
-                }
-            }
-        }
         Focus::TabPicker => {
             if let Some(ref tp_state) = client.tab_picker_state {
                 let picker_area = active_window_rect(client, body)
@@ -436,7 +407,7 @@ fn render_confirm_dialog(
         dialog::confirm_hit_test(area, message, hx, hy)
     });
 
-    dialog::render_confirm(frame, area, message, hovered, theme);
+    dialog::render_confirm(frame, area, message, hovered, theme, client.config.behavior.nerd_fonts);
 }
 
 fn render_rename_dialog(
@@ -493,7 +464,7 @@ fn render_new_workspace_dialog(
 
     match state.stage {
         crate::client::NewWorkspaceStage::Directory => {
-            render_new_workspace_dir_stage(state, theme, frame, area);
+            render_new_workspace_dir_stage(state, theme, client.config.behavior.nerd_fonts, frame, area);
         }
         crate::client::NewWorkspaceStage::Name => {
             render_new_workspace_name_stage(state, theme, frame, area);
@@ -501,13 +472,14 @@ fn render_new_workspace_dialog(
     }
 }
 
-/// Stage 1: directory picker with type-to-filter and zoxide search.
+/// Stage 1: directory picker with segmented toggle for Search / Browse modes.
 ///
-/// Default mode is browse (filesystem navigation). Press Ctrl+F to toggle
-/// zoxide search mode where typing queries zoxide frecency results.
+/// When zoxide is available, defaults to search mode. A segmented toggle at
+/// the top lets the user switch between modes via click or Ctrl+F.
 fn render_new_workspace_dir_stage(
     state: &crate::client::NewWorkspaceInputState,
     theme: &pane_protocol::config::Theme,
+    nerd_fonts: bool,
     frame: &mut Frame,
     area: ratatui::layout::Rect,
 ) {
@@ -522,12 +494,7 @@ fn render_new_workspace_dir_stage(
         dialog::PopupAnchor::Center,
         area,
     );
-    let title = if state.browser.search_mode {
-        "new workspace — zoxide search"
-    } else {
-        "new workspace"
-    };
-    let inner = dialog::render_popup(frame, popup_area, title, theme);
+    let inner = dialog::render_popup(frame, popup_area, "new workspace", theme);
 
     if inner.height < 5 || inner.width < 10 {
         return;
@@ -535,7 +502,43 @@ fn render_new_workspace_dir_stage(
 
     let mut row = inner.y;
     let search_mode = state.browser.search_mode;
+    let has_zoxide = state.browser.has_zoxide;
     let has_filter = !state.browser.input.is_empty();
+
+    // ── Segmented toggle (only when zoxide is available) ──
+    if has_zoxide {
+        let active_style = Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD);
+        let inactive_style = Style::default()
+            .fg(theme.dim);
+
+        let search_style = if search_mode { active_style } else { inactive_style };
+        let browse_style = if !search_mode { active_style } else { inactive_style };
+
+        // ▐ Search ▌ ▐ Browse ▌  — each pill is 1+8+1 = 10, gap 1 → 21 chars
+        let toggle_width: u16 = 21;
+        let pad = (inner.width.saturating_sub(toggle_width)) / 2;
+
+        let mut toggle_spans: Vec<Span<'_>> = vec![Span::raw(" ".repeat(pad as usize))];
+        toggle_spans.extend(dialog::pill_spans(" Search ", search_style, nerd_fonts));
+        toggle_spans.push(Span::raw(" "));
+        toggle_spans.extend(dialog::pill_spans(" Browse ", browse_style, nerd_fonts));
+        let toggle_line = Line::from(toggle_spans);
+        frame.render_widget(
+            Paragraph::new(toggle_line),
+            ratatui::layout::Rect::new(inner.x, row, inner.width, 1),
+        );
+        row += 1;
+
+        // ── Separator between toggle and input ──
+        dialog::render_separator(
+            frame,
+            ratatui::layout::Rect::new(inner.x, row, inner.width, 1),
+            theme,
+        );
+        row += 1;
+    }
 
     // ── Search / path bar ──
     let path_display = if search_mode {
@@ -724,36 +727,25 @@ fn render_new_workspace_dir_stage(
         ratatui::layout::Rect::new(inner.x, hint_y, inner.width, 1),
         theme,
     );
+    let accent_style = Style::default().fg(theme.accent);
     let hint_line = if search_mode {
         Line::from(vec![
             Span::raw("  "),
-            Span::styled("enter", Style::default().fg(theme.accent)),
+            Span::styled("enter", accent_style),
             Span::styled(" select  ", dim_style),
-            Span::styled("esc", Style::default().fg(theme.accent)),
-            Span::styled(" back  ", dim_style),
-            Span::styled("^F", Style::default().fg(theme.accent)),
-            Span::styled(" browse", dim_style),
-        ])
-    } else if state.browser.has_zoxide {
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled("enter", Style::default().fg(theme.accent)),
-            Span::styled(" select  ", dim_style),
-            Span::styled("tab/\u{2192}", Style::default().fg(theme.accent)),
-            Span::styled(" open  ", dim_style),
-            Span::styled("^F", Style::default().fg(theme.accent)),
-            Span::styled(" search  ", dim_style),
-            Span::styled("esc", Style::default().fg(theme.accent)),
+            Span::styled("tab", accent_style),
+            Span::styled(" browse  ", dim_style),
+            Span::styled("esc", accent_style),
             Span::styled(" cancel", dim_style),
         ])
     } else {
         Line::from(vec![
             Span::raw("  "),
-            Span::styled("enter", Style::default().fg(theme.accent)),
+            Span::styled("enter", accent_style),
             Span::styled(" select  ", dim_style),
-            Span::styled("tab/\u{2192}", Style::default().fg(theme.accent)),
-            Span::styled(" open  ", dim_style),
-            Span::styled("esc", Style::default().fg(theme.accent)),
+            Span::styled("tab", accent_style),
+            Span::styled(if has_zoxide { " search  " } else { " open  " }, dim_style),
+            Span::styled("esc", accent_style),
             Span::styled(" cancel", dim_style),
         ])
     };
@@ -844,8 +836,8 @@ pub enum DirPickerClick {
     HintEnter,
     /// Clicked "tab/→" (open) in the hint bar.
     HintOpen,
-    /// Clicked "^F" (search/browse toggle) in the hint bar.
-    HintSearch,
+    /// Clicked the segmented toggle to switch mode.
+    ToggleMode,
     /// Clicked "esc" (cancel/back) in the hint bar.
     HintEsc,
 }
@@ -880,18 +872,45 @@ pub fn dir_picker_hit_test(
         return None;
     }
 
-    // Path bar is at inner.y — ← on the left, → on the right
-    if y == inner.y && !browser.search_mode && browser.input.is_empty() {
-        // "← " occupies columns inner.x..inner.x+4 (space + "← " = 4 chars)
+    // Toggle row + separator offset: present when zoxide is available
+    let toggle_rows: u16 = if browser.has_zoxide { 2 } else { 0 };
+
+    // Segmented toggle row (when zoxide is available)
+    if browser.has_zoxide && y == inner.y {
+        // Centered: pad + ▐(1) + " Search "(8) + ▌(1) + " "(1) + ▐(1) + " Browse "(8) + ▌(1)
+        let toggle_width: u16 = 21;
+        let pad = (inner.width.saturating_sub(toggle_width)) / 2;
+        let col = x.saturating_sub(inner.x) as usize;
+        let search_start = pad as usize;       // ▐ cap
+        let search_end = search_start + 10;    // ▐ + " Search " + ▌
+        let browse_start = search_end + 1;     // gap
+        let browse_end = browse_start + 10;    // ▐ + " Browse " + ▌
+
+        if col >= search_start && col < search_end {
+            if !browser.search_mode {
+                return Some(DirPickerClick::ToggleMode);
+            }
+            return None;
+        }
+        if col >= browse_start && col < browse_end {
+            if browser.search_mode {
+                return Some(DirPickerClick::ToggleMode);
+            }
+            return None;
+        }
+        return None;
+    }
+
+    // Path bar row
+    let path_y = inner.y + toggle_rows;
+    if y == path_y && !browser.search_mode && browser.input.is_empty() {
         let has_parent = browser.current_dir.parent().is_some();
         if has_parent && x < inner.x + 4 {
             return Some(DirPickerClick::Back);
         }
-        // " →" occupies the last 3 columns
         if x >= inner.x + inner.width.saturating_sub(3) {
             return Some(DirPickerClick::Confirm);
         }
-        // Click on the path text itself also confirms
         return Some(DirPickerClick::Confirm);
     }
 
@@ -899,11 +918,11 @@ pub fn dir_picker_hit_test(
     let hint_y = inner.y + inner.height - 1;
     if y == hint_y {
         let col = x.saturating_sub(inner.x) as usize;
-        return hit_test_dir_hint_bar(col, browser.search_mode, browser.has_zoxide);
+        return hit_test_dir_hint_bar(col, browser.search_mode);
     }
 
-    // List starts after path bar (1 row) + separator (1 row)
-    let list_y = inner.y + 2;
+    // List starts after toggle (0-1) + path bar (1) + separator (1)
+    let list_y = inner.y + toggle_rows + 2;
     let hint_height = 2u16;
     let list_height = (inner.y + inner.height).saturating_sub(list_y + hint_height) as usize;
     if list_height == 0 {
@@ -940,24 +959,15 @@ pub fn dir_picker_hit_test(
 
 /// Hit-test the hint bar buttons in the directory picker.
 /// Column offsets must match the spans in `render_new_workspace_dir_stage`.
-fn hit_test_dir_hint_bar(col: usize, search_mode: bool, has_zoxide: bool) -> Option<DirPickerClick> {
+fn hit_test_dir_hint_bar(col: usize, search_mode: bool) -> Option<DirPickerClick> {
     if search_mode {
-        // "  enter select  esc back  ^F browse"
-        //  01234567890123456789012345678901234567
-        //  ^^enter^^^^^^^^^esc^^^^^^^F
-        if col < 15 { return Some(DirPickerClick::HintEnter); }   // "  enter select"
-        if col < 25 { return Some(DirPickerClick::HintEsc); }     // "  esc back"
-        return Some(DirPickerClick::HintSearch);                    // "  ^F browse"
+        // "  enter select  tab browse  esc cancel"
+        if col < 16 { return Some(DirPickerClick::HintEnter); }
+        if col < 27 { return Some(DirPickerClick::ToggleMode); }
+        return Some(DirPickerClick::HintEsc);
     }
-    if has_zoxide {
-        // "  enter select  tab/→ open  ^F search  esc cancel"
-        //  0         1         2         3         4
-        if col < 16 { return Some(DirPickerClick::HintEnter); }   // "  enter select  "
-        if col < 27 { return Some(DirPickerClick::HintOpen); }    // "tab/→ open  "
-        if col < 39 { return Some(DirPickerClick::HintSearch); }  // "^F search  "
-        return Some(DirPickerClick::HintEsc);                      // "esc cancel"
-    }
-    // "  enter select  tab/→ open  esc cancel"
+    // "  enter select  tab search  esc cancel"
+    // "  enter select  tab open  esc cancel"  (no zoxide)
     if col < 16 { return Some(DirPickerClick::HintEnter); }
     if col < 27 { return Some(DirPickerClick::HintOpen); }
     Some(DirPickerClick::HintEsc)

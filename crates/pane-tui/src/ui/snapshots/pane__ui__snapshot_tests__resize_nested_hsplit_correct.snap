@@ -37,4 +37,4 @@ expression: output
 │                                                          ││                                      ││                  │
 │                                                          ││                                      ││                  │
 ╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────╯╰──────────────────╯
-  ␣  leader ·  :  commands ·  n  new tab ·  s/v  split ·  q  quit
+ ( ␣ ) leader · ( : ) commands · ( n ) new tab · ( s/v ) split · ( q ) quit

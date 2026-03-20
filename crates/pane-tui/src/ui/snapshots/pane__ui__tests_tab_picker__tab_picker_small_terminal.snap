@@ -21,4 +21,4 @@ expression: output
 │ ╰──────────────────────────────────────────────────────╯ │
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
-  type  filter ·  Enter  spawn ·  Esc  cancel
+ ( type ) filter · ( Enter ) spawn · ( Esc ) cancel

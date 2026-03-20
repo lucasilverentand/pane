@@ -56,15 +56,108 @@ public struct WindowId: Codable, Hashable, Sendable {
     }
 }
 
+// MARK: - HubWidget
+
+/// Mirrors Rust `HubWidget` enum — widget types for the project hub.
+public enum HubWidget: String, Codable, Hashable, Sendable {
+    case projectInfo = "ProjectInfo"
+    case recentCommits = "RecentCommits"
+    case changedFiles = "ChangedFiles"
+    case branches = "Branches"
+    case stashes = "Stashes"
+    case tags = "Tags"
+    case gitGraph = "GitGraph"
+    case contributors = "Contributors"
+    case todos = "Todos"
+    case readme = "Readme"
+    case languages = "Languages"
+    case diskUsage = "DiskUsage"
+    case ciStatus = "CiStatus"
+    case openIssues = "OpenIssues"
+    case runningProcesses = "RunningProcesses"
+
+    public var label: String {
+        switch self {
+        case .projectInfo: "Info"
+        case .recentCommits: "Commits"
+        case .changedFiles: "Changes"
+        case .branches: "Branches"
+        case .stashes: "Stashes"
+        case .tags: "Tags"
+        case .gitGraph: "Graph"
+        case .contributors: "Contributors"
+        case .todos: "TODOs"
+        case .readme: "README"
+        case .languages: "Languages"
+        case .diskUsage: "Disk"
+        case .ciStatus: "CI"
+        case .openIssues: "Issues"
+        case .runningProcesses: "Processes"
+        }
+    }
+}
+
 // MARK: - TabKind
 
 /// Mirrors Rust `TabKind` enum.
-/// Serde default (externally tagged): `"Shell"`, `"Agent"`, etc.
-public enum TabKind: String, Codable, Hashable, Sendable {
-    case shell = "Shell"
-    case agent = "Agent"
-    case nvim = "Nvim"
-    case devServer = "DevServer"
+/// Serde externally tagged: `"Shell"`, `"Agent"`, `{"Widget": "ProjectInfo"}`, etc.
+public enum TabKind: Codable, Hashable, Sendable {
+    case shell
+    case agent
+    case nvim
+    case devServer
+    case widget(HubWidget)
+
+    private enum CodingKeys: String, CodingKey {
+        case shell = "Shell"
+        case agent = "Agent"
+        case nvim = "Nvim"
+        case devServer = "DevServer"
+        case widget = "Widget"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        if let container = try? decoder.singleValueContainer(),
+           let str = try? container.decode(String.self)
+        {
+            switch str {
+            case "Shell": self = .shell; return
+            case "Agent": self = .agent; return
+            case "Nvim": self = .nvim; return
+            case "DevServer": self = .devServer; return
+            default: break
+            }
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let hw = try container.decodeIfPresent(HubWidget.self, forKey: .widget) {
+            self = .widget(hw)
+        } else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Unknown TabKind variant")
+            )
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        switch self {
+        case .shell:
+            var container = encoder.singleValueContainer()
+            try container.encode("Shell")
+        case .agent:
+            var container = encoder.singleValueContainer()
+            try container.encode("Agent")
+        case .nvim:
+            var container = encoder.singleValueContainer()
+            try container.encode("Nvim")
+        case .devServer:
+            var container = encoder.singleValueContainer()
+            try container.encode("DevServer")
+        case .widget(let hw):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(hw, forKey: .widget)
+        }
+    }
 
     public var label: String {
         switch self {
@@ -72,6 +165,7 @@ public enum TabKind: String, Codable, Hashable, Sendable {
         case .agent: "claude"
         case .nvim: "nvim"
         case .devServer: "server"
+        case .widget(let hw): hw.label
         }
     }
 }
@@ -267,23 +361,6 @@ public struct PluginSegment: Codable, Hashable, Sendable {
     public init(text: String, style: String = "dim") {
         self.text = text
         self.style = style
-    }
-}
-
-// MARK: - ClientListEntry
-
-/// Mirrors Rust `ClientListEntry`.
-public struct ClientListEntry: Codable, Hashable, Sendable {
-    public let id: UInt64
-    public let width: UInt16
-    public let height: UInt16
-    public let activeWorkspace: Int
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case width
-        case height
-        case activeWorkspace = "active_workspace"
     }
 }
 

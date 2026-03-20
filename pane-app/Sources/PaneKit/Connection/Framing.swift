@@ -39,7 +39,18 @@ public enum Framing: Sendable {
 
     /// Decode a JSON payload into a Codable value.
     public static func decodePayload<T: Decodable>(_ data: Data) throws -> T {
-        try JSONDecoder().decode(T.self, from: data)
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            #if DEBUG
+            if let json = String(data: data, encoding: .utf8) {
+                let preview = json.prefix(500)
+                print("[PaneKit] Failed to decode \(T.self): \(error)")
+                print("[PaneKit] Raw JSON: \(preview)")
+            }
+            #endif
+            throw error
+        }
     }
 }
 

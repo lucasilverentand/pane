@@ -9,11 +9,11 @@ expression: output
 │  zsh                                                  +  │
 │ ──────────────────────────────────────────────────────── │
 │                                                          │
-│                ╭ Confirm ──────────────╮                 │
-│                │   Are you sure?       │                 │
-│                │                       │                 │
-│                │    Cancel    Confirm  │                 │
-│                ╰───────────────────────╯                 │
+│              ╭ Confirm ──────────────────╮               │
+│              │   Are you sure?           │               │
+│              │                           │               │
+│              │   ( Cancel )  ( Confirm ) │               │
+│              ╰───────────────────────────╯               │
 │                                                          │
 │                                                          │
 │                                                          │
@@ -21,4 +21,4 @@ expression: output
 │                                                          │
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
-  Enter/y  confirm ·  Esc/n  cancel
+ ( Enter/y ) confirm · ( Esc/n ) cancel

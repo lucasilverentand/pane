@@ -34,6 +34,7 @@ pub enum PopupAnchor {
     /// Anchor at a specific (x, y) position, clamped to fit.
     Position { x: u16, y: u16 },
     /// Center horizontally, anchor to bottom of area.
+    #[allow(dead_code)]
     BottomCenter,
 }
 
@@ -134,6 +135,31 @@ pub fn render_popup(
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
     inner
+}
+
+// ---------------------------------------------------------------------------
+// Pill buttons
+// ---------------------------------------------------------------------------
+
+/// Build spans for a pill button with rounded end caps.
+///
+/// When `nerd_fonts` is true, uses Powerline rounded glyphs (`` / ``).
+/// Otherwise falls back to parentheses (`(` / `)`).
+///
+/// The caps and text share the same foreground-only style — no background
+/// color is used.
+pub fn pill_spans<'a>(text: &str, style: Style, nerd_fonts: bool) -> Vec<Span<'a>> {
+    let (left, right) = if nerd_fonts {
+        ("\u{E0B6}", "\u{E0B4}") //  /
+    } else {
+        ("(", ")")
+    };
+
+    vec![
+        Span::styled(left, style),
+        Span::styled(text.to_string(), style),
+        Span::styled(right, style),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -373,12 +399,13 @@ const CONFIRM_MARGIN: u16 = 3; // left indent for text & buttons
 const CANCEL_TEXT: &str = " Cancel ";
 const CONFIRM_TEXT: &str = " Confirm ";
 const BUTTON_GAP: u16 = 2; // space between buttons
+const PILL_CAPS: u16 = 2; // ▐ left + ▌ right per pill
 
 /// Compute the popup area for a confirm dialog with the given message.
 fn confirm_popup_area(message: &str, area: Rect) -> Rect {
     // Width: message + margins, or button row, whichever is wider, + border
     let msg_width = message.len() as u16 + CONFIRM_MARGIN + 1;
-    let btn_width = CONFIRM_MARGIN + CANCEL_TEXT.len() as u16 + BUTTON_GAP + CONFIRM_TEXT.len() as u16 + 1;
+    let btn_width = CONFIRM_MARGIN + CANCEL_TEXT.len() as u16 + PILL_CAPS + BUTTON_GAP + CONFIRM_TEXT.len() as u16 + PILL_CAPS + 1;
     let content_width = msg_width.max(btn_width);
     let width = content_width + 2; // +2 for left/right border
     let height = 5; // border + message + blank + buttons + border
@@ -398,6 +425,7 @@ pub fn render_confirm(
     message: &str,
     hovered: Option<ConfirmButton>,
     theme: &Theme,
+    nerd_fonts: bool,
 ) {
     let popup_area = confirm_popup_area(message, area);
     let inner = render_popup(frame, popup_area, "Confirm", theme);
@@ -420,22 +448,21 @@ pub fn render_confirm(
     let button_y = inner.y + 2;
 
     let cancel_style = if hovered == Some(ConfirmButton::Cancel) {
-        Style::default().fg(theme.bg).bg(theme.fg).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(theme.fg).bg(theme.dim).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.dim).add_modifier(Modifier::BOLD)
     };
     let confirm_style = if hovered == Some(ConfirmButton::Confirm) {
-        Style::default().fg(theme.bg).bg(theme.fg).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(theme.bg).bg(theme.accent).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
     };
 
-    let btn_line = Line::from(vec![
-        Span::raw(" ".repeat(CONFIRM_MARGIN as usize)),
-        Span::styled(CANCEL_TEXT, cancel_style),
-        Span::raw(" ".repeat(BUTTON_GAP as usize)),
-        Span::styled(CONFIRM_TEXT, confirm_style),
-    ]);
+    let mut btn_spans: Vec<Span<'_>> = vec![Span::raw(" ".repeat(CONFIRM_MARGIN as usize))];
+    btn_spans.extend(pill_spans(CANCEL_TEXT, cancel_style, nerd_fonts));
+    btn_spans.push(Span::raw(" ".repeat(BUTTON_GAP as usize)));
+    btn_spans.extend(pill_spans(CONFIRM_TEXT, confirm_style, nerd_fonts));
+    let btn_line = Line::from(btn_spans);
     frame.render_widget(
         Paragraph::new(btn_line),
         Rect::new(inner.x, button_y, inner.width, 1),
@@ -458,9 +485,9 @@ pub fn confirm_hit_test(
     }
 
     let cancel_start = inner.x + CONFIRM_MARGIN;
-    let cancel_end = cancel_start + CANCEL_TEXT.len() as u16;
+    let cancel_end = cancel_start + PILL_CAPS + CANCEL_TEXT.len() as u16;
     let confirm_start = cancel_end + BUTTON_GAP;
-    let confirm_end = confirm_start + CONFIRM_TEXT.len() as u16;
+    let confirm_end = confirm_start + PILL_CAPS + CONFIRM_TEXT.len() as u16;
 
     if x >= cancel_start && x < cancel_end {
         Some(ConfirmButton::Cancel)

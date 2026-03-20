@@ -356,7 +356,7 @@ fn render_tab_bar_from_snapshot(
         } else if plus_hovered {
             Style::default().fg(theme.fg)
         } else {
-            Style::default().fg(theme.dim)
+            Style::default().fg(theme.border_inactive)
         };
         frame.buffer_mut().set_string(plus_x, area.y, " + ", plus_style);
     }

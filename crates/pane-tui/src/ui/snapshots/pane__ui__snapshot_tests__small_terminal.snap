@@ -21,4 +21,4 @@ expression: output
 │                                                          │
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
-  ␣  leader ·  :  commands ·  n  new tab ·  s/v  split ·  q
+ ( ␣ ) leader · ( : ) commands · ( n ) new tab · ( s/v ) spl

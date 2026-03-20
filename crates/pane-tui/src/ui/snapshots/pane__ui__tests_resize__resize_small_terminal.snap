@@ -21,4 +21,4 @@ expression: output
 ┃                                                          │
 ┃                                                          │
 ┗──────────────────────────────────────────────────────────╯
-  h/l  move ·  Esc  quit
+ ( h/l ) move · ( Esc ) quit

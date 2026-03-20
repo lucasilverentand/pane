@@ -348,8 +348,65 @@ pub struct Behavior {
     pub show_project_hub_on_start: bool,
     /// Widget layout for the hub detail panel.
     pub hub_layout: HubLayout,
-    /// Whether the terminal font supports Nerd Font glyphs.
+    /// Whether the terminal font supports Nerd Font glyphs (resolved at startup).
     pub nerd_fonts: bool,
+}
+
+/// Config value for `nerd_fonts`: explicit on/off, or auto-detect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NerdFontsOption {
+    On,
+    Off,
+    Auto,
+}
+
+impl NerdFontsOption {
+    /// Resolve to a concrete bool.  `Auto` checks common Nerd Font env
+    /// variables and font names.
+    pub fn resolve(self) -> bool {
+        match self {
+            Self::On => true,
+            Self::Off => false,
+            Self::Auto => detect_nerd_font(),
+        }
+    }
+}
+
+/// Best-effort detection of a Nerd Font.
+///
+/// Checks (in order):
+/// 1. `NERD_FONTS` env var (`1`/`true`/`yes` → true, `0`/`false`/`no` → false)
+/// 2. Common terminal-specific font env vars for "Nerd" in the name
+/// 3. kitty `TERM_PROGRAM` + `macos_titlebar_color` (kitty usually ships NF)
+fn detect_nerd_font() -> bool {
+    // Explicit env override
+    if let Ok(val) = std::env::var("NERD_FONTS") {
+        match val.to_lowercase().as_str() {
+            "1" | "true" | "yes" => return true,
+            "0" | "false" | "no" => return false,
+            _ => {}
+        }
+    }
+
+    // Check iTerm2 font profile
+    if let Ok(font) = std::env::var("ITERM_PROFILE") {
+        if font.to_lowercase().contains("nerd") {
+            return true;
+        }
+    }
+
+    // Kitty and WezTerm are commonly set up with Nerd Fonts
+    if let Ok(prog) = std::env::var("TERM_PROGRAM") {
+        let p = prog.to_lowercase();
+        if p == "wezterm" {
+            return true;
+        }
+    }
+
+    // Ghostty sets TERM_PROGRAM=ghostty and commonly uses NF
+    // but we can't be sure, so don't default to true.
+
+    false
 }
 
 impl Default for Behavior {
@@ -364,7 +421,7 @@ impl Default for Behavior {
             projects_dirs: Vec::new(),
             show_project_hub_on_start: false,
             hub_layout: HubLayout::default(),
-            nerd_fonts: false,
+            nerd_fonts: NerdFontsOption::Auto.resolve(),
         }
     }
 }
@@ -1058,7 +1115,7 @@ impl Config {
                 }
             }
             if let Some(v) = b.nerd_fonts {
-                config.behavior.nerd_fonts = v;
+                config.behavior.nerd_fonts = v.resolve();
             }
         }
 
@@ -1240,7 +1297,8 @@ struct RawBehavior {
     /// Widget layout: array of arrays of widget names.
     /// e.g. `[["project_info"], ["recent_commits", "changed_files"]]`
     hub_layout: Option<Vec<Vec<String>>>,
-    nerd_fonts: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_nerd_fonts")]
+    nerd_fonts: Option<NerdFontsOption>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1252,6 +1310,51 @@ struct RawStatusBar {
     update_interval_secs: Option<u64>,
     left: Option<String>,
     right: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// nerd_fonts deserializer: accepts true | false | "auto"
+// ---------------------------------------------------------------------------
+
+fn deserialize_nerd_fonts<'de, D>(deserializer: D) -> Result<Option<NerdFontsOption>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct NerdFontsVisitor;
+    impl<'de> de::Visitor<'de> for NerdFontsVisitor {
+        type Value = Option<NerdFontsOption>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("true, false, or \"auto\"")
+        }
+
+        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
+            Ok(Some(if v { NerdFontsOption::On } else { NerdFontsOption::Off }))
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            match v.to_lowercase().as_str() {
+                "auto" => Ok(Some(NerdFontsOption::Auto)),
+                "true" | "yes" | "1" => Ok(Some(NerdFontsOption::On)),
+                "false" | "no" | "0" => Ok(Some(NerdFontsOption::Off)),
+                _ => Err(de::Error::custom(format!(
+                    "invalid nerd_fonts value: {v:?} (expected true, false, or \"auto\")"
+                ))),
+            }
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+    }
+
+    deserializer.deserialize_any(NerdFontsVisitor)
 }
 
 // ---------------------------------------------------------------------------
