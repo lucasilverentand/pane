@@ -137,26 +137,28 @@ struct EdgeCaseTests {
         }
     }
 
-    @Test("SetActiveWorkspace with large index")
-    func setActiveWorkspaceLargeIndex() throws {
-        let request = ClientRequest.setActiveWorkspace(999)
+    @Test("SelectTab with large tab index")
+    func selectTabLargeIndex() throws {
+        let id = WindowId(UUID())
+        let request = ClientRequest.selectTab(windowId: id, tabIndex: 999)
         let json = try encode(request)
         let decoded = try decode(ClientRequest.self, from: json)
-        if case .setActiveWorkspace(let idx) = decoded {
+        if case .selectTab(let windowId, let idx) = decoded {
+            #expect(windowId == id)
             #expect(idx == 999)
         } else {
-            Issue.record("Expected .setActiveWorkspace")
+            Issue.record("Expected .selectTab")
         }
     }
 
-    @Test("Attached with max UInt64 client ID")
-    func attachedMaxClientId() throws {
-        let json = #"{"Attached":{"client_id":18446744073709551615}}"#
+    @Test("ClientCountChanged with max UInt32 count")
+    func clientCountChangedMaxValue() throws {
+        let json = #"{"ClientCountChanged":4294967295}"#
         let response = try decode(ServerResponse.self, from: json)
-        if case .attached(let id) = response {
-            #expect(id == UInt64.max)
+        if case .clientCountChanged(let count) = response {
+            #expect(count == UInt32.max)
         } else {
-            Issue.record("Expected .attached")
+            Issue.record("Expected .clientCountChanged")
         }
     }
 
@@ -189,16 +191,14 @@ struct EdgeCaseTests {
         }
     }
 
-    @Test("ClientListEntry with zero dimensions")
-    func clientListEntryZeroDimensions() throws {
-        let json = #"{"ClientListChanged":[{"id":0,"width":0,"height":0,"active_workspace":0}]}"#
+    @Test("ClientCountChanged with zero count")
+    func clientCountChangedZero() throws {
+        let json = #"{"ClientCountChanged":0}"#
         let response = try decode(ServerResponse.self, from: json)
-        if case .clientListChanged(let entries) = response {
-            #expect(entries[0].id == 0)
-            #expect(entries[0].width == 0)
-            #expect(entries[0].height == 0)
+        if case .clientCountChanged(let count) = response {
+            #expect(count == 0)
         } else {
-            Issue.record("Expected .clientListChanged")
+            Issue.record("Expected .clientCountChanged")
         }
     }
 

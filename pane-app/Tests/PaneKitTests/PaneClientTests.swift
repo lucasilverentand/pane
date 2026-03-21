@@ -26,7 +26,7 @@ struct PaneClientTests {
                 Issue.record("Expected .attach, got \(request)")
                 return
             }
-            try server.send(.attached(clientId: 42))
+            try server.send(.attached)
         }
 
         try await client.connect(path: server.socketPath)
@@ -35,8 +35,8 @@ struct PaneClientTests {
         try await serverTask.value
         try await Task.sleep(for: .milliseconds(100))
 
-        if case .connected(let clientId) = client.connectionState {
-            #expect(clientId == 42)
+        if case .connected = client.connectionState {
+            // pass
         } else {
             Issue.record("Expected .connected, got \(client.connectionState)")
         }
@@ -53,7 +53,7 @@ struct PaneClientTests {
         let serverTask = Task.detached {
             try server.acceptClient(timeout: 5)
             _ = try server.receive()
-            try server.send(.attached(clientId: 1))
+            try server.send(.attached)
         }
 
         try await client.connect(path: server.socketPath)
@@ -203,68 +203,18 @@ struct PaneClientTests {
         }
     }
 
-    @Test("AllWorkspacesClosed invokes onSessionEvent")
+    // MARK: - ClientCountChanged
+
+    @Test("ClientCountChanged updates clientCount")
     @MainActor
-    func allWorkspacesClosedEvent() async throws {
+    func clientCountChanged() async throws {
         let (server, client) = try await connectClientToServer()
         defer { client.disconnect() }
 
-        var receivedEvent: PaneClient.SessionEvent?
-        client.onSessionEvent = { event in
-            receivedEvent = event
-        }
-
-        try server.send(.allWorkspacesClosed)
+        try server.send(.clientCountChanged(3))
         try await Task.sleep(for: .milliseconds(100))
 
-        if case .allWorkspacesClosed = receivedEvent {} else {
-            Issue.record("Expected .allWorkspacesClosed, got \(String(describing: receivedEvent))")
-        }
-    }
-
-    @Test("Kicked invokes onSessionEvent and disconnects")
-    @MainActor
-    func kickedDisconnects() async throws {
-        let (server, client) = try await connectClientToServer()
-
-        var receivedEvent: PaneClient.SessionEvent?
-        client.onSessionEvent = { event in
-            receivedEvent = event
-        }
-
-        try server.send(.kicked(42))
-        try await Task.sleep(for: .milliseconds(100))
-
-        if case .kicked(let id) = receivedEvent {
-            #expect(id == 42)
-        } else {
-            Issue.record("Expected .kicked, got \(String(describing: receivedEvent))")
-        }
-
-        if case .disconnected = client.connectionState {} else {
-            Issue.record("Expected .disconnected after kick")
-        }
-    }
-
-    // MARK: - ClientListChanged
-
-    @Test("ClientListChanged updates clientList")
-    @MainActor
-    func clientListChanged() async throws {
-        let (server, client) = try await connectClientToServer()
-        defer { client.disconnect() }
-
-        let entries = [
-            makeClientListEntry(id: 1, width: 120, height: 40, activeWorkspace: 0),
-            makeClientListEntry(id: 2, width: 80, height: 24, activeWorkspace: 1),
-        ]
-        try server.send(.clientListChanged(entries))
-        try await Task.sleep(for: .milliseconds(100))
-
-        #expect(client.clientList.count == 2)
-        #expect(client.clientList[0].id == 1)
-        #expect(client.clientList[1].id == 2)
-        #expect(client.clientList[1].activeWorkspace == 1)
+        #expect(client.clientCount == 3)
     }
 
     // MARK: - PluginSegments
@@ -413,19 +363,20 @@ struct PaneClientTests {
         }
     }
 
-    @Test("Client sends setActiveWorkspace correctly")
+    @Test("setActiveWorkspace sends select-workspace command")
     @MainActor
-    func clientSendsSetActiveWorkspace() async throws {
+    func setActiveWorkspaceSendsCommand() async throws {
         let (server, client) = try await connectClientToServer()
         defer { client.disconnect() }
 
-        try await client.setActiveWorkspace(3)
+        try await client.setActiveWorkspace(2)
         let received = try server.receive()
 
-        if case .setActiveWorkspace(let idx) = received {
-            #expect(idx == 3)
+        if case .command(let cmd) = received {
+            // Workspace 2 (0-indexed) → select-workspace -t 3 (1-indexed)
+            #expect(cmd == "select-workspace -t 3")
         } else {
-            Issue.record("Expected .setActiveWorkspace")
+            Issue.record("Expected .command, got \(received)")
         }
     }
 
@@ -500,7 +451,7 @@ struct PaneClientTests {
         let serverTask = Task.detached {
             try server.acceptClient(timeout: 5)
             _ = try server.receive() // consume Attach
-            try server.send(.attached(clientId: 1))
+            try server.send(.attached)
         }
 
         try await client.connect(path: server.socketPath)
@@ -546,9 +497,4 @@ struct PaneClientTests {
         return try! JSONDecoder().decode(RenderState.self, from: Data(json.utf8))
     }
 
-    private func makeClientListEntry(
-        id: UInt64, width: UInt16, height: UInt16, activeWorkspace: Int
-    ) -> ClientListEntry {
-        ClientListEntry(id: id, width: width, height: height, activeWorkspace: activeWorkspace)
-    }
 }

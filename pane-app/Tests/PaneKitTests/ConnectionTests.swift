@@ -61,7 +61,7 @@ struct ConnectionTests {
         try server.acceptClient(timeout: 2)
 
         // Server sends a response
-        try server.send(.attached(clientId: 99))
+        try server.send(.attached)
 
         // Client receives it
         let response: ServerResponse? = try await connection.receive(ServerResponse.self)
@@ -69,8 +69,8 @@ struct ConnectionTests {
             Issue.record("Expected response, got nil")
             return
         }
-        if case .attached(let clientId) = response {
-            #expect(clientId == 99)
+        if case .attached = response {
+            // pass
         } else {
             Issue.record("Expected .attached, got \(response)")
         }
@@ -115,10 +115,10 @@ struct ConnectionTests {
         let _ = try server.receive()
 
         // Server responds with attached
-        try server.send(.attached(clientId: 1))
+        try server.send(.attached)
         let resp: ServerResponse? = try await connection.receive(ServerResponse.self)
-        if case .attached(let id) = resp {
-            #expect(id == 1)
+        if case .attached = resp {
+            // pass
         } else {
             Issue.record("Expected .attached")
         }
@@ -205,7 +205,6 @@ struct ConnectionTests {
             .commandSync("list-panes"),
             .focusWindow(id: windowId),
             .selectTab(windowId: windowId, tabIndex: 3),
-            .setActiveWorkspace(2),
         ]
 
         for request in requests {
@@ -236,7 +235,7 @@ struct ConnectionTests {
         let tabId = TabId(UUID())
 
         let responses: [ServerResponse] = [
-            .attached(clientId: 42),
+            .attached,
             .paneOutput(paneId: tabId, data: [27, 91, 72]),
             .paneExited(paneId: tabId),
             .statsUpdate(SerializableSystemStats(
@@ -245,12 +244,8 @@ struct ConnectionTests {
             )),
             .pluginSegments([[PluginSegment(text: "hello", style: "bold")]]),
             .sessionEnded,
-            .allWorkspacesClosed,
             .fullScreenDump(paneId: tabId, data: [0x1b, 0x5b, 0x32, 0x4a]),
-            .clientListChanged([ClientListEntry(
-                id: 1, width: 120, height: 40, activeWorkspace: 0
-            )]),
-            .kicked(7),
+            .clientCountChanged(3),
             .error("test error"),
             .commandOutput(output: "ok", paneId: nil, windowId: nil, success: true),
         ]
@@ -304,20 +299,6 @@ struct ConnectionTests {
     }
 }
 
-// Make ClientListEntry constructible in tests
-extension ClientListEntry {
-    init(id: UInt64, width: UInt16, height: UInt16, activeWorkspace: Int) {
-        self = try! JSONDecoder().decode(
-            ClientListEntry.self,
-            from: JSONSerialization.data(withJSONObject: [
-                "id": id,
-                "width": width,
-                "height": height,
-                "active_workspace": activeWorkspace,
-            ])
-        )
-    }
-}
 
 // Make SerializableSystemStats constructible in tests
 extension SerializableSystemStats {

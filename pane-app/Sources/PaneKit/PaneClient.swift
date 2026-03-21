@@ -11,7 +11,7 @@ public final class PaneClient: @unchecked Sendable {
     public enum ConnectionState: Sendable {
         case disconnected
         case connecting
-        case connected(clientId: UInt64)
+        case connected
         case error(String)
     }
 
@@ -19,7 +19,7 @@ public final class PaneClient: @unchecked Sendable {
     public private(set) var renderState: RenderState?
     public private(set) var systemStats: SerializableSystemStats?
     public private(set) var pluginSegments: [[PluginSegment]] = []
-    public private(set) var clientList: [ClientListEntry] = []
+    public private(set) var clientCount: UInt32 = 0
 
     /// Callback invoked on the main actor when pane output arrives.
     /// The app layer should feed these bytes into SwiftTerm.
@@ -30,8 +30,6 @@ public final class PaneClient: @unchecked Sendable {
 
     public enum SessionEvent: Sendable {
         case sessionEnded
-        case allWorkspacesClosed
-        case kicked(UInt64)
     }
 
     // MARK: - Private
@@ -73,6 +71,7 @@ public final class PaneClient: @unchecked Sendable {
         connectionState = .disconnected
         renderState = nil
         systemStats = nil
+        clientCount = 0
     }
 
     // MARK: - Sending
@@ -95,9 +94,11 @@ public final class PaneClient: @unchecked Sendable {
         try await send(.key(SerializableKeyEvent(code: code, modifiers: modifiers)))
     }
 
-    /// Convenience: set the active workspace for this client.
+    /// Convenience: select a workspace by index (0-based).
+    ///
+    /// Sends `select-workspace -t N` command to the daemon (1-indexed target).
     public func setActiveWorkspace(_ index: Int) async throws {
-        try await send(.setActiveWorkspace(index))
+        try await send(.command("select-workspace -t \(index + 1)"))
     }
 
     /// Convenience: paste text to the active PTY.
@@ -150,8 +151,8 @@ public final class PaneClient: @unchecked Sendable {
     @MainActor
     private func handleResponse(_ response: ServerResponse) {
         switch response {
-        case .attached(let clientId):
-            connectionState = .connected(clientId: clientId)
+        case .attached:
+            connectionState = .connected
 
         case .paneOutput(let paneId, let data):
             onPaneOutput?(paneId, data)
@@ -172,18 +173,11 @@ public final class PaneClient: @unchecked Sendable {
         case .sessionEnded:
             onSessionEvent?(.sessionEnded)
 
-        case .allWorkspacesClosed:
-            onSessionEvent?(.allWorkspacesClosed)
-
         case .fullScreenDump(let paneId, let data):
             onPaneOutput?(paneId, data)
 
-        case .clientListChanged(let entries):
-            clientList = entries
-
-        case .kicked(let id):
-            onSessionEvent?(.kicked(id))
-            disconnect()
+        case .clientCountChanged(let count):
+            clientCount = count
 
         case .error(let msg):
             connectionState = .error(msg)

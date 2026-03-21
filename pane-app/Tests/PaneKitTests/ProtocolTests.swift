@@ -112,14 +112,6 @@ struct ClientRequestTests {
         #expect(payload["tab_index"] as! Int == 2)
     }
 
-    @Test("Newtype variant: SetActiveWorkspace")
-    func setActiveWorkspaceSerializesCorrectly() throws {
-        let request = ClientRequest.setActiveWorkspace(2)
-        let json = try encode(request)
-        let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
-        #expect(obj["SetActiveWorkspace"] as! Int == 2)
-    }
-
     @Test("Struct variant: MouseDown")
     func mouseDownSerializesCorrectly() throws {
         let request = ClientRequest.mouseDown(x: 10, y: 5)
@@ -156,7 +148,6 @@ struct ClientRequestTests {
             .commandSync("list-panes"),
             .focusWindow(id: WindowId(UUID())),
             .selectTab(windowId: WindowId(UUID()), tabIndex: 1),
-            .setActiveWorkspace(0),
         ]
 
         for request in requests {
@@ -175,10 +166,10 @@ struct ServerResponseTests {
 
     @Test("Attached")
     func attachedDeserializesCorrectly() throws {
-        let json = #"{"Attached":{"client_id":42}}"#
+        let json = #""Attached""#
         let response = try decode(ServerResponse.self, from: json)
-        if case .attached(let id) = response {
-            #expect(id == 42)
+        if case .attached = response {
+            // pass
         } else {
             Issue.record("Expected .attached")
         }
@@ -195,17 +186,6 @@ struct ServerResponseTests {
         }
     }
 
-    @Test("AllWorkspacesClosed")
-    func allWorkspacesClosedDeserializesCorrectly() throws {
-        let json = #""AllWorkspacesClosed""#
-        let response = try decode(ServerResponse.self, from: json)
-        if case .allWorkspacesClosed = response {
-            // pass
-        } else {
-            Issue.record("Expected .allWorkspacesClosed")
-        }
-    }
-
     @Test("Error")
     func errorDeserializesCorrectly() throws {
         let json = #"{"Error":"something failed"}"#
@@ -217,14 +197,14 @@ struct ServerResponseTests {
         }
     }
 
-    @Test("Kicked")
-    func kickedDeserializesCorrectly() throws {
-        let json = #"{"Kicked":7}"#
+    @Test("ClientCountChanged")
+    func clientCountChangedDeserializesCorrectly() throws {
+        let json = #"{"ClientCountChanged":3}"#
         let response = try decode(ServerResponse.self, from: json)
-        if case .kicked(let id) = response {
-            #expect(id == 7)
+        if case .clientCountChanged(let count) = response {
+            #expect(count == 3)
         } else {
-            Issue.record("Expected .kicked")
+            Issue.record("Expected .clientCountChanged")
         }
     }
 
@@ -269,20 +249,6 @@ struct ServerResponseTests {
         }
     }
 
-    @Test("ClientListChanged")
-    func clientListChangedDeserializesCorrectly() throws {
-        let json = #"{"ClientListChanged":[{"id":1,"width":120,"height":40,"active_workspace":0}]}"#
-        let response = try decode(ServerResponse.self, from: json)
-        if case .clientListChanged(let entries) = response {
-            #expect(entries.count == 1)
-            #expect(entries[0].id == 1)
-            #expect(entries[0].width == 120)
-            #expect(entries[0].height == 40)
-            #expect(entries[0].activeWorkspace == 0)
-        } else {
-            Issue.record("Expected .clientListChanged")
-        }
-    }
 
     @Test("LayoutChanged with full RenderState")
     func layoutChangedDeserializesCorrectly() throws {

@@ -122,26 +122,17 @@ struct CrossLanguageTests {
         #expect(json == expected)
     }
 
-    @Test("SetActiveWorkspace matches Rust newtype variant")
-    func setActiveWorkspaceMatchesRust() throws {
-        let json = try encode(ClientRequest.setActiveWorkspace(2))
-        let expected = #"{"SetActiveWorkspace":2}"#
-        #expect(json == expected)
-    }
-
     // MARK: - ServerResponse: Rust → Swift
 
     /// Verify that Rust-generated JSON is correctly decoded by Swift.
 
-    @Test("Rust Attached response decodes correctly")
+    @Test("Rust Attached unit variant decodes correctly")
     func rustAttachedDecodes() throws {
-        // Rust: serde_json::to_string(&ServerResponse::Attached { client_id: 42 })
-        // Note: The Swift protocol expects {"Attached":{"client_id":N}} but Rust Attached
-        // is currently a unit variant. This tests the Swift-side format.
-        let json = #"{"Attached":{"client_id":42}}"#
+        // Rust: serde_json::to_string(&ServerResponse::Attached) → "\"Attached\""
+        let json = #""Attached""#
         let response = try decode(ServerResponse.self, from: json)
-        if case .attached(let id) = response {
-            #expect(id == 42)
+        if case .attached = response {
+            // pass
         } else {
             Issue.record("Expected .attached")
         }
@@ -181,12 +172,15 @@ struct CrossLanguageTests {
         }
     }
 
-    @Test("Rust AllWorkspacesClosed unit variant decodes correctly")
-    func rustAllWorkspacesClosedDecodes() throws {
-        let json = #""AllWorkspacesClosed""#
+    @Test("Rust ClientCountChanged decodes correctly")
+    func rustClientCountChangedDecodes() throws {
+        // Rust: {"ClientCountChanged":3}
+        let json = #"{"ClientCountChanged":3}"#
         let response = try decode(ServerResponse.self, from: json)
-        if case .allWorkspacesClosed = response {} else {
-            Issue.record("Expected .allWorkspacesClosed")
+        if case .clientCountChanged(let count) = response {
+            #expect(count == 3)
+        } else {
+            Issue.record("Expected .clientCountChanged")
         }
     }
 
@@ -210,17 +204,6 @@ struct CrossLanguageTests {
             #expect(data == [27, 91, 50, 74])
         } else {
             Issue.record("Expected .fullScreenDump")
-        }
-    }
-
-    @Test("Rust Kicked newtype variant decodes correctly")
-    func rustKickedDecodes() throws {
-        let json = #"{"Kicked":7}"#
-        let response = try decode(ServerResponse.self, from: json)
-        if case .kicked(let id) = response {
-            #expect(id == 7)
-        } else {
-            Issue.record("Expected .kicked")
         }
     }
 
@@ -443,22 +426,6 @@ struct CrossLanguageTests {
         }
     }
 
-    // MARK: - ClientListChanged matches Rust format
-
-    @Test("ClientListChanged with snake_case fields decodes correctly")
-    func clientListChangedSnakeCaseDecodes() throws {
-        let json = #"{"ClientListChanged":[{"id":1,"width":120,"height":40,"active_workspace":0},{"id":2,"width":80,"height":24,"active_workspace":1}]}"#
-        let response = try decode(ServerResponse.self, from: json)
-        if case .clientListChanged(let entries) = response {
-            #expect(entries.count == 2)
-            #expect(entries[0].id == 1)
-            #expect(entries[0].width == 120)
-            #expect(entries[1].id == 2)
-            #expect(entries[1].activeWorkspace == 1)
-        } else {
-            Issue.record("Expected .clientListChanged")
-        }
-    }
 }
 
 // MARK: - Helpers

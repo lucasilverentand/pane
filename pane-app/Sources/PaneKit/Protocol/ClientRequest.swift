@@ -26,7 +26,6 @@ public enum ClientRequest: Codable, Sendable {
     case commandSync(String)
     case focusWindow(id: WindowId)
     case selectTab(windowId: WindowId, tabIndex: Int)
-    case setActiveWorkspace(Int)
 
     private enum CodingKeys: String, CodingKey {
         case attach = "Attach"
@@ -43,7 +42,6 @@ public enum ClientRequest: Codable, Sendable {
         case commandSync = "CommandSync"
         case focusWindow = "FocusWindow"
         case selectTab = "SelectTab"
-        case setActiveWorkspace = "SetActiveWorkspace"
     }
 
     // Struct payloads
@@ -112,8 +110,6 @@ public enum ClientRequest: Codable, Sendable {
             self = .focusWindow(id: payload.id)
         } else if let payload = try container.decodeIfPresent(SelectTabPayload.self, forKey: .selectTab) {
             self = .selectTab(windowId: payload.window_id, tabIndex: payload.tab_index)
-        } else if let idx = try container.decodeIfPresent(Int.self, forKey: .setActiveWorkspace) {
-            self = .setActiveWorkspace(idx)
         } else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "Unknown ClientRequest variant")
@@ -165,9 +161,6 @@ public enum ClientRequest: Codable, Sendable {
         case .selectTab(let windowId, let tabIndex):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(SelectTabPayload(window_id: windowId, tab_index: tabIndex), forKey: .selectTab)
-        case .setActiveWorkspace(let idx):
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(idx, forKey: .setActiveWorkspace)
         }
     }
 }
