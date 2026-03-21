@@ -100,6 +100,26 @@ public final class PaneClient: @unchecked Sendable {
         try await send(.setActiveWorkspace(index))
     }
 
+    /// Convenience: paste text to the active PTY.
+    public func paste(_ text: String) async throws {
+        try await send(.paste(text))
+    }
+
+    /// Convenience: focus a window by ID.
+    public func focusWindow(id: WindowId) async throws {
+        try await send(.focusWindow(id: id))
+    }
+
+    /// Convenience: select a tab in a window.
+    public func selectTab(windowId: WindowId, tabIndex: Int) async throws {
+        try await send(.selectTab(windowId: windowId, tabIndex: tabIndex))
+    }
+
+    /// Convenience: send a command string to the daemon.
+    public func sendCommand(_ command: String) async throws {
+        try await send(.command(command))
+    }
+
     // MARK: - Receive loop
 
     private func receiveLoop(_ connection: PaneConnection) async {

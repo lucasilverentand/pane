@@ -47,29 +47,39 @@ struct SidebarView: View {
     private func windowRow(_ window: WindowSnapshot, isActive: Bool) -> some View {
         DisclosureGroup {
             ForEach(Array(window.tabs.enumerated()), id: \.element.id) { index, tab in
-                HStack {
-                    Image(systemName: iconForTabKind(tab.kind))
-                        .foregroundStyle(index == window.activeTab ? .primary : .secondary)
-                    Text(tab.title)
-                        .foregroundStyle(tab.exited ? .secondary : .primary)
-                    Spacer()
-                    if let process = tab.foregroundProcess {
-                        Text(process)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                Button {
+                    Task { try? await client.selectTab(windowId: window.id, tabIndex: index) }
+                } label: {
+                    HStack {
+                        Image(systemName: iconForTabKind(tab.kind))
+                            .foregroundStyle(index == window.activeTab ? .primary : .secondary)
+                        Text(tab.title)
+                            .foregroundStyle(tab.exited ? .secondary : .primary)
+                        Spacer()
+                        if let process = tab.foregroundProcess {
+                            Text(process)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
+                .buttonStyle(.plain)
             }
         } label: {
-            HStack {
-                Image(systemName: "rectangle.split.3x1")
-                Text("Window")
-                    .fontWeight(isActive ? .semibold : .regular)
-                Spacer()
-                Text("\(window.tabs.count) tabs")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Button {
+                Task { try? await client.focusWindow(id: window.id) }
+            } label: {
+                HStack {
+                    Image(systemName: "rectangle.split.3x1")
+                    Text("Window")
+                        .fontWeight(isActive ? .semibold : .regular)
+                    Spacer()
+                    Text("\(window.tabs.count) tabs")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .buttonStyle(.plain)
         }
     }
 

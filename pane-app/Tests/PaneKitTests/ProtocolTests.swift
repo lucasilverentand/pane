@@ -22,10 +22,14 @@ struct ClientRequestTests {
         #expect(json == "\"Detach\"")
     }
 
-    @Test("Unit variant: MouseUp")
-    func mouseUpSerializesToString() throws {
-        let json = try encode(ClientRequest.mouseUp)
-        #expect(json == "\"MouseUp\"")
+    @Test("Struct variant: MouseUp")
+    func mouseUpSerializesCorrectly() throws {
+        let request = ClientRequest.mouseUp(x: 10, y: 5)
+        let json = try encode(request)
+        let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+        let payload = obj["MouseUp"] as! [String: Any]
+        #expect(payload["x"] as! Int == 10)
+        #expect(payload["y"] as! Int == 5)
     }
 
     @Test("Struct variant: Resize")
@@ -79,12 +83,33 @@ struct ClientRequestTests {
         #expect(obj["Command"] as! String == "list-panes")
     }
 
-    @Test("Newtype variant: KickClient")
-    func kickClientSerializesCorrectly() throws {
-        let request = ClientRequest.kickClient(42)
+    @Test("Newtype variant: Paste")
+    func pasteSerializesCorrectly() throws {
+        let request = ClientRequest.paste("hello world")
         let json = try encode(request)
         let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
-        #expect(obj["KickClient"] as! Int == 42)
+        #expect(obj["Paste"] as! String == "hello world")
+    }
+
+    @Test("Struct variant: FocusWindow")
+    func focusWindowSerializesCorrectly() throws {
+        let id = WindowId(UUID())
+        let request = ClientRequest.focusWindow(id: id)
+        let json = try encode(request)
+        let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+        let payload = obj["FocusWindow"] as! [String: Any]
+        #expect(payload["id"] as! String == id.raw.uuidString.lowercased())
+    }
+
+    @Test("Struct variant: SelectTab")
+    func selectTabSerializesCorrectly() throws {
+        let id = WindowId(UUID())
+        let request = ClientRequest.selectTab(windowId: id, tabIndex: 2)
+        let json = try encode(request)
+        let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+        let payload = obj["SelectTab"] as! [String: Any]
+        #expect(payload["window_id"] as! String == id.raw.uuidString.lowercased())
+        #expect(payload["tab_index"] as! Int == 2)
     }
 
     @Test("Newtype variant: SetActiveWorkspace")
@@ -124,11 +149,13 @@ struct ClientRequestTests {
             .mouseDown(x: 1, y: 2),
             .mouseDrag(x: 3, y: 4),
             .mouseMove(x: 5, y: 6),
-            .mouseUp,
+            .mouseUp(x: 10, y: 5),
             .mouseScroll(up: false),
             .command("help"),
+            .paste("text"),
             .commandSync("list-panes"),
-            .kickClient(99),
+            .focusWindow(id: WindowId(UUID())),
+            .selectTab(windowId: WindowId(UUID()), tabIndex: 1),
             .setActiveWorkspace(0),
         ]
 

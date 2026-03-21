@@ -1,2 +1,5 @@
 target/
 Cargo.lock
+
+# GhosttyKit.xcframework contains large binaries — managed locally, not committed
+pane-app/Frameworks/

@@ -26,6 +26,14 @@ final class AppState {
     }
 
     var currentWorkspace: WorkspaceSnapshot? {
+        // Sync with server's active workspace when render state updates
+        if let state = client.renderState,
+           state.activeWorkspace != selectedWorkspaceIndex,
+           state.workspaces.indices.contains(state.activeWorkspace)
+        {
+            selectedWorkspaceIndex = state.activeWorkspace
+        }
+
         guard let state = client.renderState,
               state.workspaces.indices.contains(selectedWorkspaceIndex)
         else {

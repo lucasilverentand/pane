@@ -65,6 +65,7 @@ struct TerminalPane: View {
     let isActive: Bool
 
     @Environment(BrowserManager.self) private var browser
+    @Environment(PaneClient.self) private var client
     @State private var activeTab: ActivePaneTab = .terminal(0)
 
     private var browserTabs: [BrowserTab] {
@@ -119,6 +120,7 @@ struct TerminalPane: View {
                 .background(activeTab == .terminal(index) ? Color.accentColor.opacity(0.3) : Color.clear)
                 .onTapGesture {
                     activeTab = .terminal(index)
+                    Task { try? await client.selectTab(windowId: windowId, tabIndex: index) }
                 }
             }
 

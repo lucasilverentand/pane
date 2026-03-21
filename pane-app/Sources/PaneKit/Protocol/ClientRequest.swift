@@ -3,11 +3,13 @@ import Foundation
 /// Mirrors Rust `ClientRequest` enum.
 ///
 /// Serde externally tagged format:
-/// - `"Attach"` / `"Detach"` / `"MouseUp"` (unit variants)
+/// - `"Attach"` / `"Detach"` (unit variants)
 /// - `{"Resize": {"width": 120, "height": 40}}` (struct variants)
 /// - `{"Key": {"code": ..., "modifiers": 0}}` (newtype variant)
 /// - `{"Command": "list-panes"}` (newtype variant)
-/// - `{"KickClient": 42}` (newtype variant)
+/// - `{"Paste": "text"}` (newtype variant)
+/// - `{"FocusWindow": {"id": "uuid"}}` (struct variant)
+/// - `{"SelectTab": {"window_id": "uuid", "tab_index": 0}}` (struct variant)
 /// - `{"SetActiveWorkspace": 0}` (newtype variant)
 public enum ClientRequest: Codable, Sendable {
     case attach
@@ -17,11 +19,13 @@ public enum ClientRequest: Codable, Sendable {
     case mouseDown(x: UInt16, y: UInt16)
     case mouseDrag(x: UInt16, y: UInt16)
     case mouseMove(x: UInt16, y: UInt16)
-    case mouseUp
+    case mouseUp(x: UInt16, y: UInt16)
     case mouseScroll(up: Bool)
     case command(String)
+    case paste(String)
     case commandSync(String)
-    case kickClient(UInt64)
+    case focusWindow(id: WindowId)
+    case selectTab(windowId: WindowId, tabIndex: Int)
     case setActiveWorkspace(Int)
 
     private enum CodingKeys: String, CodingKey {
@@ -35,12 +39,14 @@ public enum ClientRequest: Codable, Sendable {
         case mouseUp = "MouseUp"
         case mouseScroll = "MouseScroll"
         case command = "Command"
+        case paste = "Paste"
         case commandSync = "CommandSync"
-        case kickClient = "KickClient"
+        case focusWindow = "FocusWindow"
+        case selectTab = "SelectTab"
         case setActiveWorkspace = "SetActiveWorkspace"
     }
 
-    // Struct payloads for struct variants
+    // Struct payloads
     private struct ResizePayload: Codable {
         let width: UInt16
         let height: UInt16
@@ -55,6 +61,15 @@ public enum ClientRequest: Codable, Sendable {
         let up: Bool
     }
 
+    private struct FocusWindowPayload: Codable {
+        let id: WindowId
+    }
+
+    private struct SelectTabPayload: Codable {
+        let window_id: WindowId
+        let tab_index: Int
+    }
+
     public init(from decoder: any Decoder) throws {
         // Try unit variants first (plain string)
         if let container = try? decoder.singleValueContainer(),
@@ -63,7 +78,6 @@ public enum ClientRequest: Codable, Sendable {
             switch str {
             case "Attach": self = .attach; return
             case "Detach": self = .detach; return
-            case "MouseUp": self = .mouseUp; return
             default: break
             }
         }
@@ -74,8 +88,6 @@ public enum ClientRequest: Codable, Sendable {
             self = .attach
         } else if let _ = try? container.decode(EmptyPayload.self, forKey: .detach) {
             self = .detach
-        } else if let _ = try? container.decode(EmptyPayload.self, forKey: .mouseUp) {
-            self = .mouseUp
         } else if let payload = try container.decodeIfPresent(ResizePayload.self, forKey: .resize) {
             self = .resize(width: payload.width, height: payload.height)
         } else if let event = try container.decodeIfPresent(SerializableKeyEvent.self, forKey: .key) {
@@ -86,14 +98,20 @@ public enum ClientRequest: Codable, Sendable {
             self = .mouseDrag(x: payload.x, y: payload.y)
         } else if let payload = try container.decodeIfPresent(MousePositionPayload.self, forKey: .mouseMove) {
             self = .mouseMove(x: payload.x, y: payload.y)
+        } else if let payload = try container.decodeIfPresent(MousePositionPayload.self, forKey: .mouseUp) {
+            self = .mouseUp(x: payload.x, y: payload.y)
         } else if let payload = try container.decodeIfPresent(MouseScrollPayload.self, forKey: .mouseScroll) {
             self = .mouseScroll(up: payload.up)
         } else if let cmd = try container.decodeIfPresent(String.self, forKey: .command) {
             self = .command(cmd)
+        } else if let text = try container.decodeIfPresent(String.self, forKey: .paste) {
+            self = .paste(text)
         } else if let cmd = try container.decodeIfPresent(String.self, forKey: .commandSync) {
             self = .commandSync(cmd)
-        } else if let id = try container.decodeIfPresent(UInt64.self, forKey: .kickClient) {
-            self = .kickClient(id)
+        } else if let payload = try container.decodeIfPresent(FocusWindowPayload.self, forKey: .focusWindow) {
+            self = .focusWindow(id: payload.id)
+        } else if let payload = try container.decodeIfPresent(SelectTabPayload.self, forKey: .selectTab) {
+            self = .selectTab(windowId: payload.window_id, tabIndex: payload.tab_index)
         } else if let idx = try container.decodeIfPresent(Int.self, forKey: .setActiveWorkspace) {
             self = .setActiveWorkspace(idx)
         } else {
@@ -126,21 +144,27 @@ public enum ClientRequest: Codable, Sendable {
         case .mouseMove(let x, let y):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(MousePositionPayload(x: x, y: y), forKey: .mouseMove)
-        case .mouseUp:
-            var container = encoder.singleValueContainer()
-            try container.encode("MouseUp")
+        case .mouseUp(let x, let y):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(MousePositionPayload(x: x, y: y), forKey: .mouseUp)
         case .mouseScroll(let up):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(MouseScrollPayload(up: up), forKey: .mouseScroll)
         case .command(let cmd):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(cmd, forKey: .command)
+        case .paste(let text):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(text, forKey: .paste)
         case .commandSync(let cmd):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(cmd, forKey: .commandSync)
-        case .kickClient(let id):
+        case .focusWindow(let id):
             var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(id, forKey: .kickClient)
+            try container.encode(FocusWindowPayload(id: id), forKey: .focusWindow)
+        case .selectTab(let windowId, let tabIndex):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(SelectTabPayload(window_id: windowId, tab_index: tabIndex), forKey: .selectTab)
         case .setActiveWorkspace(let idx):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(idx, forKey: .setActiveWorkspace)

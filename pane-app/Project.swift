@@ -35,7 +35,10 @@ let project = Project(
             sources: ["Sources/Pane/**"],
             dependencies: [
                 .target(name: "PaneKit"),
-                .external(name: "SwiftTerm"),
+                .xcframework(path: "Frameworks/GhosttyKit.xcframework"),
+                .sdk(name: "z", type: .library),
+                .sdk(name: "c++", type: .library),
+                .sdk(name: "Carbon", type: .framework),
             ]
         ),
 

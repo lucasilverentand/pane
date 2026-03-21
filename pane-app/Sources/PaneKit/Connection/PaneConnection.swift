@@ -10,9 +10,15 @@ public final class PaneConnection: Sendable {
     private let writeQueue = DispatchQueue(label: "pane.connection.write")
 
     /// The default socket path for the current user.
+    ///
+    /// Matches Rust daemon: `$TMPDIR/pane-{uid}/pane.sock`.
+    /// Debug Rust builds use `pane-dev.sock`; the Swift app always connects to
+    /// release (`pane.sock`) since it spawns the installed binary.
     public static var defaultSocketPath: String {
         let uid = getuid()
-        return "/tmp/pane-\(uid)/pane.sock"
+        let base = ProcessInfo.processInfo.environment["TMPDIR"]
+            ?? NSTemporaryDirectory()
+        return "\(base)pane-\(uid)/pane.sock"
     }
 
     private init(fd: Int32) {
@@ -63,6 +69,10 @@ public final class PaneConnection: Sendable {
             Darwin.close(fd)
             throw ConnectionError.connectFailed(errno: err)
         }
+
+        // Prevent SIGPIPE when writing to a closed socket
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
 
         return PaneConnection(fd: fd)
     }

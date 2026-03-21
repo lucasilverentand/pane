@@ -10,7 +10,5 @@ let packageSettings = PackageSettings()
 
 let package = Package(
     name: "PaneDependencies",
-    dependencies: [
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
-    ]
+    dependencies: []
 )
