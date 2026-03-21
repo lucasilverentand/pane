@@ -121,6 +121,68 @@ public final class PaneClient: @unchecked Sendable {
         try await send(.command(command))
     }
 
+    // MARK: - Layout commands
+
+    /// Split the active window horizontally (creates a left/right split).
+    public func splitHorizontal() async throws {
+        try await send(.command("split-window -h"))
+    }
+
+    /// Split the active window vertically (creates a top/bottom split).
+    public func splitVertical() async throws {
+        try await send(.command("split-window"))
+    }
+
+    /// Close the active pane (tab).
+    public func closePane() async throws {
+        try await send(.command("kill-pane"))
+    }
+
+    /// Close the active window (and all its tabs).
+    public func closeWindow() async throws {
+        try await send(.command("kill-window"))
+    }
+
+    /// Create a new window in the current workspace.
+    public func newWindow() async throws {
+        try await send(.command("new-window"))
+    }
+
+    /// Toggle zoom on the active window (full-screen the focused window).
+    public func toggleZoom() async throws {
+        try await send(.command("toggle-zoom"))
+    }
+
+    /// Toggle fold on the active window (collapse it in the layout).
+    public func toggleFold() async throws {
+        try await send(.command("toggle-fold"))
+    }
+
+    /// Toggle sync-panes — send all keystrokes to every pane in the workspace.
+    public func toggleSync() async throws {
+        try await send(.command("toggle-sync"))
+    }
+
+    // MARK: - Workspace commands
+
+    /// Create a new workspace with an optional name and working directory.
+    public func newWorkspace(name: String? = nil, cwd: String? = nil) async throws {
+        var cmd = "new-workspace"
+        if let name { cmd += " -n \(name)" }
+        if let cwd { cmd += " -c \(cwd)" }
+        try await send(.command(cmd))
+    }
+
+    /// Rename the current workspace.
+    public func renameWorkspace(_ name: String) async throws {
+        try await send(.command("rename-workspace \(name)"))
+    }
+
+    /// Close the current workspace.
+    public func closeWorkspace() async throws {
+        try await send(.command("close-workspace"))
+    }
+
     // MARK: - Receive loop
 
     private func receiveLoop(_ connection: PaneConnection) async {

@@ -380,6 +380,218 @@ struct PaneClientTests {
         }
     }
 
+    // MARK: - Layout commands
+
+    @Test("splitHorizontal sends split-window -h")
+    @MainActor
+    func splitHorizontalSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.splitHorizontal()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "split-window -h")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("splitVertical sends split-window")
+    @MainActor
+    func splitVerticalSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.splitVertical()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "split-window")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("closePane sends kill-pane")
+    @MainActor
+    func closePaneSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.closePane()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "kill-pane")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("closeWindow sends kill-window")
+    @MainActor
+    func closeWindowSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.closeWindow()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "kill-window")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("newWindow sends new-window")
+    @MainActor
+    func newWindowSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.newWindow()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "new-window")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("toggleZoom sends toggle-zoom")
+    @MainActor
+    func toggleZoomSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.toggleZoom()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "toggle-zoom")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("toggleFold sends toggle-fold")
+    @MainActor
+    func toggleFoldSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.toggleFold()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "toggle-fold")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("toggleSync sends toggle-sync")
+    @MainActor
+    func toggleSyncSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.toggleSync()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "toggle-sync")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    // MARK: - Workspace commands
+
+    @Test("newWorkspace without args sends new-workspace")
+    @MainActor
+    func newWorkspaceNoArgsSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.newWorkspace()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "new-workspace")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("newWorkspace with name sends new-workspace -n name")
+    @MainActor
+    func newWorkspaceWithNameSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.newWorkspace(name: "dev")
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "new-workspace -n dev")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("newWorkspace with name and cwd sends both flags")
+    @MainActor
+    func newWorkspaceWithNameAndCwdSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.newWorkspace(name: "work", cwd: "/tmp/project")
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "new-workspace -n work -c /tmp/project")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("renameWorkspace sends rename-workspace with name")
+    @MainActor
+    func renameWorkspaceSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.renameWorkspace("my-workspace")
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "rename-workspace my-workspace")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("closeWorkspace sends close-workspace")
+    @MainActor
+    func closeWorkspaceSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.closeWorkspace()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "close-workspace")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
     @Test("Send fails when not connected")
     @MainActor
     func sendFailsWhenNotConnected() async {
