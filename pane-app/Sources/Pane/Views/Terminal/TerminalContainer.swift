@@ -74,8 +74,8 @@ struct TerminalPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Always show tab bar when there are browser tabs, or when >1 terminal tab
-            if let window, window.tabs.count > 1 || !browserTabs.isEmpty {
+            // Always show tab bar (matches TUI behavior — even with a single tab)
+            if let window {
                 tabBar(window)
             }
 

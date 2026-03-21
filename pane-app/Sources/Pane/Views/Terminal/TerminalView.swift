@@ -24,8 +24,13 @@ struct TerminalView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: GhosttyTerminalNSView, context: Context) {
+        let prevWindowId = nsView.windowId
         nsView.windowId = windowId
         nsView.client = client
+        // Re-register the subscription if the window this view represents has changed.
+        if prevWindowId != windowId {
+            nsView.updatePaneOutputSubscription()
+        }
     }
 }
 
@@ -42,6 +47,7 @@ final class GhosttyTerminalNSView: NSView {
 
     private var surface: ghostty_surface_t?
     private let bridge = GhosttyBridge()
+    private var subscriptionId: UUID?
 
     init(windowId: WindowId, client: PaneClient) {
         self.windowId = windowId
@@ -59,6 +65,10 @@ final class GhosttyTerminalNSView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     deinit {
+        if let id = subscriptionId {
+            let c = client
+            MainActor.assumeIsolated { c.unsubscribePaneOutput(id) }
+        }
         bridge.stop()
         if let surface { ghostty_surface_free(surface) }
     }
@@ -117,12 +127,32 @@ final class GhosttyTerminalNSView: NSView {
     }
 
     private func registerForPaneOutput() {
-        let windowId = self.windowId
-        client.onPaneOutput = { [weak self] tabId, bytes in
-            guard let self else { return }
-            // Route output to this terminal's bridge
-            self.bridge.write(bytes: bytes)
+        // Use subscription-based routing so multiple TerminalViews coexist without overwriting each other.
+        // Each view filters to only accept output for tabs that belong to its window.
+        //
+        // Capture @MainActor-isolated properties (NSView subclass) before entering the @Sendable closure.
+        // GhosttyTerminalNSView.init runs on the main actor, so this is safe.
+        let capturedWindowId = self.windowId
+        let capturedClient = self.client
+        let capturedBridge = self.bridge
+        subscriptionId = MainActor.assumeIsolated {
+            capturedClient.subscribePaneOutput { tabId, bytes in
+                let window = capturedClient.renderState?.workspaces
+                    .flatMap { $0.groups }
+                    .first { $0.id == capturedWindowId }
+                guard window?.tabs.contains(where: { $0.id == tabId }) == true else { return }
+                capturedBridge.write(bytes: bytes)
+            }
         }
+    }
+
+    /// Re-register the pane output subscription, e.g. when the windowId changes.
+    func updatePaneOutputSubscription() {
+        if let id = subscriptionId {
+            MainActor.assumeIsolated { client.unsubscribePaneOutput(id) }
+            subscriptionId = nil
+        }
+        registerForPaneOutput()
     }
 
     // MARK: - View lifecycle

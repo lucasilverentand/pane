@@ -623,6 +623,116 @@ struct PaneClientTests {
 
     // MARK: - Multiple rapid state updates
 
+    // MARK: - Subscription-based pane output
+
+    @Test("subscribePaneOutput receives output")
+    @MainActor
+    func subscribeReceivesPaneOutput() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        let tabId = TabId(UUID())
+        var receivedId: TabId?
+        var receivedCount = 0
+
+        let token = client.subscribePaneOutput { id, _ in
+            receivedId = id
+            receivedCount += 1
+        }
+        defer { client.unsubscribePaneOutput(token) }
+
+        try server.send(.paneOutput(paneId: tabId, data: [1, 2, 3]))
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(receivedCount == 1)
+        #expect(receivedId == tabId)
+    }
+
+    @Test("unsubscribePaneOutput stops delivery")
+    @MainActor
+    func unsubscribeStopsPaneOutput() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        let tabId = TabId(UUID())
+        var receivedCount = 0
+
+        let token = client.subscribePaneOutput { _, _ in receivedCount += 1 }
+
+        try server.send(.paneOutput(paneId: tabId, data: [1]))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(receivedCount == 1)
+
+        client.unsubscribePaneOutput(token)
+
+        try server.send(.paneOutput(paneId: tabId, data: [2]))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(receivedCount == 1)  // No more calls after unsubscribe
+    }
+
+    @Test("Multiple subscribers each receive pane output")
+    @MainActor
+    func multipleSubscribersReceivePaneOutput() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        let tabId = TabId(UUID())
+        var count1 = 0
+        var count2 = 0
+
+        let token1 = client.subscribePaneOutput { _, _ in count1 += 1 }
+        let token2 = client.subscribePaneOutput { _, _ in count2 += 1 }
+        defer {
+            client.unsubscribePaneOutput(token1)
+            client.unsubscribePaneOutput(token2)
+        }
+
+        try server.send(.paneOutput(paneId: tabId, data: [1]))
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(count1 == 1)
+        #expect(count2 == 1)
+    }
+
+    @Test("subscribePaneOutput and onPaneOutput coexist")
+    @MainActor
+    func subscribeAndCallbackCoexist() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        let tabId = TabId(UUID())
+        var callbackCount = 0
+        var subscriberCount = 0
+
+        client.onPaneOutput = { _, _ in callbackCount += 1 }
+        let token = client.subscribePaneOutput { _, _ in subscriberCount += 1 }
+        defer { client.unsubscribePaneOutput(token) }
+
+        try server.send(.paneOutput(paneId: tabId, data: [1]))
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(callbackCount == 1)
+        #expect(subscriberCount == 1)
+    }
+
+    @Test("subscribePaneOutput receives FullScreenDump")
+    @MainActor
+    func subscriberReceivesFullScreenDump() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        let tabId = TabId(UUID())
+        var receivedCount = 0
+
+        let token = client.subscribePaneOutput { _, _ in receivedCount += 1 }
+        defer { client.unsubscribePaneOutput(token) }
+
+        try server.send(.fullScreenDump(paneId: tabId, data: [0x1b, 0x5b, 0x32, 0x4a]))
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(receivedCount == 1)
+    }
+
     @Test("Multiple rapid LayoutChanged updates apply correctly")
     @MainActor
     func rapidLayoutUpdates() async throws {

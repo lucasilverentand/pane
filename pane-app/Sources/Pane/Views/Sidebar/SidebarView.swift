@@ -71,7 +71,7 @@ struct SidebarView: View {
             } label: {
                 HStack {
                     Image(systemName: "rectangle.split.3x1")
-                    Text("Window")
+                    Text(window.name ?? "Window")
                         .fontWeight(isActive ? .semibold : .regular)
                     Spacer()
                     Text("\(window.tabs.count) tabs")

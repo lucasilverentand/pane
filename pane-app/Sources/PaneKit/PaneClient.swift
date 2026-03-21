@@ -23,7 +23,28 @@ public final class PaneClient: @unchecked Sendable {
 
     /// Callback invoked on the main actor when pane output arrives.
     /// The app layer should feed these bytes into SwiftTerm.
+    ///
+    /// Prefer `subscribePaneOutput(_:)` when multiple consumers need output (e.g. multi-window layouts).
     public var onPaneOutput: (@Sendable (TabId, [UInt8]) -> Void)?
+
+    @ObservationIgnored
+    private var _paneOutputSubscribers: [UUID: @Sendable (TabId, [UInt8]) -> Void] = [:]
+
+    /// Register a handler to receive pane output events. Returns an opaque token.
+    /// Call `unsubscribePaneOutput(_:)` with the token to stop receiving events.
+    /// Unlike `onPaneOutput`, multiple subscribers can coexist — last one doesn't win.
+    @MainActor
+    public func subscribePaneOutput(_ handler: @Sendable @escaping (TabId, [UInt8]) -> Void) -> UUID {
+        let id = UUID()
+        _paneOutputSubscribers[id] = handler
+        return id
+    }
+
+    /// Remove a previously registered pane output handler.
+    @MainActor
+    public func unsubscribePaneOutput(_ id: UUID) {
+        _paneOutputSubscribers.removeValue(forKey: id)
+    }
 
     /// Callback invoked when the session ends or all workspaces close.
     public var onSessionEvent: (@Sendable (SessionEvent) -> Void)?
@@ -72,6 +93,7 @@ public final class PaneClient: @unchecked Sendable {
         renderState = nil
         systemStats = nil
         clientCount = 0
+        _paneOutputSubscribers.removeAll()
     }
 
     // MARK: - Sending
@@ -218,6 +240,7 @@ public final class PaneClient: @unchecked Sendable {
 
         case .paneOutput(let paneId, let data):
             onPaneOutput?(paneId, data)
+            for handler in _paneOutputSubscribers.values { handler(paneId, data) }
 
         case .paneExited:
             // Layout update will follow
@@ -237,6 +260,7 @@ public final class PaneClient: @unchecked Sendable {
 
         case .fullScreenDump(let paneId, let data):
             onPaneOutput?(paneId, data)
+            for handler in _paneOutputSubscribers.values { handler(paneId, data) }
 
         case .clientCountChanged(let count):
             clientCount = count
