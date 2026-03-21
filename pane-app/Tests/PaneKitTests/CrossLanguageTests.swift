@@ -346,12 +346,10 @@ struct CrossLanguageTests {
         #expect(ops.groups[0].tabs[0].foregroundProcess == "tail")
     }
 
-    // MARK: - Forward compatibility: extra fields from Rust are ignored
+    // MARK: - Protocol fields: cols/rows/name/is_home
 
-    @Test("Extra fields in Rust JSON are silently ignored")
-    func extraFieldsIgnored() throws {
-        // Rust TabSnapshot now has cols/rows and WindowSnapshot has name,
-        // WorkspaceSnapshot has is_home — Swift should silently ignore them
+    @Test("TabSnapshot cols and rows decode from Rust JSON")
+    func tabSnapshotColsRowsDecode() throws {
         let wid = UUID().uuidString.lowercased()
         let tid = UUID().uuidString.lowercased()
         let json = """
@@ -372,8 +370,145 @@ struct CrossLanguageTests {
                         "cols": 120,
                         "rows": 40
                     }],
+                    "active_tab": 0
+                }],
+                "active_group": "\(wid)",
+                "sync_panes": false,
+                "folded_windows": [],
+                "zoomed_window": null,
+                "floating_windows": []
+            }],
+            "active_workspace": 0
+        }
+        """
+        let state = try decode(RenderState.self, from: json)
+        let tab = state.workspaces[0].groups[0].tabs[0]
+        #expect(tab.cols == 120)
+        #expect(tab.rows == 40)
+    }
+
+    @Test("TabSnapshot cols and rows default to 80/24 when absent")
+    func tabSnapshotColsRowsDefaults() throws {
+        let wid = UUID().uuidString.lowercased()
+        let tid = UUID().uuidString.lowercased()
+        let json = """
+        {
+            "workspaces": [{
+                "name": "test",
+                "cwd": "/tmp",
+                "layout": {"Leaf": "\(wid)"},
+                "groups": [{
+                    "id": "\(wid)",
+                    "tabs": [{
+                        "id": "\(tid)",
+                        "kind": "Shell",
+                        "title": "sh",
+                        "exited": false,
+                        "foreground_process": null,
+                        "cwd": "/tmp"
+                    }],
+                    "active_tab": 0
+                }],
+                "active_group": "\(wid)",
+                "sync_panes": false,
+                "folded_windows": [],
+                "zoomed_window": null,
+                "floating_windows": []
+            }],
+            "active_workspace": 0
+        }
+        """
+        let state = try decode(RenderState.self, from: json)
+        let tab = state.workspaces[0].groups[0].tabs[0]
+        #expect(tab.cols == 80)
+        #expect(tab.rows == 24)
+    }
+
+    @Test("WindowSnapshot name decodes from Rust JSON")
+    func windowSnapshotNameDecodes() throws {
+        let wid = UUID().uuidString.lowercased()
+        let tid = UUID().uuidString.lowercased()
+        let json = """
+        {
+            "workspaces": [{
+                "name": "test",
+                "cwd": "/tmp",
+                "layout": {"Leaf": "\(wid)"},
+                "groups": [{
+                    "id": "\(wid)",
+                    "tabs": [{
+                        "id": "\(tid)",
+                        "kind": "Shell",
+                        "title": "sh",
+                        "exited": false,
+                        "foreground_process": null,
+                        "cwd": "/tmp"
+                    }],
                     "active_tab": 0,
                     "name": "editor"
+                }],
+                "active_group": "\(wid)",
+                "sync_panes": false,
+                "folded_windows": [],
+                "zoomed_window": null,
+                "floating_windows": []
+            }],
+            "active_workspace": 0
+        }
+        """
+        let state = try decode(RenderState.self, from: json)
+        #expect(state.workspaces[0].groups[0].name == "editor")
+    }
+
+    @Test("WindowSnapshot name defaults to nil when absent")
+    func windowSnapshotNameDefaultsToNil() throws {
+        let wid = UUID().uuidString.lowercased()
+        let tid = UUID().uuidString.lowercased()
+        let json = """
+        {
+            "workspaces": [{
+                "name": "test",
+                "cwd": "/tmp",
+                "layout": {"Leaf": "\(wid)"},
+                "groups": [{
+                    "id": "\(wid)",
+                    "tabs": [{
+                        "id": "\(tid)",
+                        "kind": "Shell",
+                        "title": "sh",
+                        "exited": false,
+                        "foreground_process": null,
+                        "cwd": "/tmp"
+                    }],
+                    "active_tab": 0
+                }],
+                "active_group": "\(wid)",
+                "sync_panes": false,
+                "folded_windows": [],
+                "zoomed_window": null,
+                "floating_windows": []
+            }],
+            "active_workspace": 0
+        }
+        """
+        let state = try decode(RenderState.self, from: json)
+        #expect(state.workspaces[0].groups[0].name == nil)
+    }
+
+    @Test("WorkspaceSnapshot is_home decodes from Rust JSON")
+    func workspaceSnapshotIsHomeDecodes() throws {
+        let wid = UUID().uuidString.lowercased()
+        let tid = UUID().uuidString.lowercased()
+        let json = """
+        {
+            "workspaces": [{
+                "name": "home",
+                "cwd": "/tmp",
+                "layout": {"Leaf": "\(wid)"},
+                "groups": [{
+                    "id": "\(wid)",
+                    "tabs": [{"id": "\(tid)", "kind": "Shell", "title": "sh", "exited": false, "foreground_process": null, "cwd": "/tmp"}],
+                    "active_tab": 0
                 }],
                 "active_group": "\(wid)",
                 "sync_panes": false,
@@ -385,11 +520,36 @@ struct CrossLanguageTests {
             "active_workspace": 0
         }
         """
-
-        // Should decode without errors despite extra cols/rows/name/is_home
         let state = try decode(RenderState.self, from: json)
-        #expect(state.workspaces[0].name == "test")
-        #expect(state.workspaces[0].groups[0].tabs[0].title == "sh")
+        #expect(state.workspaces[0].isHome == true)
+    }
+
+    @Test("WorkspaceSnapshot is_home defaults to false when absent")
+    func workspaceSnapshotIsHomeDefaultsFalse() throws {
+        let wid = UUID().uuidString.lowercased()
+        let tid = UUID().uuidString.lowercased()
+        let json = """
+        {
+            "workspaces": [{
+                "name": "ws",
+                "cwd": "/tmp",
+                "layout": {"Leaf": "\(wid)"},
+                "groups": [{
+                    "id": "\(wid)",
+                    "tabs": [{"id": "\(tid)", "kind": "Shell", "title": "sh", "exited": false, "foreground_process": null, "cwd": "/tmp"}],
+                    "active_tab": 0
+                }],
+                "active_group": "\(wid)",
+                "sync_panes": false,
+                "folded_windows": [],
+                "zoomed_window": null,
+                "floating_windows": []
+            }],
+            "active_workspace": 0
+        }
+        """
+        let state = try decode(RenderState.self, from: json)
+        #expect(state.workspaces[0].isHome == false)
     }
 
     // MARK: - SerializableKeyCode: all F-keys

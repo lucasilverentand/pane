@@ -506,6 +506,13 @@ struct RenderStateTests {
         #expect(tab.exited == false)
         #expect(tab.foregroundProcess == "python")
         #expect(tab.cwd == "/home/user/project")
+        // cols/rows default to 80/24 when absent
+        #expect(tab.cols == 80)
+        #expect(tab.rows == 24)
+        // window name defaults to nil when absent
+        #expect(window.name == nil)
+        // is_home defaults to false when absent
+        #expect(ws.isHome == false)
     }
 
     @Test("WorkspaceSnapshot with folded_windows absent defaults to empty")
