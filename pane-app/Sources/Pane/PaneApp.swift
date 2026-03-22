@@ -19,5 +19,14 @@ struct PaneApp: App {
                     appState.disconnect()
                 }
         }
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Divider()
+                Button("Reconnect to Daemon") {
+                    appState.reconnect()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+            }
+        }
     }
 }

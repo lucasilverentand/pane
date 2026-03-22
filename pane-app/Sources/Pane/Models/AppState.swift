@@ -48,6 +48,7 @@ final class AppState {
     }
 
     func connect() {
+        guard case .disconnected = client.connectionState else { return }
         Task {
             do {
                 try await client.connect()
@@ -56,6 +57,13 @@ final class AppState {
                 // Connection error is surfaced via client.connectionState
             }
         }
+    }
+
+    /// Disconnect and immediately attempt to reconnect.
+    func reconnect() {
+        mcpServer.stop()
+        client.disconnect()
+        connect()
     }
 
     func disconnect() {

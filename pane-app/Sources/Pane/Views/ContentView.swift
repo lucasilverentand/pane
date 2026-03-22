@@ -25,11 +25,14 @@ struct ContentView: View {
     private var connectionStatusView: some View {
         switch client.connectionState {
         case .disconnected:
-            ContentUnavailableView(
-                "Not Connected",
-                systemImage: "network.slash",
-                description: Text("Start the Pane daemon to connect.")
-            )
+            ContentUnavailableView {
+                Label("Not Connected", systemImage: "network.slash")
+            } description: {
+                Text("Start the Pane daemon to connect.")
+            } actions: {
+                Button("Connect") { appState.connect() }
+                    .buttonStyle(.borderedProminent)
+            }
         case .connecting:
             ProgressView("Connecting...")
         case .connected:
@@ -39,11 +42,14 @@ struct ContentView: View {
                 description: Text("Waiting for layout data from the daemon.")
             )
         case .error(let message):
-            ContentUnavailableView(
-                "Connection Error",
-                systemImage: "exclamationmark.triangle",
-                description: Text(message)
-            )
+            ContentUnavailableView {
+                Label("Connection Error", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(message)
+            } actions: {
+                Button("Reconnect") { appState.reconnect() }
+                    .buttonStyle(.borderedProminent)
+            }
         }
     }
 }
