@@ -89,6 +89,7 @@ struct SidebarView: View {
         case .agent: "sparkles"
         case .nvim: "doc.text"
         case .devServer: "server.rack"
+        case .widget: "square.grid.2x2"
         }
     }
 }

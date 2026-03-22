@@ -554,6 +554,41 @@ struct RenderStateTests {
             #expect(encoded == json)
         }
     }
+
+    @Test("TabKind.widget roundtrips all HubWidget variants")
+    func tabKindWidgetAllVariants() throws {
+        let hubCases: [(String, HubWidget)] = [
+            ("\"ProjectInfo\"", .projectInfo),
+            ("\"RecentCommits\"", .recentCommits),
+            ("\"ChangedFiles\"", .changedFiles),
+            ("\"Branches\"", .branches),
+            ("\"Stashes\"", .stashes),
+            ("\"Tags\"", .tags),
+            ("\"GitGraph\"", .gitGraph),
+            ("\"Contributors\"", .contributors),
+            ("\"Todos\"", .todos),
+            ("\"Readme\"", .readme),
+            ("\"Languages\"", .languages),
+            ("\"DiskUsage\"", .diskUsage),
+            ("\"CiStatus\"", .ciStatus),
+            ("\"OpenIssues\"", .openIssues),
+            ("\"RunningProcesses\"", .runningProcesses),
+        ]
+        for (hubJson, hub) in hubCases {
+            let json = "{\"Widget\":\(hubJson)}"
+            let decoded = try decode(TabKind.self, from: json)
+            #expect(decoded == .widget(hub))
+            let encoded = try encode(decoded)
+            #expect(encoded == json)
+        }
+    }
+
+    @Test("TabKind.widget label matches HubWidget label")
+    func tabKindWidgetLabel() {
+        #expect(TabKind.widget(.projectInfo).label == "Info")
+        #expect(TabKind.widget(.gitGraph).label == "Graph")
+        #expect(TabKind.widget(.ciStatus).label == "CI")
+    }
 }
 
 // MARK: - Helpers
