@@ -1,19 +1,24 @@
 import Foundation
-import PaneKit
+import CoreGraphics
 
 /// Resolves a LayoutNode tree into concrete CGRect frames for each window.
 ///
 /// This mirrors the Rust `LayoutNode::resolve()` method, producing the same
 /// layout positions as the TUI client.
-enum LayoutResolver {
+public enum LayoutResolver {
     /// A resolved leaf: the window ID and its computed frame.
-    struct ResolvedWindow {
-        let windowId: WindowId
-        let frame: CGRect
+    public struct ResolvedWindow {
+        public let windowId: WindowId
+        public let frame: CGRect
+
+        public init(windowId: WindowId, frame: CGRect) {
+            self.windowId = windowId
+            self.frame = frame
+        }
     }
 
     /// Resolve the layout tree into flat (WindowId, CGRect) pairs.
-    static func resolve(node: LayoutNode, in rect: CGRect) -> [ResolvedWindow] {
+    public static func resolve(node: LayoutNode, in rect: CGRect) -> [ResolvedWindow] {
         var results: [ResolvedWindow] = []
         resolveInner(node: node, in: rect, results: &results)
         return results
