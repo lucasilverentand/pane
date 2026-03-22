@@ -207,6 +207,91 @@ public final class PaneClient: @unchecked Sendable {
         try await send(.command("equalize-layout"))
     }
 
+    // MARK: - Focus navigation commands
+
+    /// Focus the pane to the left of the active pane.
+    public func focusLeft() async throws {
+        try await send(.command("select-pane -L"))
+    }
+
+    /// Focus the pane to the right of the active pane.
+    public func focusRight() async throws {
+        try await send(.command("select-pane -R"))
+    }
+
+    /// Focus the pane above the active pane.
+    public func focusUp() async throws {
+        try await send(.command("select-pane -U"))
+    }
+
+    /// Focus the pane below the active pane.
+    public func focusDown() async throws {
+        try await send(.command("select-pane -D"))
+    }
+
+    // MARK: - Pane resize commands
+
+    /// Shrink the active pane horizontally (move right edge left).
+    public func resizeShrinkH() async throws {
+        try await send(.command("resize-pane -L"))
+    }
+
+    /// Grow the active pane horizontally (move right edge right).
+    public func resizeGrowH() async throws {
+        try await send(.command("resize-pane -R"))
+    }
+
+    /// Grow the active pane vertically (move bottom edge down).
+    public func resizeGrowV() async throws {
+        try await send(.command("resize-pane -D"))
+    }
+
+    /// Shrink the active pane vertically (move bottom edge up).
+    public func resizeShrinkV() async throws {
+        try await send(.command("resize-pane -U"))
+    }
+
+    // MARK: - Tab move commands
+
+    /// Move the active tab to the window on the left.
+    public func moveTabLeft() async throws {
+        try await send(.command("move-tab -L"))
+    }
+
+    /// Move the active tab to the window on the right.
+    public func moveTabRight() async throws {
+        try await send(.command("move-tab -R"))
+    }
+
+    /// Move the active tab to the window above.
+    public func moveTabUp() async throws {
+        try await send(.command("move-tab -U"))
+    }
+
+    /// Move the active tab to the window below.
+    public func moveTabDown() async throws {
+        try await send(.command("move-tab -D"))
+    }
+
+    // MARK: - Floating window commands
+
+    /// Toggle floating mode for the active window.
+    public func toggleFloat() async throws {
+        try await send(.command("toggle-float"))
+    }
+
+    /// Create a new floating window.
+    public func newFloat() async throws {
+        try await send(.command("new-float"))
+    }
+
+    // MARK: - Window rename command
+
+    /// Rename the active window.
+    public func renameWindow(_ name: String) async throws {
+        try await send(.command("rename-window \(name)"))
+    }
+
     // MARK: - Workspace commands
 
     /// Create a new workspace with an optional name and working directory.

@@ -658,6 +658,181 @@ struct PaneClientTests {
         }
     }
 
+    // MARK: - Focus navigation commands
+
+    @Test("focusLeft sends select-pane -L")
+    @MainActor
+    func focusLeftSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.focusLeft()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "select-pane -L") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    @Test("focusRight sends select-pane -R")
+    @MainActor
+    func focusRightSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.focusRight()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "select-pane -R") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    @Test("focusUp sends select-pane -U")
+    @MainActor
+    func focusUpSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.focusUp()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "select-pane -U") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    @Test("focusDown sends select-pane -D")
+    @MainActor
+    func focusDownSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.focusDown()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "select-pane -D") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    // MARK: - Pane resize commands
+
+    @Test("resizeShrinkH sends resize-pane -L")
+    @MainActor
+    func resizeShrinkHSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.resizeShrinkH()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "resize-pane -L") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    @Test("resizeGrowH sends resize-pane -R")
+    @MainActor
+    func resizeGrowHSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.resizeGrowH()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "resize-pane -R") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    @Test("resizeGrowV sends resize-pane -D")
+    @MainActor
+    func resizeGrowVSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.resizeGrowV()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "resize-pane -D") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    @Test("resizeShrinkV sends resize-pane -U")
+    @MainActor
+    func resizeShrinkVSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.resizeShrinkV()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "resize-pane -U") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    // MARK: - Tab move commands
+
+    @Test("moveTabLeft sends move-tab -L")
+    @MainActor
+    func moveTabLeftSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.moveTabLeft()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "move-tab -L") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    @Test("moveTabRight sends move-tab -R")
+    @MainActor
+    func moveTabRightSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.moveTabRight()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "move-tab -R") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    @Test("moveTabUp sends move-tab -U")
+    @MainActor
+    func moveTabUpSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.moveTabUp()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "move-tab -U") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    @Test("moveTabDown sends move-tab -D")
+    @MainActor
+    func moveTabDownSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.moveTabDown()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "move-tab -D") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    // MARK: - Floating window commands
+
+    @Test("toggleFloat sends toggle-float")
+    @MainActor
+    func toggleFloatSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.toggleFloat()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "toggle-float") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    @Test("newFloat sends new-float")
+    @MainActor
+    func newFloatSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.newFloat()
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "new-float") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
+    // MARK: - Window rename command
+
+    @Test("renameWindow sends rename-window with name")
+    @MainActor
+    func renameWindowSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+        try await client.renameWindow("editor")
+        let received = try server.receive()
+        if case .command(let cmd) = received { #expect(cmd == "rename-window editor") }
+        else { Issue.record("Expected .command, got \(received)") }
+    }
+
     @Test("Send fails when not connected")
     @MainActor
     func sendFailsWhenNotConnected() async {
