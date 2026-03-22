@@ -185,6 +185,28 @@ public final class PaneClient: @unchecked Sendable {
         try await send(.command("toggle-sync"))
     }
 
+    // MARK: - Tab navigation commands
+
+    /// Switch to the next tab in the active window.
+    public func nextTab() async throws {
+        try await send(.command("next-tab"))
+    }
+
+    /// Switch to the previous tab in the active window.
+    public func prevTab() async throws {
+        try await send(.command("prev-tab"))
+    }
+
+    /// Restart the active pane (re-launch its process).
+    public func restartPane() async throws {
+        try await send(.command("restart-pane"))
+    }
+
+    /// Equalize the sizes of all panes in the current workspace.
+    public func equalizeLayout() async throws {
+        try await send(.command("equalize-layout"))
+    }
+
     // MARK: - Workspace commands
 
     /// Create a new workspace with an optional name and working directory.

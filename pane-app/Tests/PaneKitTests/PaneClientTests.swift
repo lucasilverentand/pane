@@ -592,6 +592,72 @@ struct PaneClientTests {
         }
     }
 
+    // MARK: - Tab navigation commands
+
+    @Test("nextTab sends next-tab")
+    @MainActor
+    func nextTabSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.nextTab()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "next-tab")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("prevTab sends prev-tab")
+    @MainActor
+    func prevTabSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.prevTab()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "prev-tab")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("restartPane sends restart-pane")
+    @MainActor
+    func restartPaneSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.restartPane()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "restart-pane")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
+    @Test("equalizeLayout sends equalize-layout")
+    @MainActor
+    func equalizeLayoutSendsCommand() async throws {
+        let (server, client) = try await connectClientToServer()
+        defer { client.disconnect() }
+
+        try await client.equalizeLayout()
+        let received = try server.receive()
+
+        if case .command(let cmd) = received {
+            #expect(cmd == "equalize-layout")
+        } else {
+            Issue.record("Expected .command, got \(received)")
+        }
+    }
+
     @Test("Send fails when not connected")
     @MainActor
     func sendFailsWhenNotConnected() async {

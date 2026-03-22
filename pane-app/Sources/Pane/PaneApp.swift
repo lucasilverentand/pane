@@ -20,6 +20,8 @@ struct PaneApp: App {
                 }
         }
         .commands {
+            PaneCommands(appState: appState)
+
             CommandGroup(after: .appInfo) {
                 Divider()
                 Button("Reconnect to Daemon") {
