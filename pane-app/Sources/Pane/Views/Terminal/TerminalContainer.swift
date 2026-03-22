@@ -9,12 +9,20 @@ enum ActivePaneTab: Equatable {
 
 /// Renders the split layout tree from a workspace's `LayoutNode`.
 /// Each leaf maps to a `TerminalView` for the corresponding window.
+///
+/// When `workspace.zoomedWindow` is set the zoomed window fills the entire
+/// container, mirroring the TUI zoom behaviour.
 struct TerminalContainer: View {
     let workspace: WorkspaceSnapshot
 
     var body: some View {
         GeometryReader { geometry in
-            layoutView(node: workspace.layout, in: geometry.size)
+            if let zoomedId = workspace.zoomedWindow {
+                let window = workspace.groups.first { $0.id == zoomedId }
+                TerminalPane(windowId: zoomedId, window: window, isActive: true)
+            } else {
+                layoutView(node: workspace.layout, in: geometry.size)
+            }
         }
     }
 
@@ -66,7 +74,14 @@ struct TerminalPane: View {
 
     @Environment(BrowserManager.self) private var browser
     @Environment(PaneClient.self) private var client
-    @State private var activeTab: ActivePaneTab = .terminal(0)
+    @State private var activeTab: ActivePaneTab
+
+    init(windowId: WindowId, window: WindowSnapshot?, isActive: Bool) {
+        self.windowId = windowId
+        self.window = window
+        self.isActive = isActive
+        _activeTab = State(initialValue: .terminal(window?.activeTab ?? 0))
+    }
 
     private var browserTabs: [BrowserTab] {
         browser.browserTabs(for: windowId)
