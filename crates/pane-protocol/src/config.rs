@@ -386,7 +386,8 @@ impl Behavior {
                     } else {
                         s.clone()
                     };
-                    std::path::PathBuf::from(expanded)
+                    let p = std::path::PathBuf::from(expanded);
+                    p.canonicalize().unwrap_or(p)
                 })
                 .filter(|p| p.is_dir())
                 .collect();
@@ -410,7 +411,10 @@ impl Behavior {
 
         candidates
             .iter()
-            .map(|name| home.join(name))
+            .map(|name| {
+                let p = home.join(name);
+                p.canonicalize().unwrap_or(p)
+            })
             .filter(|p| p.is_dir())
             .collect()
     }

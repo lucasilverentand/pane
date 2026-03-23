@@ -240,7 +240,9 @@ impl DirBrowser {
             let mut dirs: Vec<DirEntry> = read_dir
                 .filter_map(|e| e.ok())
                 .filter(|e| {
-                    e.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
+                    // Use path().is_dir() instead of file_type().is_dir()
+                    // so that symlinks to directories are followed.
+                    e.path().is_dir()
                 })
                 .map(|e| {
                     let name = e.file_name().to_string_lossy().to_string();
@@ -641,14 +643,29 @@ impl ProjectHubState {
                     if name.starts_with('.') {
                         continue;
                     }
-                    // Check if it's a git repo
-                    if !path.join(".git").exists() {
-                        continue;
+                    if path.join(".git").exists() {
+                        // Direct child is a git repo
+                        let path = path.canonicalize().unwrap_or(path);
+                        projects.push(ProjectEntry { name, path });
+                    } else {
+                        // Not a git repo — scan one level deeper (org/group folders)
+                        if let Ok(sub_read) = std::fs::read_dir(&path) {
+                            for sub_entry in sub_read.filter_map(|e| e.ok()) {
+                                let sub_path = sub_entry.path();
+                                if !sub_path.is_dir() {
+                                    continue;
+                                }
+                                let sub_name = sub_entry.file_name().to_string_lossy().to_string();
+                                if sub_name.starts_with('.') {
+                                    continue;
+                                }
+                                if sub_path.join(".git").exists() {
+                                    let sub_path = sub_path.canonicalize().unwrap_or(sub_path);
+                                    projects.push(ProjectEntry { name: sub_name, path: sub_path });
+                                }
+                            }
+                        }
                     }
-                    projects.push(ProjectEntry {
-                        name,
-                        path,
-                    });
                 }
             }
         }

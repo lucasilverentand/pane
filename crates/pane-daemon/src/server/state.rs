@@ -142,6 +142,7 @@ fn build_home_workspace(config: &Config) -> Workspace {
     let rows = &config.behavior.hub_layout.rows;
     let home_cwd = std::env::var("HOME")
         .map(PathBuf::from)
+        .map(|p| p.canonicalize().unwrap_or(p))
         .unwrap_or_else(|_| PathBuf::from("/"));
 
     // Collect (WindowId, Window, HubWidget-row-index) for layout building
