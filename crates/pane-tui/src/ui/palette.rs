@@ -15,18 +15,6 @@ use pane_protocol::registry;
 use super::dialog;
 
 // ---------------------------------------------------------------------------
-// PaletteView — the two display modes
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PaletteView {
-    /// Full-screen centered overlay with search and all actions listed
-    FullSearch,
-    /// Small popup (bottom-right) showing a leader group's available keys
-    CompactHints,
-}
-
-// ---------------------------------------------------------------------------
 // PaletteEntry — a single item in the palette
 // ---------------------------------------------------------------------------
 
@@ -44,15 +32,10 @@ pub struct PaletteEntry {
 // ---------------------------------------------------------------------------
 
 pub struct UnifiedPaletteState {
-    pub view: PaletteView,
     pub input: String,
     pub selected: usize,
     all_entries: Vec<PaletteEntry>,
     pub filtered: Vec<usize>,
-    /// Current leader group children for compact hints view
-    pub leader_group: Option<Vec<(KeyEvent, String, bool)>>, // (key, label, is_group)
-    /// Display path for which-key header (e.g. "⎵ w" for leader → window)
-    pub leader_path: Option<String>,
     /// Pre-selected action from a leader key match (highlighted in palette)
     pub highlighted_action: Option<Action>,
 }
@@ -63,54 +46,12 @@ impl UnifiedPaletteState {
         let all_entries = build_palette_entries(keymap, leader);
         let filtered: Vec<usize> = (0..all_entries.len()).collect();
         Self {
-            view: PaletteView::FullSearch,
             input: String::new(),
             selected: 0,
             all_entries,
             filtered,
-            leader_group: None,
-            leader_path: None,
             highlighted_action: None,
         }
-    }
-
-    /// Create a compact-hints palette showing a leader group's children.
-    pub fn new_compact_hints(children: &HashMap<KeyEvent, LeaderNode>, path: String) -> Self {
-        let entries: Vec<(KeyEvent, String, bool)> = {
-            let mut v: Vec<_> = children
-                .iter()
-                .filter(|(_, node)| !matches!(node, LeaderNode::PassThrough))
-                .map(|(key, node)| {
-                    let (label, is_group) = match node {
-                        LeaderNode::Leaf { label, .. } => (label.clone(), false),
-                        LeaderNode::Group { label, .. } => (format!("+{}", label), true),
-                        LeaderNode::PassThrough => unreachable!(),
-                    };
-                    (*key, label, is_group)
-                })
-                .collect();
-            v.sort_by(|a, b| format_key_short(&a.0).cmp(&format_key_short(&b.0)));
-            v
-        };
-        Self {
-            view: PaletteView::CompactHints,
-            input: String::new(),
-            selected: 0,
-            all_entries: Vec::new(),
-            filtered: Vec::new(),
-            leader_group: Some(entries),
-            leader_path: Some(path),
-            highlighted_action: None,
-        }
-    }
-
-    /// Transition from compact hints to full search, carrying over typed chars as query.
-    #[allow(dead_code)]
-    pub fn transition_to_full_search(&mut self, keymap: &KeyMap, leader: &LeaderConfig) {
-        self.all_entries = build_palette_entries(keymap, leader);
-        self.view = PaletteView::FullSearch;
-        self.leader_group = None;
-        self.update_filter();
     }
 
     pub fn update_filter(&mut self) {
@@ -302,48 +243,13 @@ pub fn key_event_to_string(key: &KeyEvent) -> String {
     result.replace("Shift+Shift+", "Shift+")
 }
 
-/// Short key format for compact hints (e.g. "C-q", "S-Tab")
-fn format_key_short(key: &KeyEvent) -> String {
-    let mut parts = Vec::new();
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        parts.push("C");
-    }
-    if key.modifiers.contains(KeyModifiers::ALT) {
-        parts.push("A");
-    }
-    if key.modifiers.contains(KeyModifiers::SHIFT) {
-        parts.push("S");
-    }
-    let code = match key.code {
-        KeyCode::Char(c) => c.to_string(),
-        KeyCode::Enter => "CR".into(),
-        KeyCode::Esc => "Esc".into(),
-        KeyCode::Tab => "Tab".into(),
-        KeyCode::BackTab => "S-Tab".into(),
-        KeyCode::Backspace => "BS".into(),
-        KeyCode::Up => "Up".into(),
-        KeyCode::Down => "Down".into(),
-        KeyCode::Left => "Left".into(),
-        KeyCode::Right => "Right".into(),
-        KeyCode::F(n) => format!("F{}", n),
-        _ => "?".into(),
-    };
-    if parts.is_empty() {
-        code
-    } else {
-        format!("{}-{}", parts.join("-"), code)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
 pub fn render(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Frame, area: Rect) {
-    match state.view {
-        PaletteView::FullSearch => render_full_search(state, theme, frame, area),
-        PaletteView::CompactHints => render_compact_hints(state, theme, frame, area),
-    }
+    render_full_search(state, theme, frame, area);
 }
 
 fn render_full_search(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Frame, area: Rect) {
@@ -459,100 +365,6 @@ fn render_full_search(state: &UnifiedPaletteState, theme: &Theme, frame: &mut Fr
     frame.render_widget(paragraph, list_area);
 }
 
-fn render_compact_hints(
-    state: &UnifiedPaletteState,
-    theme: &Theme,
-    frame: &mut Frame,
-    area: Rect,
-) {
-    let entries = match &state.leader_group {
-        Some(e) => e,
-        None => return,
-    };
-
-    if entries.is_empty() {
-        return;
-    }
-
-    // Separate groups and leaves for display
-    let groups: Vec<_> = entries.iter().filter(|(_, _, is_group)| *is_group).collect();
-    let leaves: Vec<_> = entries.iter().filter(|(_, _, is_group)| !*is_group).collect();
-
-    let max_key_len = entries
-        .iter()
-        .map(|(k, _, _)| format_key_short(k).len())
-        .max()
-        .unwrap_or(1);
-    let max_label_len = entries
-        .iter()
-        .map(|(_, l, _)| l.len())
-        .max()
-        .unwrap_or(1);
-
-    // Multi-column layout: fit entries in columns
-    let item_width = (max_key_len + 2 + max_label_len + 2) as u16;
-    let max_popup_width = (area.width * 60 / 100).max(30);
-    let cols = ((max_popup_width - 2) / item_width).clamp(1, 4) as usize;
-    let total_items = entries.len();
-    let rows = total_items.div_ceil(cols);
-
-    let popup_width = ((item_width * cols as u16) + 4).min(max_popup_width);
-    let popup_height = (rows as u16 + 4).min(area.height.saturating_sub(4));
-
-    let popup_area = dialog::popup_rect(
-        dialog::PopupSize::Fixed { width: popup_width, height: popup_height },
-        dialog::PopupAnchor::BottomCenter,
-        area,
-    );
-
-    let title = match &state.leader_path {
-        Some(path) if !path.is_empty() => path.clone(),
-        _ => "which key".to_string(),
-    };
-
-    let inner = dialog::render_popup(frame, popup_area, &title, theme);
-
-    if inner.height == 0 || inner.width < 4 {
-        return;
-    }
-
-    let max_visible_rows = inner.height as usize;
-    let col_width = inner.width / cols as u16;
-
-    // Render entries in column-major order (groups first, then leaves)
-    let all_items: Vec<&(KeyEvent, String, bool)> = groups.into_iter().chain(leaves).collect();
-    for (idx, (key, label, is_group)) in all_items.iter().enumerate() {
-        let row = idx % rows;
-        let col = idx / rows;
-        if row >= max_visible_rows || col >= cols {
-            continue;
-        }
-
-        let cell_x = inner.x + (col as u16 * col_width);
-        let cell_y = inner.y + row as u16;
-        let cell_width = col_width.min(inner.x + inner.width - cell_x);
-
-        let key_str = format_key_short(key);
-        let key_style = Style::default()
-            .fg(theme.accent)
-            .add_modifier(Modifier::BOLD);
-        let label_style = if *is_group {
-            Style::default().fg(theme.accent)
-        } else {
-            Style::default().fg(theme.fg)
-        };
-        let pad = " ".repeat(max_key_len.saturating_sub(key_str.len()));
-        let line = Line::from(vec![
-            Span::raw(" "),
-            Span::styled(key_str, key_style),
-            Span::raw(pad),
-            Span::raw(" "),
-            Span::styled(label.clone(), label_style),
-        ]);
-        let cell_area = Rect::new(cell_x, cell_y, cell_width, 1);
-        frame.render_widget(Paragraph::new(line), cell_area);
-    }
-}
 
 
 // ---------------------------------------------------------------------------
@@ -614,30 +426,6 @@ mod tests {
         state.input = "tab".to_string();
         state.update_filter();
         assert!(state.filtered.len() < total);
-    }
-
-    #[test]
-    fn test_compact_hints_from_leader_root() {
-        let lc = LeaderConfig::default();
-        if let LeaderNode::Group { children, .. } = &lc.root {
-            let state = UnifiedPaletteState::new_compact_hints(children, "⎵".into());
-            assert_eq!(state.view, PaletteView::CompactHints);
-            assert!(state.leader_group.as_ref().unwrap().len() > 0);
-        }
-    }
-
-    #[test]
-    fn test_transition_to_full_search() {
-        let (km, lc) = defaults();
-        let mut state = if let LeaderNode::Group { children, .. } = &lc.root {
-            UnifiedPaletteState::new_compact_hints(children, "⎵".into())
-        } else {
-            panic!("expected group root");
-        };
-        state.input = "split".to_string();
-        state.transition_to_full_search(&km, &lc);
-        assert_eq!(state.view, PaletteView::FullSearch);
-        assert!(!state.filtered.is_empty());
     }
 
     #[test]

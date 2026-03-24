@@ -4,7 +4,6 @@ use std::sync::Arc;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
-use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
@@ -12,8 +11,8 @@ use tokio::sync::Mutex;
 use crate::event::AppEvent;
 use pane_protocol::app::{LeaderState, ResizeBorder, ResizeState};
 use crate::clipboard;
-use pane_protocol::config::{self, Action, Config, HubWidget};
-use pane_protocol::window_types::{TabKind, WindowId};
+use pane_protocol::config::{self, Action, Config};
+use pane_protocol::window_types::WindowId;
 use crate::copy_mode::{CopyModeAction, CopyModeState};
 use pane_protocol::layout::{Side, SplitDirection, TabId};
 use pane_daemon::server::daemon;
@@ -50,6 +49,7 @@ pub struct Client {
 
     // Client-only UI state
     pub leader_state: Option<LeaderState>,
+    pub leader_entered_at: Option<tokio::time::Instant>,
     pub palette_state: Option<UnifiedPaletteState>,
     pub copy_mode_state: Option<CopyModeState>,
     pub system_programs: Vec<TabPickerEntry>,
@@ -66,29 +66,8 @@ pub struct Client {
     pub rename_input: String,
     pub rename_target: RenameTarget,
     pub new_workspace_input: Option<NewWorkspaceInputState>,
-    pub project_hub_state: Option<ProjectHubState>,
-    /// User-set sidebar width for the home workspace (None = auto).
-    pub sidebar_width: Option<u16>,
-    /// Active sidebar border drag state.
-    sidebar_drag: Option<SidebarDragState>,
-    /// Active widget split drag state (home workspace only).
-    home_widget_drag: Option<HomeWidgetDragState>,
     /// State for the widget picker overlay.
     pub widget_picker_state: Option<WidgetPickerState>,
-    /// Channel for sending async events (e.g. git info ready) back to the event loop.
-    event_tx: Option<tokio::sync::mpsc::UnboundedSender<ServerEvent>>,
-}
-
-struct SidebarDragState {
-    /// The body rect at the time the drag started.
-    body: Rect,
-}
-
-struct HomeWidgetDragState {
-    split_path: Vec<Side>,
-    direction: SplitDirection,
-    /// Rect of the split node being dragged (not the entire layout body).
-    split_rect: Rect,
 }
 
 /// Unified focus state: replaces the old Mode + FocusLocation + focused_widget.
@@ -107,10 +86,6 @@ pub enum Focus {
     // UI chrome
     /// Workspace bar has focus (left/right to switch workspaces).
     WorkspaceBar,
-    /// Home workspace project sidebar has focus.
-    Sidebar,
-    /// Home workspace widget has focus.
-    Widget(WindowId),
 
     // Modals (pushed onto focus_stack)
     Palette,
@@ -436,860 +411,6 @@ impl DirBrowser {
     }
 }
 
-/// A project entry discovered in a project directory.
-#[derive(Clone, Debug)]
-pub struct ProjectEntry {
-    /// Display name (directory name).
-    pub name: String,
-    /// Full path to the project.
-    pub path: std::path::PathBuf,
-}
-
-/// Cached git info for a project.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct ProjectGitInfo {
-    pub branch: String,
-    pub commits: Vec<GitCommit>,
-    pub status_lines: Vec<String>,
-    pub dirty_count: usize,
-    pub staged_count: usize,
-    pub untracked_count: usize,
-    pub ahead: usize,
-    pub behind: usize,
-    /// Git remote origin URL (e.g. "git@github.com:user/repo.git" or "https://github.com/user/repo.git").
-    pub remote_url: Option<String>,
-    // Unit 1: Branches, Stashes, Tags
-    pub branches: Vec<BranchInfo>,
-    pub stashes: Vec<StashInfo>,
-    pub tags: Vec<TagInfo>,
-    // Unit 2: Git Graph, Contributors
-    pub graph_lines: Vec<String>,
-    pub contributors: Vec<ContributorInfo>,
-    // Unit 3: Todos, Readme
-    pub todos: Vec<TodoItem>,
-    pub readme_lines: Vec<String>,
-    // Unit 4: Languages, Disk Usage
-    pub languages: Vec<LanguageInfo>,
-    pub disk_usage: Option<DiskUsageInfo>,
-    // Unit 5: CI Status, Open Issues
-    pub ci_runs: Vec<CiRun>,
-    pub gh_issues: Vec<GhIssue>,
-    pub gh_available: bool,
-    // Unit 6: Running Processes
-    pub processes: Vec<ProcessInfo>,
-}
-
-impl ProjectGitInfo {
-    /// Derive GitHub web URL from the remote origin URL.
-    /// Supports both SSH (git@github.com:user/repo.git) and HTTPS formats.
-    #[allow(dead_code)]
-    pub fn github_url(&self) -> Option<String> {
-        let url = self.remote_url.as_deref()?;
-        // SSH: git@github.com:user/repo.git
-        if let Some(rest) = url.strip_prefix("git@github.com:") {
-            let repo = rest.strip_suffix(".git").unwrap_or(rest);
-            return Some(format!("https://github.com/{}", repo));
-        }
-        // HTTPS: https://github.com/user/repo.git
-        if url.starts_with("https://github.com/") {
-            let repo = url.strip_suffix(".git").unwrap_or(url);
-            return Some(repo.to_string());
-        }
-        None
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GitCommit {
-    pub hash: String,
-    pub message: String,
-    pub author: String,
-    pub age: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BranchInfo {
-    pub name: String,
-    pub is_current: bool,
-    pub last_commit_date: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StashInfo {
-    pub id: String,
-    pub message: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TagInfo {
-    pub name: String,
-    pub date: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ContributorInfo {
-    pub name: String,
-    pub email: String,
-    pub count: usize,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TodoItem {
-    pub file: String,
-    pub line_num: String,
-    pub kind: String,
-    pub text: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LanguageInfo {
-    pub extension: String,
-    pub file_count: usize,
-    pub percentage: f32,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DiskUsageInfo {
-    pub total: String,
-    pub git_size: String,
-    pub build_size: Option<String>,
-    pub build_dir_name: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CiRun {
-    pub name: String,
-    pub status: String,
-    pub conclusion: String,
-    pub branch: String,
-    pub created_at: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GhIssue {
-    pub number: u64,
-    pub title: String,
-    pub author: String,
-    pub labels: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ProcessInfo {
-    pub pid: String,
-    pub cpu: String,
-    pub command: String,
-}
-
-/// Cache entry state for a project's git info.
-pub enum GitCacheEntry {
-    /// First load, no data yet.
-    Loading,
-    /// Has data (possibly stale or partial), background refresh in progress.
-    Refreshing(ProjectGitInfo),
-    /// Fully loaded and up-to-date.
-    Ready(ProjectGitInfo),
-}
-
-impl GitCacheEntry {
-    pub fn info(&self) -> Option<&ProjectGitInfo> {
-        match self {
-            GitCacheEntry::Loading => None,
-            GitCacheEntry::Refreshing(info) | GitCacheEntry::Ready(info) => Some(info),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn is_refreshing(&self) -> bool {
-        matches!(self, GitCacheEntry::Loading | GitCacheEntry::Refreshing(_))
-    }
-}
-
-pub struct ProjectHubState {
-    /// All discovered projects.
-    pub all_projects: Vec<ProjectEntry>,
-    /// Filtered indices into all_projects.
-    pub filtered: Vec<usize>,
-    /// User's search query.
-    pub input: String,
-    /// Currently selected index.
-    pub selected: usize,
-    /// Scroll offset.
-    pub scroll_offset: usize,
-    /// Cached git info keyed by project index.
-    pub git_cache: HashMap<usize, GitCacheEntry>,
-    /// Which project index we last fetched git info for.
-    pub last_git_fetch: Option<usize>,
-    /// Track last click for double-click detection: (selected index, timestamp).
-    pub last_click: Option<(usize, std::time::Instant)>,
-    /// Per-widget interaction state (selected item index).
-    pub widget_interact: HashMap<WindowId, WidgetInteractState>,
-    /// Channel for sending async results back to the event loop.
-    event_tx: tokio::sync::mpsc::UnboundedSender<ServerEvent>,
-}
-
-impl ProjectHubState {
-    fn new(config: &config::Config, event_tx: tokio::sync::mpsc::UnboundedSender<ServerEvent>) -> Self {
-        let dirs = config.behavior.resolved_projects_dirs();
-
-        let mut projects = Vec::new();
-        for dir in &dirs {
-            if let Ok(read_dir) = std::fs::read_dir(dir) {
-                for entry in read_dir.filter_map(|e| e.ok()) {
-                    let path = entry.path();
-                    if !path.is_dir() {
-                        continue;
-                    }
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name.starts_with('.') {
-                        continue;
-                    }
-                    if path.join(".git").exists() {
-                        // Direct child is a git repo
-                        let path = path.canonicalize().unwrap_or(path);
-                        projects.push(ProjectEntry { name, path });
-                    } else {
-                        // Not a git repo — scan one level deeper (org/group folders)
-                        if let Ok(sub_read) = std::fs::read_dir(&path) {
-                            for sub_entry in sub_read.filter_map(|e| e.ok()) {
-                                let sub_path = sub_entry.path();
-                                if !sub_path.is_dir() {
-                                    continue;
-                                }
-                                let sub_name = sub_entry.file_name().to_string_lossy().to_string();
-                                if sub_name.starts_with('.') {
-                                    continue;
-                                }
-                                if sub_path.join(".git").exists() {
-                                    let sub_path = sub_path.canonicalize().unwrap_or(sub_path);
-                                    projects.push(ProjectEntry { name: sub_name, path: sub_path });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        projects.sort_by(|a, b| {
-            a.name
-                .to_lowercase()
-                .cmp(&b.name.to_lowercase())
-        });
-
-        let filtered: Vec<usize> = (0..projects.len()).collect();
-        let mut state = ProjectHubState {
-            all_projects: projects,
-            filtered,
-            input: String::new(),
-            selected: 0,
-            scroll_offset: 0,
-            git_cache: HashMap::new(),
-            last_git_fetch: None,
-            last_click: None,
-            widget_interact: HashMap::new(),
-            event_tx,
-        };
-        state.ensure_git_info();
-        state
-    }
-
-    /// Create a `ProjectHubState` for testing — no filesystem scanning.
-    #[cfg(test)]
-    pub fn for_test() -> Self {
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        ProjectHubState {
-            all_projects: Vec::new(),
-            filtered: Vec::new(),
-            input: String::new(),
-            selected: 0,
-            scroll_offset: 0,
-            git_cache: HashMap::new(),
-            last_git_fetch: None,
-            last_click: None,
-            widget_interact: HashMap::new(),
-            event_tx: tx,
-        }
-    }
-
-    pub fn update_filter(&mut self) {
-        if self.input.is_empty() {
-            self.filtered = (0..self.all_projects.len()).collect();
-        } else {
-            let query = self.input.to_lowercase();
-            self.filtered = self
-                .all_projects
-                .iter()
-                .enumerate()
-                .filter(|(_, p)| p.name.to_lowercase().contains(&query))
-                .map(|(i, _)| i)
-                .collect();
-        }
-        if self.selected >= self.filtered.len() {
-            self.selected = self.filtered.len().saturating_sub(1);
-        }
-        self.scroll_offset = 0;
-        // Reset last_git_fetch so ensure_git_info re-evaluates
-        let new_project_idx = self.filtered.get(self.selected).copied();
-        if new_project_idx != self.last_git_fetch {
-            self.last_git_fetch = None;
-        }
-        self.ensure_git_info();
-    }
-
-    pub fn move_up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-            self.ensure_git_info();
-        }
-    }
-
-    pub fn move_down(&mut self) {
-        if self.selected + 1 < self.filtered.len() {
-            self.selected += 1;
-            self.ensure_git_info();
-        }
-    }
-
-    /// Select a specific filtered index.
-    pub fn select(&mut self, idx: usize) {
-        if idx < self.filtered.len() {
-            self.selected = idx;
-            self.ensure_git_info();
-        }
-    }
-
-    pub fn selected_project(&self) -> Option<&ProjectEntry> {
-        self.filtered
-            .get(self.selected)
-            .and_then(|&i| self.all_projects.get(i))
-    }
-
-    /// Get git info for the currently selected project (if any data is available).
-    /// Returns data for both `Refreshing` and `Ready` states.
-    pub fn selected_git_info(&self) -> Option<&ProjectGitInfo> {
-        self.filtered
-            .get(self.selected)
-            .and_then(|&i| self.git_cache.get(&i))
-            .and_then(|entry| entry.info())
-    }
-
-    /// Returns true if the selected project has no data yet (first load).
-    pub fn is_loading_git_info(&self) -> bool {
-        self.filtered
-            .get(self.selected)
-            .and_then(|&i| self.git_cache.get(&i))
-            .is_some_and(|entry| matches!(entry, GitCacheEntry::Loading))
-    }
-
-    /// Returns true if the selected project's data is being refreshed
-    /// (stale cache shown, or fast phase shown while slow phase loads).
-    #[allow(dead_code)]
-    pub fn is_refreshing_git_info(&self) -> bool {
-        self.filtered
-            .get(self.selected)
-            .and_then(|&i| self.git_cache.get(&i))
-            .is_some_and(|entry| entry.is_refreshing())
-    }
-
-    /// Kick off an async fetch of git info for the selected project if not already cached.
-    pub fn ensure_git_info(&mut self) {
-        let project_idx = match self.filtered.get(self.selected) {
-            Some(&i) => i,
-            None => return,
-        };
-        if self.last_git_fetch == Some(project_idx) {
-            return;
-        }
-        self.last_git_fetch = Some(project_idx);
-        if self.git_cache.contains_key(&project_idx) {
-            return;
-        }
-
-        let path = self.all_projects[project_idx].path.clone();
-        let tx = self.event_tx.clone();
-
-        // Check disk cache — returns data + freshness
-        if let Some((info, fresh)) = load_disk_cache(&path) {
-            if fresh {
-                self.git_cache.insert(project_idx, GitCacheEntry::Ready(info));
-                return;
-            }
-            // Stale cache: show old data immediately, refresh in background
-            self.git_cache.insert(project_idx, GitCacheEntry::Refreshing(info));
-            tokio::task::spawn_blocking(move || {
-                let full = fetch_git_info(&path);
-                save_disk_cache(&path, &full);
-                let _ = tx.send(ServerEvent::GitInfoReady {
-                    project_idx,
-                    info: Box::new(full),
-                    refreshing: false,
-                });
-            });
-            return;
-        }
-
-        // No disk cache: progressive load (fast phase → slow phase)
-        self.git_cache.insert(project_idx, GitCacheEntry::Loading);
-        tokio::task::spawn_blocking(move || {
-            let fast = fetch_git_info_fast(&path);
-            let _ = tx.send(ServerEvent::GitInfoReady {
-                project_idx,
-                info: Box::new(fast.clone()),
-                refreshing: true,
-            });
-            let full = fetch_git_info_slow(&path, fast);
-            save_disk_cache(&path, &full);
-            let _ = tx.send(ServerEvent::GitInfoReady {
-                project_idx,
-                info: Box::new(full),
-                refreshing: false,
-            });
-        });
-    }
-}
-
-/// Per-widget interaction state: tracks which list item is selected for keyboard navigation.
-#[derive(Default, Clone)]
-pub struct WidgetInteractState {
-    pub selected: usize,
-}
-
-/// Disk cache TTL for project git info (seconds).
-const GIT_CACHE_TTL_SECS: u64 = 30;
-
-#[derive(Serialize, Deserialize)]
-struct CachedGitInfo {
-    cached_at: u64,
-    info: ProjectGitInfo,
-}
-
-fn git_cache_path(project_path: &std::path::Path) -> std::path::PathBuf {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    project_path.hash(&mut hasher);
-    let hash = hasher.finish();
-    let cache_dir = dirs::cache_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join("pane")
-        .join("hub");
-    cache_dir.join(format!("{:016x}.json", hash))
-}
-
-/// Returns `Some((info, is_fresh))` if a disk cache entry exists.
-/// `is_fresh` is true if the entry is within the TTL.
-fn load_disk_cache(project_path: &std::path::Path) -> Option<(ProjectGitInfo, bool)> {
-    let path = git_cache_path(project_path);
-    let content = std::fs::read_to_string(&path).ok()?;
-    let cached: CachedGitInfo = serde_json::from_str(&content).ok()?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let fresh = now - cached.cached_at <= GIT_CACHE_TTL_SECS;
-    Some((cached.info, fresh))
-}
-
-fn save_disk_cache(project_path: &std::path::Path, info: &ProjectGitInfo) {
-    let path = git_cache_path(project_path);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let cached = CachedGitInfo {
-        cached_at: now,
-        info: info.clone(),
-    };
-    if let Ok(json) = serde_json::to_string(&cached) {
-        let _ = std::fs::write(&path, json);
-    }
-}
-
-fn git_run(path: &std::path::Path, args: &[&str]) -> String {
-    std::process::Command::new("git")
-        .args(args)
-        .current_dir(path)
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
-}
-
-fn git_run_sh(path: &std::path::Path, cmd: &str) -> String {
-    std::process::Command::new("sh")
-        .args(["-c", cmd])
-        .current_dir(path)
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
-}
-
-/// Fast phase: cheap local git operations (~50ms).
-/// Returns a partial ProjectGitInfo with slow fields defaulted.
-fn fetch_git_info_fast(path: &std::path::Path) -> ProjectGitInfo {
-    let branch = git_run(path, &["rev-parse", "--abbrev-ref", "HEAD"]);
-
-    // Remote URL (fast — reads local config)
-    let remote_raw = git_run(path, &["remote", "get-url", "origin"]);
-    let remote_url = if remote_raw.is_empty() { None } else { Some(remote_raw) };
-
-    let log_output = git_run(path, &[
-        "log", "--oneline", "--format=%h\t%s\t%an\t%ar", "-15",
-    ]);
-    let commits: Vec<GitCommit> = log_output
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| {
-            let parts: Vec<&str> = line.splitn(4, '\t').collect();
-            GitCommit {
-                hash: parts.first().unwrap_or(&"").to_string(),
-                message: parts.get(1).unwrap_or(&"").to_string(),
-                author: parts.get(2).unwrap_or(&"").to_string(),
-                age: parts.get(3).unwrap_or(&"").to_string(),
-            }
-        })
-        .collect();
-
-    let status_output = git_run(path, &["status", "--porcelain=v1"]);
-    let status_lines: Vec<String> = status_output
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| l.to_string())
-        .collect();
-
-    let mut dirty_count = 0;
-    let mut staged_count = 0;
-    let mut untracked_count = 0;
-    for line in &status_lines {
-        let bytes = line.as_bytes();
-        if bytes.len() >= 2 {
-            let x = bytes[0];
-            let y = bytes[1];
-            if x == b'?' {
-                untracked_count += 1;
-            } else {
-                if x != b' ' && x != b'?' {
-                    staged_count += 1;
-                }
-                if y != b' ' && y != b'?' {
-                    dirty_count += 1;
-                }
-            }
-        }
-    }
-
-    let ab_output = git_run(path, &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]);
-    let (ahead, behind) = if let Some((a, b)) = ab_output.split_once('\t') {
-        (
-            a.trim().parse::<usize>().unwrap_or(0),
-            b.trim().parse::<usize>().unwrap_or(0),
-        )
-    } else {
-        (0, 0)
-    };
-
-    let branch_output = git_run(path, &[
-        "branch",
-        "--format=%(HEAD)\t%(refname:short)\t%(committerdate:relative)",
-    ]);
-    let branches: Vec<BranchInfo> = branch_output
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| {
-            let parts: Vec<&str> = line.splitn(3, '\t').collect();
-            BranchInfo {
-                is_current: parts.first().map(|s| s.trim() == "*").unwrap_or(false),
-                name: parts.get(1).unwrap_or(&"").to_string(),
-                last_commit_date: parts.get(2).unwrap_or(&"").to_string(),
-            }
-        })
-        .collect();
-
-    let stash_output = git_run(path, &["stash", "list", "--format=%gd\t%gs"]);
-    let stashes: Vec<StashInfo> = stash_output
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| {
-            let (id, message) = line.split_once('\t').unwrap_or((line, ""));
-            StashInfo {
-                id: id.to_string(),
-                message: message.to_string(),
-            }
-        })
-        .collect();
-
-    let readme_lines: Vec<String> = {
-        let readme_path = path.join("README.md");
-        if readme_path.exists() {
-            std::fs::read_to_string(&readme_path)
-                .unwrap_or_default()
-                .lines()
-                .take(50)
-                .map(|l| l.to_string())
-                .collect()
-        } else {
-            Vec::new()
-        }
-    };
-
-    ProjectGitInfo {
-        branch,
-        commits,
-        status_lines,
-        dirty_count,
-        staged_count,
-        untracked_count,
-        ahead,
-        behind,
-        branches,
-        stashes,
-        remote_url,
-        readme_lines,
-        ..Default::default()
-    }
-}
-
-/// Slow phase: expensive operations (tree traversal, network, grep).
-/// Takes the fast result and fills in the remaining fields.
-fn fetch_git_info_slow(path: &std::path::Path, fast: ProjectGitInfo) -> ProjectGitInfo {
-    let tag_output = git_run_sh(path, "git tag -l --sort=-creatordate --format='%(refname:short)\t%(creatordate:relative)' | head -20");
-    let tags: Vec<TagInfo> = tag_output
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| {
-            let (name, date) = line.split_once('\t').unwrap_or((line, ""));
-            TagInfo {
-                name: name.to_string(),
-                date: date.to_string(),
-            }
-        })
-        .collect();
-
-    let graph_output = git_run(path, &[
-        "log", "--oneline", "--graph", "--all", "-20", "--color=never",
-    ]);
-    let graph_lines: Vec<String> = graph_output
-        .lines()
-        .map(|l| l.to_string())
-        .collect();
-
-    let contrib_output = git_run_sh(path, "git shortlog -sne --all | head -20");
-    let contributors: Vec<ContributorInfo> = contrib_output
-        .lines()
-        .filter(|l| !l.is_empty())
-        .filter_map(|line| {
-            let line = line.trim();
-            let (count_str, rest) = line.split_once('\t')?;
-            let count = count_str.trim().parse::<usize>().ok()?;
-            let (name, email) = if let Some(start) = rest.find('<') {
-                let name = rest[..start].trim().to_string();
-                let email = rest[start..].trim_matches(|c| c == '<' || c == '>').to_string();
-                (name, email)
-            } else {
-                (rest.trim().to_string(), String::new())
-            };
-            Some(ContributorInfo { name, email, count })
-        })
-        .collect();
-
-    let todo_output = git_run_sh(path,
-        "grep -rn 'TODO\\|FIXME\\|HACK' \
-         --include='*.rs' --include='*.ts' --include='*.js' \
-         --include='*.py' --include='*.go' --include='*.swift' \
-         --max-count=50 2>/dev/null | head -50"
-    );
-    let todos: Vec<TodoItem> = todo_output
-        .lines()
-        .filter(|l| !l.is_empty())
-        .filter_map(|line| {
-            let mut parts = line.splitn(3, ':');
-            let file = parts.next()?.to_string();
-            let line_num = parts.next()?.to_string();
-            let text = parts.next().unwrap_or("").to_string();
-            let kind = if text.contains("FIXME") {
-                "FIXME"
-            } else if text.contains("HACK") {
-                "HACK"
-            } else {
-                "TODO"
-            }
-            .to_string();
-            let text = text.trim().to_string();
-            Some(TodoItem {
-                file,
-                line_num,
-                kind,
-                text,
-            })
-        })
-        .collect();
-
-    let ls_files = git_run(path, &["ls-files"]);
-    let languages: Vec<LanguageInfo> = {
-        let mut ext_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        let mut total_files = 0usize;
-        for file in ls_files.lines().filter(|l| !l.is_empty()) {
-            total_files += 1;
-            let ext = std::path::Path::new(file)
-                .extension()
-                .map(|e| e.to_string_lossy().to_string())
-                .unwrap_or_else(|| "(none)".to_string());
-            *ext_counts.entry(ext).or_insert(0) += 1;
-        }
-        let mut langs: Vec<LanguageInfo> = ext_counts
-            .into_iter()
-            .map(|(extension, file_count)| {
-                let percentage = if total_files > 0 {
-                    (file_count as f32 / total_files as f32) * 100.0
-                } else {
-                    0.0
-                };
-                LanguageInfo {
-                    extension,
-                    file_count,
-                    percentage,
-                }
-            })
-            .collect();
-        langs.sort_by(|a, b| b.file_count.cmp(&a.file_count));
-        langs.truncate(15);
-        langs
-    };
-
-    let disk_usage: Option<DiskUsageInfo> = {
-        let du_total = git_run_sh(path, "du -sh . 2>/dev/null | cut -f1");
-        let du_git = git_run_sh(path, "du -sh .git 2>/dev/null | cut -f1");
-        let (build_size, build_dir_name) = if path.join("target").exists() {
-            (
-                Some(git_run_sh(path, "du -sh target 2>/dev/null | cut -f1")),
-                Some("target".to_string()),
-            )
-        } else if path.join("node_modules").exists() {
-            (
-                Some(git_run_sh(path, "du -sh node_modules 2>/dev/null | cut -f1")),
-                Some("node_modules".to_string()),
-            )
-        } else if path.join("build").exists() {
-            (
-                Some(git_run_sh(path, "du -sh build 2>/dev/null | cut -f1")),
-                Some("build".to_string()),
-            )
-        } else {
-            (None, None)
-        };
-        if !du_total.is_empty() {
-            Some(DiskUsageInfo {
-                total: du_total,
-                git_size: du_git,
-                build_size,
-                build_dir_name,
-            })
-        } else {
-            None
-        }
-    };
-
-    let gh_available = std::process::Command::new("sh")
-        .args(["-c", "command -v gh >/dev/null 2>&1"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    let (ci_runs, gh_issues) = if gh_available {
-        let ci_json = git_run_sh(path,
-            "gh run list --limit 10 --json status,name,conclusion,headBranch,createdAt 2>/dev/null"
-        );
-        let ci_runs: Vec<CiRun> = serde_json::from_str::<Vec<serde_json::Value>>(&ci_json)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|v| CiRun {
-                name: v["name"].as_str().unwrap_or("").to_string(),
-                status: v["status"].as_str().unwrap_or("").to_string(),
-                conclusion: v["conclusion"].as_str().unwrap_or("").to_string(),
-                branch: v["headBranch"].as_str().unwrap_or("").to_string(),
-                created_at: v["createdAt"].as_str().unwrap_or("").to_string(),
-            })
-            .collect();
-
-        let issue_json = git_run_sh(path,
-            "gh issue list --limit 10 --json number,title,author,labels 2>/dev/null"
-        );
-        let gh_issues: Vec<GhIssue> = serde_json::from_str::<Vec<serde_json::Value>>(&issue_json)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|v| {
-                let author = v["author"]["login"].as_str().unwrap_or("").to_string();
-                let labels: Vec<String> = v["labels"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|l| l["name"].as_str().map(|s| s.to_string()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                GhIssue {
-                    number: v["number"].as_u64().unwrap_or(0),
-                    title: v["title"].as_str().unwrap_or("").to_string(),
-                    author,
-                    labels,
-                }
-            })
-            .collect();
-
-        (ci_runs, gh_issues)
-    } else {
-        (Vec::new(), Vec::new())
-    };
-
-    let processes: Vec<ProcessInfo> = {
-        let path_str = path.to_string_lossy().to_string();
-        let ps_output = git_run_sh(path, "ps -eo pid,pcpu,command 2>/dev/null");
-        ps_output
-            .lines()
-            .skip(1)
-            .filter(|l| l.contains(&path_str))
-            .filter_map(|line| {
-                let line = line.trim();
-                let mut parts = line.splitn(3, char::is_whitespace);
-                let pid = parts.next()?.trim().to_string();
-                let rest = parts.next().unwrap_or("").trim_start();
-                let mut rest_parts = rest.splitn(2, char::is_whitespace);
-                let cpu = rest_parts.next()?.trim().to_string();
-                let command = rest_parts.next().unwrap_or("").trim().to_string();
-                if command.is_empty() {
-                    return None;
-                }
-                Some(ProcessInfo { pid, cpu, command })
-            })
-            .collect()
-    };
-
-    ProjectGitInfo {
-        tags,
-        graph_lines,
-        contributors,
-        todos,
-        languages,
-        disk_usage,
-        ci_runs,
-        gh_issues,
-        gh_available,
-        processes,
-        // Carry forward the fast fields
-        ..fast
-    }
-}
-
-/// Full fetch (both phases). Used for background refresh of stale cache.
-fn fetch_git_info(path: &std::path::Path) -> ProjectGitInfo {
-    let fast = fetch_git_info_fast(path);
-    fetch_git_info_slow(path, fast)
-}
 
 /// Query zoxide for directories matching the input (up to 10 results).
 fn query_zoxide(input: &str) -> Vec<String> {
@@ -1323,6 +444,7 @@ impl Client {
             plugin_segments: Vec::new(),
 
             leader_state: None,
+            leader_entered_at: None,
             palette_state: None,
             copy_mode_state: None,
             system_programs: crate::ui::tab_picker::scan_system_programs(),
@@ -1339,12 +461,7 @@ impl Client {
             rename_input: String::new(),
             rename_target: RenameTarget::Window,
             new_workspace_input: None,
-            project_hub_state: None,
-            sidebar_width: None,
-            sidebar_drag: None,
-            home_widget_drag: None,
             widget_picker_state: None,
-            event_tx: None,
         }
     }
 
@@ -1364,6 +481,7 @@ impl Client {
             plugin_segments: Vec::new(),
 
             leader_state: None,
+            leader_entered_at: None,
             palette_state: None,
             copy_mode_state: None,
             system_programs: Vec::new(),
@@ -1380,12 +498,7 @@ impl Client {
             rename_input: String::new(),
             rename_target: RenameTarget::Window,
             new_workspace_input: None,
-            project_hub_state: None,
-            sidebar_width: None,
-            sidebar_drag: None,
-            home_widget_drag: None,
             widget_picker_state: None,
-            event_tx: None,
         }
     }
 
@@ -1407,22 +520,6 @@ impl Client {
     /// Focus the workspace bar and clear any widget/pane focus.
     fn focus_workspace_bar(&mut self) {
         self.focus = Focus::WorkspaceBar;
-    }
-
-    /// Return the focused widget's WindowId, if a widget is focused.
-    pub fn focused_widget_id(&self) -> Option<WindowId> {
-        match self.focus {
-            Focus::Widget(id) => Some(id),
-            _ => None,
-        }
-    }
-
-    /// Returns true if the active workspace is the home workspace.
-    pub fn is_home_active(&self) -> bool {
-        self.render_state
-            .workspaces
-            .get(self.render_state.active_workspace)
-            .is_some_and(|ws| ws.is_home)
     }
 
     /// Connect to a daemon and run the TUI event loop.
@@ -1482,11 +579,6 @@ impl Client {
 
         // Event loop
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<ServerEvent>();
-
-        // Initialize the project hub (needs event_tx for async git info fetching)
-        client.event_tx = Some(event_tx.clone());
-        client.project_hub_state = Some(ProjectHubState::new(&client.config, event_tx.clone()));
-        // Home workspace is always at index 0 in render_state.workspaces
 
         // Start terminal event reader — bridge AppEvent → ServerEvent
         let (app_tx, mut app_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1631,6 +723,21 @@ impl Client {
                 if self.tab_picker_state.is_some() || self.focus == Focus::Interact {
                     self.needs_redraw = true;
                 }
+                // Leader key timeout → open command palette after 300ms
+                if self.focus == Focus::Leader {
+                    if let Some(entered) = self.leader_entered_at {
+                        if entered.elapsed() >= std::time::Duration::from_millis(300) {
+                            self.leader_state = None;
+                            self.leader_entered_at = None;
+                            self.palette_state = Some(UnifiedPaletteState::new_full_search(
+                                &self.config.keys,
+                                &self.config.leader,
+                            ));
+                            self.focus = Focus::Palette;
+                            self.needs_redraw = true;
+                        }
+                    }
+                }
             }
             ServerEvent::Terminal(app_event) => {
                 self.handle_terminal_event(app_event, tui, writer).await?;
@@ -1642,17 +749,6 @@ impl Client {
             }
             ServerEvent::Disconnected => {
                 self.should_quit = true;
-            }
-            ServerEvent::GitInfoReady { project_idx, info, refreshing } => {
-                if let Some(ref mut hub) = self.project_hub_state {
-                    let entry = if refreshing {
-                        GitCacheEntry::Refreshing(*info)
-                    } else {
-                        GitCacheEntry::Ready(*info)
-                    };
-                    hub.git_cache.insert(project_idx, entry);
-                }
-                self.needs_redraw = true;
             }
         }
         Ok(())
@@ -1797,7 +893,7 @@ impl Client {
                                 let wp = self.widget_picker_state.take().unwrap();
                                 self.pop_focus();
                                 self.focus = Focus::Normal;
-                                let widget_name = wp.selected_widget().map(|w| w.as_str().to_string());
+                                let widget_name = wp.selected_label().map(|s| s.to_string());
                                 if let Some(name) = widget_name {
                                     let mut w = writer.lock().await;
                                     match wp.mode {
@@ -1942,10 +1038,10 @@ impl Client {
                             }
                         }
                     }
-                } else if matches!(self.focus, Focus::Normal | Focus::Interact | Focus::Sidebar | Focus::Widget(_) | Focus::WorkspaceBar)
+                } else if matches!(self.focus, Focus::Normal | Focus::Interact | Focus::WorkspaceBar)
                 {
                     // Check workspace bar clicks (client-side)
-                    let show_workspace_bar = self.is_home_active() || !self.render_state.workspaces.is_empty();
+                    let show_workspace_bar = !self.render_state.workspaces.is_empty();
                     if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
                         // Any click in the workspace bar area focuses it.
                         self.focus_workspace_bar();
@@ -1967,10 +1063,6 @@ impl Client {
                         ) {
                             match click {
                                 crate::ui::workspace_bar::WorkspaceBarClick::Tab(i) => {
-                                    // Ensure hub state exists when switching to home
-                                    if i == 0 && self.project_hub_state.is_none() {
-                                        self.project_hub_state = Some(ProjectHubState::new(&self.config, self.event_tx.as_ref().unwrap().clone()));
-                                    }
                                     self.render_state.active_workspace = i;
                                     let mut w = writer.lock().await;
                                     let _ = send_request(
@@ -2013,247 +1105,13 @@ impl Client {
                         }
                     }
 
-                    // Hub sidebar click handling
-                    if self.is_home_active() {
-                        let body = crate::ui::body_rect(self, tui.size()?);
-                        let sw = crate::ui::project_hub::sidebar_width(body.width, self.sidebar_width);
-                        // Check if click is on the sidebar border (right edge ±1)
-                        if body.width >= sw + 20 {
-                            let border_x = body.x + sw;
-                            if x >= border_x.saturating_sub(1) && x <= border_x + 1
-                                && y >= body.y && y < body.y + body.height
-                            {
-                                self.sidebar_drag = Some(SidebarDragState { body });
-                                return Ok(());
-                            }
-
-                            // Check if click is on a widget split border (layout_body area)
-                            let layout_body = Rect::new(
-                                body.x + sw,
-                                body.y,
-                                body.width.saturating_sub(sw),
-                                body.height,
-                            );
-
-                            // Check for + button / tab clicks in widget tab bars BEFORE
-                            // the split border check — the ±1 border tolerance overlaps
-                            // with the tab bar row of the widget below the border.
-                            let plus_group_id = self.active_workspace().and_then(|ws| {
-                                let resolved = ws.layout.resolve_with_folds(layout_body, &ws.folded_windows);
-                                resolved.into_iter().find_map(|rp| {
-                                    if let pane_protocol::layout::ResolvedPane::Visible { id, rect } = rp {
-                                        let tab_y = rect.y.saturating_add(1);
-                                        let padded_x = rect.x.saturating_add(2);
-                                        let padded_w = rect.width.saturating_sub(4);
-                                        let max_x = padded_x + padded_w;
-                                        if y == tab_y && 3 <= max_x.saturating_sub(padded_x) {
-                                            let plus_start = max_x - 3;
-                                            let group = ws.groups.iter().find(|g| g.id == id)?;
-                                            if x >= plus_start && x < max_x && !group.tabs.is_empty() {
-                                                return Some(id);
-                                            }
-                                        }
-                                    }
-                                    None
-                                })
-                            });
-                            if let Some(id) = plus_group_id {
-                                self.focus = Focus::Widget(id);
-                                {
-                                    let mut w = writer.lock().await;
-                                    let _ = send_request(&mut w, &ClientRequest::FocusWindow { id }).await;
-                                }
-                                self.open_widget_picker(WidgetPickerMode::AddTab);
-                                return Ok(());
-                            }
-
-                            let tab_hit = self.active_workspace().and_then(|ws| {
-                                let resolved = ws.layout.resolve_with_folds(layout_body, &ws.folded_windows);
-                                for rp in &resolved {
-                                    if let pane_protocol::layout::ResolvedPane::Visible { id: group_id, rect } = rp {
-                                        if let Some(group) = ws.groups.iter().find(|g| g.id == *group_id) {
-                                            let block = ratatui::widgets::Block::default()
-                                                .borders(ratatui::widgets::Borders::ALL)
-                                                .border_type(ratatui::widgets::BorderType::Rounded);
-                                            let inner = block.inner(*rect);
-                                            if inner.width <= 2 || inner.height == 0 {
-                                                continue;
-                                            }
-                                            let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, 1);
-                                            if y != padded.y {
-                                                continue;
-                                            }
-                                            let sep_width: u16 = 3;
-                                            let indicator_width: u16 = 2;
-                                            let plus_reserve: u16 = 3;
-                                            let n = group.tabs.len();
-                                            if n <= 1 { continue; }
-                                            let label_widths: Vec<u16> = group.tabs.iter()
-                                                .map(|tab| tab.title.len() as u16 + 2)
-                                                .collect();
-                                            let total: u16 = label_widths.iter().sum::<u16>()
-                                                + sep_width * (n as u16 - 1) + plus_reserve;
-                                            let (lo, hi) = if total <= padded.width {
-                                                (0, n - 1)
-                                            } else {
-                                                let active = group.active_tab.min(n - 1);
-                                                let range_w = |lo: usize, hi: usize| -> u16 {
-                                                    let mut w: u16 = 0;
-                                                    for (j, lw) in label_widths[lo..=hi].iter().enumerate() {
-                                                        w += lw;
-                                                        if j > 0 { w += sep_width; }
-                                                    }
-                                                    if lo > 0 { w += indicator_width; }
-                                                    if hi < n - 1 { w += indicator_width; }
-                                                    w + plus_reserve
-                                                };
-                                                let mut lo = active;
-                                                let mut hi = active;
-                                                loop {
-                                                    let mut expanded = false;
-                                                    if lo > 0 && range_w(lo - 1, hi) <= padded.width {
-                                                        lo -= 1; expanded = true;
-                                                    }
-                                                    if hi + 1 < n && range_w(lo, hi + 1) <= padded.width {
-                                                        hi += 1; expanded = true;
-                                                    }
-                                                    if !expanded { break; }
-                                                }
-                                                (lo, hi)
-                                            };
-                                            let mut cursor = padded.x;
-                                            if lo > 0 { cursor += indicator_width; }
-                                            for (j, &lw) in label_widths[lo..=hi].iter().enumerate() {
-                                                if j > 0 { cursor += sep_width; }
-                                                let tab_start = cursor;
-                                                cursor += lw;
-                                                if x >= tab_start && x < cursor {
-                                                    return Some((*group_id, lo + j));
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                None
-                            });
-                            if let Some((window_id, tab_index)) = tab_hit {
-                                self.focus = Focus::Widget(window_id);
-                                let mut w = writer.lock().await;
-                                let _ = send_request(&mut w, &ClientRequest::SelectTab { window_id, tab_index }).await;
-                                return Ok(());
-                            }
-
-                            if let Some(ws) = self.active_workspace() {
-                                if let Some((path, direction, split_rect)) =
-                                    ws.layout.hit_test_split_border(layout_body, x, y)
-                                {
-                                    self.home_widget_drag = Some(HomeWidgetDragState {
-                                        split_path: path,
-                                        direction,
-                                        split_rect,
-                                    });
-                                    return Ok(());
-                                }
-                            }
-                        }
-                        // Track sidebar interaction (borrow ends before the async call below)
-                        let (sidebar_was_clicked, double_click_project) =
-                            if let Some(ref mut hub) = self.project_hub_state {
-                                if let Some(idx) = crate::ui::project_hub::sidebar_hit_test(
-                                    hub, body, x, y, self.sidebar_width,
-                                ) {
-                                    let now = std::time::Instant::now();
-                                    let is_double = hub
-                                        .last_click
-                                        .map(|(prev_idx, prev_time)| {
-                                            prev_idx == idx
-                                                && now.duration_since(prev_time).as_millis() < 400
-                                        })
-                                        .unwrap_or(false);
-                                    // Sidebar click clears widget focus
-                                    if is_double {
-                                        hub.last_click = None;
-                                        (true, hub.selected_project().cloned())
-                                    } else {
-                                        hub.select(idx);
-                                        hub.last_click = Some((idx, now));
-                                        (true, None)
-                                    }
-                                } else {
-                                    hub.last_click = None;
-                                    (false, None)
-                                }
-                            } else {
-                                (false, None)
-                            };
-
-                        if sidebar_was_clicked {
-                            self.focus = Focus::Sidebar;
-                        }
-                        if let Some(project) = double_click_project {
-                            let dir = project.path.to_string_lossy().to_string();
-                            self.open_project(&dir, writer).await?;
-                        } else if !sidebar_was_clicked {
-                            // Widget click: focus the window that was clicked
-                            let sw = crate::ui::project_hub::sidebar_width(
-                                body.width,
-                                self.sidebar_width,
-                            );
-                            let layout_body = Rect::new(
-                                body.x + sw,
-                                body.y,
-                                body.width.saturating_sub(sw),
-                                body.height,
-                            );
-
-                            let clicked_id = self.active_workspace().and_then(|ws| {
-                                let resolved =
-                                    ws.layout.resolve_with_folds(layout_body, &ws.folded_windows);
-                                resolved.into_iter().find_map(|rp| {
-                                    if let pane_protocol::layout::ResolvedPane::Visible {
-                                        id,
-                                        rect,
-                                    } = rp
-                                    {
-                                        if x >= rect.x
-                                            && x < rect.x + rect.width
-                                            && y >= rect.y
-                                            && y < rect.y + rect.height
-                                        {
-                                            return Some(id);
-                                        }
-                                    }
-                                    None
-                                })
-                            });
-                            if let Some(id) = clicked_id {
-                                self.focus = Focus::Widget(id);
-                                let mut w = writer.lock().await;
-                                let _ = send_request(&mut w, &ClientRequest::FocusWindow { id }).await;
-                            }
-                        }
-                        if !matches!(self.focus, Focus::Widget(_)) {
-                            self.focus = Focus::Normal;
-                        }
-                        return Ok(());
-                    }
-
                     // Check if click hit a tab bar + button (open picker client-side)
                     if let Some(TabBarHit::Plus { group_id }) = self.hit_test_tab_bar(tui, x, y) {
-                        let is_widget = self.active_workspace()
-                            .and_then(|ws| ws.groups.iter().find(|g| g.id == group_id))
-                            .and_then(|g| g.tabs.get(g.active_tab))
-                            .map(|t| matches!(t.kind, TabKind::Widget(_)))
-                            .unwrap_or(false);
                         {
                             let mut w = writer.lock().await;
                             let _ = send_request(&mut w, &ClientRequest::FocusWindow { id: group_id }).await;
                         }
-                        if is_widget {
-                            self.open_widget_picker(WidgetPickerMode::AddTab);
-                        } else {
-                            self.open_tab_picker(crate::ui::tab_picker::TabPickerMode::NewTab);
-                        }
+                        self.open_tab_picker(crate::ui::tab_picker::TabPickerMode::NewTab);
                         return Ok(());
                     }
 
@@ -2264,66 +1122,15 @@ impl Client {
                 }
             }
             AppEvent::MouseDrag { x, y } => {
-                if let Some(ref drag) = self.sidebar_drag {
-                    let new_width = x.saturating_sub(drag.body.x);
-                    self.sidebar_width = Some(new_width.clamp(
-                        crate::ui::project_hub::SIDEBAR_MIN_WIDTH,
-                        crate::ui::project_hub::SIDEBAR_MAX_WIDTH
-                            .min(drag.body.width.saturating_sub(20)),
-                    ));
-                    self.needs_redraw = true;
-                } else if let Some(ref drag) = self.home_widget_drag {
-                    // Compute new ratio relative to the split node's own rect,
-                    // not the entire layout body. This ensures dragging a nested
-                    // split border only moves that border without affecting others.
-                    let sr = drag.split_rect;
-                    let new_ratio = match drag.direction {
-                        SplitDirection::Horizontal => {
-                            let clamped = x.clamp(sr.x, sr.x + sr.width);
-                            (clamped - sr.x) as f64 / sr.width.max(1) as f64
-                        }
-                        SplitDirection::Vertical => {
-                            let clamped = y.clamp(sr.y, sr.y + sr.height);
-                            (clamped - sr.y) as f64 / sr.height.max(1) as f64
-                        }
-                    };
-                    let path = drag.split_path.clone();
-                    // Update local cached layout for immediate visual feedback
-                    let ws_idx = self.render_state.active_workspace;
-                    if let Some(ws) = self.render_state.workspaces.get_mut(ws_idx) {
-                        ws.layout.set_ratio_at_path(&path, new_ratio);
-                    }
-                    // Encode path as "0,1" (0=First, 1=Second)
-                    let path_str: String = path.iter().map(|s| match s {
-                        Side::First => "0",
-                        Side::Second => "1",
-                    }).collect::<Vec<_>>().join(",");
-                    let path_arg = if path_str.is_empty() { "root".to_string() } else { path_str };
-                    let cmd = format!("set-split-ratio {} {:.6}", path_arg, new_ratio);
-                    let mut w = writer.lock().await;
-                    let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
-                    self.needs_redraw = true;
-                } else {
-                    let mut w = writer.lock().await;
-                    let _ = send_request(&mut w, &ClientRequest::MouseDrag { x, y }).await;
-                }
+                let mut w = writer.lock().await;
+                let _ = send_request(&mut w, &ClientRequest::MouseDrag { x, y }).await;
             }
             AppEvent::MouseUp { x, y } => {
-                if self.sidebar_drag.take().is_some() {
-                    // Sidebar drag finished — width is already set
-                } else if self.home_widget_drag.take().is_some() {
-                    // Widget split drag finished — ratio already sent to daemon
-                } else {
-                    let mut w = writer.lock().await;
-                    let _ = send_request(&mut w, &ClientRequest::MouseUp { x, y }).await;
-                }
+                let mut w = writer.lock().await;
+                let _ = send_request(&mut w, &ClientRequest::MouseUp { x, y }).await;
             }
             AppEvent::MouseScroll { up } => {
-                if self.is_home_active() {
-                    if let Some(ref mut hub) = self.project_hub_state {
-                        if up { hub.move_up(); } else { hub.move_down(); }
-                    }
-                } else if self.focus == Focus::NewWorkspace {
+                if self.focus == Focus::NewWorkspace {
                     if let Some(ref mut state) = self.new_workspace_input {
                         if matches!(state.stage, NewWorkspaceStage::Directory) {
                             if up { state.browser.move_up(); } else { state.browser.move_down(); }
@@ -2344,8 +1151,8 @@ impl Client {
                 let _ = send_request(&mut w, &ClientRequest::MouseMove { x, y }).await;
             }
             AppEvent::MouseRightDown { x, y } => {
-                if matches!(self.focus, Focus::Normal | Focus::Interact | Focus::Sidebar | Focus::Widget(_) | Focus::WorkspaceBar) {
-                    let show_workspace_bar = self.is_home_active() || !self.render_state.workspaces.is_empty();
+                if matches!(self.focus, Focus::Normal | Focus::Interact | Focus::WorkspaceBar) {
+                    let show_workspace_bar = !self.render_state.workspaces.is_empty();
 
                     if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
                         // Right-click on workspace bar — select the clicked workspace first
@@ -2366,10 +1173,6 @@ impl Client {
                             y,
                         ) {
                             self.render_state.active_workspace = i;
-                            // Right-click on home — just select, no close menu
-                            if self.render_state.workspaces.get(i).is_some_and(|ws| ws.is_home) {
-                                return Ok(());
-                            }
                             let mut w = writer.lock().await;
                             let _ = send_request(
                                 &mut w,
@@ -2397,12 +1200,10 @@ impl Client {
                         self.push_focus();
                         self.focus = Focus::ContextMenu;
                     } else {
-                        // Right-click on pane body — use home-workspace menu when appropriate
-                        self.context_menu_state = Some(if self.is_home_active() {
-                            crate::ui::context_menu::home_body_menu(x, y)
-                        } else {
+                        // Right-click on pane body
+                        self.context_menu_state = Some(
                             crate::ui::context_menu::pane_body_menu(x, y)
-                        });
+                        );
                         self.push_focus();
                         self.focus = Focus::ContextMenu;
                     }
@@ -2435,7 +1236,7 @@ impl Client {
             Focus::ContextMenu => return self.handle_context_menu_key(key, tui, writer).await,
             Focus::WidgetPicker => return self.handle_widget_picker_key(key, writer).await,
             Focus::Resize => return self.handle_resize_key(key, writer).await,
-            Focus::Normal | Focus::Sidebar | Focus::Widget(_) | Focus::WorkspaceBar => return self.handle_normal_key(key, tui, writer).await,
+            Focus::Normal | Focus::WorkspaceBar => return self.handle_normal_key(key, tui, writer).await,
             Focus::Interact => return self.handle_interact_key(key, tui, writer).await,
         }
     }
@@ -2476,23 +1277,6 @@ impl Client {
 
         // Esc clears transient state but stays in Normal mode
         if normalized.code == KeyCode::Esc {
-            // On home workspace, defocus widget → clear search → switch away
-            if self.is_home_active() {
-                if matches!(self.focus, Focus::Widget(_)) {
-                    self.focus = Focus::Sidebar;
-                    return Ok(());
-                }
-                if let Some(ref mut hub) = self.project_hub_state {
-                    if !hub.input.is_empty() {
-                        hub.input.clear();
-                        hub.update_filter();
-                        return Ok(());
-                    }
-                }
-                if self.render_state.workspaces.len() > 1 {
-                    self.render_state.active_workspace = 1;
-                }
-            }
             self.focus = Focus::Normal;
             return Ok(());
         }
@@ -2524,91 +1308,6 @@ impl Client {
                 return self
                     .execute_action(Action::FocusGroupN(n), tui, writer)
                     .await;
-            }
-        }
-
-        // Home workspace sidebar: arrow keys navigate, Enter opens, typing searches
-        if self.is_home_active() {
-            // If a widget is focused, route j/k/Enter to widget item navigation
-            let widget_focused = matches!(self.focus, Focus::Widget(_));
-            if widget_focused {
-                match normalized.code {
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        let widget = self.focused_widget_kind();
-                        let count = widget.as_ref().and_then(|w| {
-                            self.project_hub_state.as_ref().map(|h| {
-                                crate::ui::project_hub::widget_item_count(w, h.selected_git_info())
-                            })
-                        }).unwrap_or(0);
-                        if let Focus::Widget(id) = self.focus {
-                            if let Some(ref mut hub) = self.project_hub_state {
-                                let state = hub.widget_interact.entry(id).or_default();
-                                if state.selected + 1 < count {
-                                    state.selected += 1;
-                                }
-                            }
-                        }
-                        return Ok(());
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        if let Focus::Widget(id) = self.focus {
-                            if let Some(ref mut hub) = self.project_hub_state {
-                                let state = hub.widget_interact.entry(id).or_default();
-                                state.selected = state.selected.saturating_sub(1);
-                            }
-                        }
-                        return Ok(());
-                    }
-                    KeyCode::Enter => {
-                        let text = self.focused_widget_kind().and_then(|w| {
-                            let focused_id = self.focused_widget_id()?;
-                            self.project_hub_state.as_ref().and_then(|h| {
-                                let selected = h.widget_interact.get(&focused_id).map(|s| s.selected).unwrap_or(0);
-                                crate::ui::project_hub::widget_selected_text(&w, h.selected_git_info(), selected)
-                            })
-                        });
-                        if let Some(text) = text {
-                            let _ = crate::clipboard::copy_to_clipboard(&text);
-                        }
-                        return Ok(());
-                    }
-                    _ => {}
-                }
-            }
-
-            let hub_action = self.project_hub_state.as_mut().and_then(|hub| {
-                if widget_focused {
-                    return None; // handled above
-                }
-                match normalized.code {
-                    KeyCode::Up => { hub.move_up(); Some(()) }
-                    KeyCode::Down => { hub.move_down(); Some(()) }
-                    KeyCode::Backspace => {
-                        if hub.input.pop().is_some() {
-                            hub.update_filter();
-                        }
-                        Some(())
-                    }
-                    KeyCode::Char(c) if normalized.modifiers == KeyModifiers::NONE => {
-                        hub.input.push(c);
-                        hub.update_filter();
-                        Some(())
-                    }
-                    _ => None,
-                }
-            });
-            if hub_action.is_some() {
-                return Ok(());
-            }
-            // Enter: open project (needs &mut self after hub borrow ends)
-            if normalized.code == KeyCode::Enter {
-                let dir = self.project_hub_state.as_ref()
-                    .and_then(|hub| hub.selected_project())
-                    .map(|p| p.path.to_string_lossy().to_string());
-                if let Some(dir) = dir {
-                    self.open_project(&dir, writer).await?;
-                }
-                return Ok(());
             }
         }
 
@@ -2649,12 +1348,7 @@ impl Client {
                 self.focus = Focus::Normal;
             }
             "open" => {
-                let dir = self.project_hub_state.as_ref()
-                    .and_then(|hub| hub.selected_project())
-                    .map(|p| p.path.to_string_lossy().to_string());
-                if let Some(dir) = dir {
-                    self.open_project(&dir, writer).await?;
-                }
+                // No-op: project hub removed
             }
             _ => {} // Buttons like "search", "switch" that need keyboard input
         }
@@ -2667,8 +1361,8 @@ impl Client {
         self.leader_state = Some(LeaderState {
             path: Vec::new(),
             current_node: root,
-            popup_visible: true,
         });
+        self.leader_entered_at = Some(tokio::time::Instant::now());
         self.focus = Focus::Leader;
     }
 
@@ -2682,63 +1376,36 @@ impl Client {
         if self.focus == Focus::WorkspaceBar {
             match &action {
                 Action::FocusLeft => {
-                    if self.is_home_active() {
-                        // Already at leftmost (Hub)
-                    } else {
-                        let idx = self.render_state.active_workspace;
-                        if idx > 0 {
-                            self.render_state.active_workspace = idx - 1;
-                            let mut w = writer.lock().await;
-                            let _ = send_request(
-                                &mut w,
-                                &ClientRequest::Command(format!("select-workspace -t {}", idx - 1)),
-                            )
-                            .await;
-                        } else {
-                            // At first daemon workspace, go to hub
-                            self.render_state.active_workspace = 0;
-                            if self.project_hub_state.is_none() {
-                                self.project_hub_state = Some(ProjectHubState::new(&self.config, self.event_tx.as_ref().unwrap().clone()));
-                            }
-                        }
+                    let idx = self.render_state.active_workspace;
+                    if idx > 0 {
+                        self.render_state.active_workspace = idx - 1;
+                        let mut w = writer.lock().await;
+                        let _ = send_request(
+                            &mut w,
+                            &ClientRequest::Command(format!("select-workspace -t {}", idx - 1)),
+                        )
+                        .await;
                     }
                     return Ok(());
                 }
                 Action::FocusRight => {
-                    if self.is_home_active() {
-                        // From hub, go to first non-home workspace if exists
-                        if self.render_state.workspaces.len() > 1 {
-                            self.render_state.active_workspace = 1;
-                            let mut w = writer.lock().await;
-                            let _ = send_request(
-                                &mut w,
-                                &ClientRequest::Command("select-workspace -t 1".to_string()),
-                            )
-                            .await;
-                        }
-                    } else {
-                        let idx = self.render_state.active_workspace;
-                        if idx + 1 < self.render_state.workspaces.len() {
-                            self.render_state.active_workspace = idx + 1;
-                            let mut w = writer.lock().await;
-                            let _ = send_request(
-                                &mut w,
-                                &ClientRequest::Command(format!("select-workspace -t {}", idx + 1)),
-                            )
-                            .await;
-                        }
+                    let idx = self.render_state.active_workspace;
+                    if idx + 1 < self.render_state.workspaces.len() {
+                        self.render_state.active_workspace = idx + 1;
+                        let mut w = writer.lock().await;
+                        let _ = send_request(
+                            &mut w,
+                            &ClientRequest::Command(format!("select-workspace -t {}", idx + 1)),
+                        )
+                        .await;
                     }
                     return Ok(());
                 }
                 Action::FocusDown | Action::FocusUp => {
-                    self.focus = if self.is_home_active() { Focus::Sidebar } else { Focus::Normal };
+                    self.focus = Focus::Normal;
                     return Ok(());
                 }
                 Action::CloseTab => {
-                    if self.is_home_active() {
-                        // Can't close the hub workspace
-                        return Ok(());
-                    }
                     // Remap to close workspace when bar is focused
                     let is_last = self.render_state.workspaces.len() <= 1;
                     self.pending_confirm_action = Some(Action::CloseWorkspace);
@@ -2752,11 +1419,8 @@ impl Client {
                     return Ok(());
                 }
                 Action::EnterInteract => {
-                    // Widget tabs have no PTY — stay in Normal mode
-                    if !self.is_home_active() {
-                        self.focus_stack.clear();
-                        self.focus = Focus::Interact;
-                    }
+                    self.focus_stack.clear();
+                    self.focus = Focus::Interact;
                     return Ok(());
                 }
                 Action::NewTab => {
@@ -2778,120 +1442,6 @@ impl Client {
                     self.focus = Focus::Normal;
                     // Fall through to normal action handling
                 }
-            }
-        }
-
-        // Sidebar resize on home workspace (Shift+H / Shift+L)
-        if self.is_home_active() && self.project_hub_state.is_some() {
-            let step: i16 = 4;
-            match &action {
-                Action::ResizeShrinkH => {
-                    let current = self.sidebar_width.unwrap_or(30);
-                    let new_w = (current as i16 - step).max(crate::ui::project_hub::SIDEBAR_MIN_WIDTH as i16) as u16;
-                    self.sidebar_width = Some(new_w);
-                    return Ok(());
-                }
-                Action::ResizeGrowH => {
-                    let current = self.sidebar_width.unwrap_or(30);
-                    let new_w = (current as i16 + step).min(crate::ui::project_hub::SIDEBAR_MAX_WIDTH as i16) as u16;
-                    self.sidebar_width = Some(new_w);
-                    return Ok(());
-                }
-                _ => {}
-            }
-        }
-
-        // Home workspace: sidebar ↔ widget focus navigation
-        if self.is_home_active() && self.project_hub_state.is_some() {
-            let widget_focused = self.focused_widget_id();
-            let active_group = self.active_workspace().map(|ws| ws.active_group);
-
-            match &action {
-                Action::FocusRight => {
-                    if widget_focused.is_none() {
-                        // Sidebar → first widget: use current active_group
-                        if let Some(id) = active_group {
-                            self.focus = Focus::Widget(id);
-                            let mut w = writer.lock().await;
-                            let _ = send_request(&mut w, &ClientRequest::FocusWindow { id }).await;
-                        }
-                    } else {
-                        // Widget focused → find right neighbor
-                        let neighbor = self.active_workspace().and_then(|ws| {
-                            ws.layout.find_neighbor(
-                                widget_focused.unwrap(),
-                                SplitDirection::Horizontal,
-                                Side::Second,
-                            )
-                        });
-                        if let Some(id) = neighbor {
-                            self.focus = Focus::Widget(id);
-                            let mut w = writer.lock().await;
-                            let _ = send_request(&mut w, &ClientRequest::FocusWindow { id }).await;
-                        }
-                    }
-                    return Ok(());
-                }
-                Action::FocusLeft => {
-                    if let Some(focused_id) = widget_focused {
-                        let neighbor = self.active_workspace().and_then(|ws| {
-                            ws.layout.find_neighbor(
-                                focused_id,
-                                SplitDirection::Horizontal,
-                                Side::First,
-                            )
-                        });
-                        if let Some(id) = neighbor {
-                            self.focus = Focus::Widget(id);
-                            let mut w = writer.lock().await;
-                            let _ = send_request(&mut w, &ClientRequest::FocusWindow { id }).await;
-                        } else {
-                            // No left neighbor → back to sidebar
-                            self.focus = Focus::Sidebar;
-                        }
-                    }
-                    // Sidebar already focused → nothing to do
-                    return Ok(());
-                }
-                Action::FocusUp => {
-                    if let Some(focused_id) = widget_focused {
-                        let neighbor = self.active_workspace().and_then(|ws| {
-                            ws.layout.find_neighbor(
-                                focused_id,
-                                SplitDirection::Vertical,
-                                Side::First,
-                            )
-                        });
-                        if let Some(id) = neighbor {
-                            self.focus = Focus::Widget(id);
-                            let mut w = writer.lock().await;
-                            let _ = send_request(&mut w, &ClientRequest::FocusWindow { id }).await;
-                            return Ok(());
-                        }
-                    }
-                    // No neighbor above or sidebar → workspace bar
-                    self.focus_workspace_bar();
-                    return Ok(());
-                }
-                Action::FocusDown => {
-                    if let Some(focused_id) = widget_focused {
-                        let neighbor = self.active_workspace().and_then(|ws| {
-                            ws.layout.find_neighbor(
-                                focused_id,
-                                SplitDirection::Vertical,
-                                Side::Second,
-                            )
-                        });
-                        if let Some(id) = neighbor {
-                            self.focus = Focus::Widget(id);
-                            let mut w = writer.lock().await;
-                            let _ = send_request(&mut w, &ClientRequest::FocusWindow { id }).await;
-                        }
-                    }
-                    // Sidebar focused or no neighbor below → nothing
-                    return Ok(());
-                }
-                _ => {}
             }
         }
 
@@ -2958,10 +1508,8 @@ impl Client {
                 return Ok(());
             }
             Action::EnterInteract => {
-                if !self.is_home_active() {
-                    self.focus_stack.clear();
-                    self.focus = Focus::Interact;
-                }
+                self.focus_stack.clear();
+                self.focus = Focus::Interact;
                 return Ok(());
             }
             Action::EnterNormal => {
@@ -2983,18 +1531,6 @@ impl Client {
             }
             Action::SplitVertical => {
                 self.open_tab_picker(crate::ui::tab_picker::TabPickerMode::SplitVertical);
-                return Ok(());
-            }
-            Action::ChangeWidget => {
-                self.open_widget_picker(WidgetPickerMode::Change);
-                return Ok(());
-            }
-            Action::AddWidgetRight => {
-                self.open_widget_picker(WidgetPickerMode::SplitHorizontal);
-                return Ok(());
-            }
-            Action::AddWidgetBelow => {
-                self.open_widget_picker(WidgetPickerMode::SplitVertical);
                 return Ok(());
             }
             Action::RenameWindow => {
@@ -3038,14 +1574,6 @@ impl Client {
                 });
                 self.push_focus();
                 self.focus = Focus::NewWorkspace;
-                return Ok(());
-            }
-            Action::ProjectHub => {
-                self.render_state.active_workspace = 0;
-                self.focus = Focus::Sidebar;
-                if self.project_hub_state.is_none() {
-                    self.project_hub_state = Some(ProjectHubState::new(&self.config, self.event_tx.as_ref().unwrap().clone()));
-                }
                 return Ok(());
             }
             Action::ResizeMode => {
@@ -3392,37 +1920,6 @@ impl Client {
         Ok(())
     }
 
-    /// Open a project by path: switch to an existing workspace if one matches,
-    /// otherwise create a new workspace at that path.
-    async fn open_project(
-        &mut self,
-        dir: &str,
-        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
-    ) -> Result<()> {
-        // Check if a workspace already exists for this path
-        let existing = self
-            .render_state
-            .workspaces
-            .iter()
-            .position(|ws| ws.cwd == dir);
-
-        if let Some(idx) = existing {
-            self.render_state.active_workspace = idx;
-            let mut w = writer.lock().await;
-            let _ = send_request(
-                &mut w,
-                &ClientRequest::Command(format!("select-workspace -t {}", idx)),
-            )
-            .await;
-        } else {
-            self.render_state.active_workspace = self.render_state.workspaces.len();
-            let cmd = format!("new-workspace -c \"{}\"", dir);
-            let mut w = writer.lock().await;
-            let _ = send_request(&mut w, &ClientRequest::Command(cmd)).await;
-        }
-        Ok(())
-    }
-
     async fn handle_resize_key(
         &mut self,
         key: KeyEvent,
@@ -3709,6 +2206,8 @@ impl Client {
     ) -> Result<()> {
         use pane_protocol::config::LeaderNode;
 
+        self.leader_entered_at = None;
+
         if key.code == KeyCode::Esc {
             self.leader_state = None;
             self.pop_focus();
@@ -3767,20 +2266,6 @@ impl Client {
             .get(self.render_state.active_workspace)
     }
 
-    /// Return the `HubWidget` kind for the currently focused widget window, if any.
-    fn focused_widget_kind(&self) -> Option<HubWidget> {
-        let _hub = self.project_hub_state.as_ref()?;
-        let focused_id = self.focused_widget_id()?;
-        let ws = self.active_workspace()?;
-        let group = ws.groups.iter().find(|g| g.id == focused_id)?;
-        let tab = group.tabs.get(group.active_tab)?;
-        if let TabKind::Widget(w) = &tab.kind {
-            Some(w.clone())
-        } else {
-            None
-        }
-    }
-
     /// Get the current workspace CWD, if any.
     fn current_cwd(&self) -> Option<&str> {
         self.active_workspace()
@@ -3808,12 +2293,6 @@ impl Client {
         ));
         self.push_focus();
         self.focus = Focus::TabPicker;
-    }
-
-    fn open_widget_picker(&mut self, mode: WidgetPickerMode) {
-        self.widget_picker_state = Some(WidgetPickerState::new(mode));
-        self.push_focus();
-        self.focus = Focus::WidgetPicker;
     }
 
     async fn handle_widget_picker_key(
@@ -3851,7 +2330,7 @@ impl Client {
                 if let Some(wp) = self.widget_picker_state.take() {
                     self.pop_focus();
                     self.focus = Focus::Normal;
-                    let widget_name = wp.selected_widget().map(|w| w.as_str().to_string());
+                    let widget_name = wp.selected_label().map(|s| s.to_string());
                     if let Some(name) = widget_name {
                         let mut w = writer.lock().await;
                         match wp.mode {
@@ -4048,7 +2527,6 @@ enum ServerEvent {
     Terminal(crate::event::AppEvent),
     Server(ServerResponse),
     Disconnected,
-    GitInfoReady { project_idx: usize, info: Box<ProjectGitInfo>, refreshing: bool },
 }
 
 // Implement From so the event loop channel works
@@ -4119,14 +2597,10 @@ fn action_to_command(action: &Action) -> Option<String> {
         | Action::EnterNormal
         | Action::Detach
         | Action::NewWorkspace // opens input dialog client-side
-        | Action::ProjectHub // opens project hub client-side
         | Action::NewTab // NewTab opens picker client-side
         | Action::SplitHorizontal // opens picker client-side
         | Action::SplitVertical // opens picker client-side
-        | Action::ResizeMode
-        | Action::ChangeWidget // opens widget picker client-side
-        | Action::AddWidgetRight // opens widget picker client-side
-        | Action::AddWidgetBelow => None, // opens widget picker client-side
+        | Action::ResizeMode => None,
     }
 }
 

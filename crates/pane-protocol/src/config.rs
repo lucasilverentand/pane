@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use ratatui::style::Color;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 // ---------------------------------------------------------------------------
 // Action enum — all bindable actions
@@ -56,11 +56,6 @@ pub enum Action {
     ToggleFold,
     ReloadConfig,
     ResizeMode,
-    ProjectHub,
-    // Widget management (home workspace)
-    ChangeWidget,
-    AddWidgetRight,
-    AddWidgetBelow,
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +115,16 @@ impl Default for Theme {
 impl Theme {
     /// Light-mode border color for the default theme.
     const BORDER_INACTIVE_LIGHT: Color = Color::Rgb(195, 195, 195);
+
+    /// Foreground color for status bar key badges.
+    /// When `bg` is `Reset` (terminal default), returns an explicit dark color
+    /// so badge text is readable on the accent background.
+    pub fn status_bar_key_fg(&self) -> Color {
+        match self.bg {
+            Color::Reset => Color::Rgb(30, 30, 30),
+            other => other,
+        }
+    }
 }
 
 impl Theme {
@@ -193,144 +198,6 @@ impl Theme {
 // Behavior
 // ---------------------------------------------------------------------------
 
-/// A widget that can be displayed in the project hub detail panel.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum HubWidget {
-    /// Project name, path, branch, and working tree status.
-    ProjectInfo,
-    /// Recent git commits.
-    RecentCommits,
-    /// Changed files from git status.
-    ChangedFiles,
-    /// All local branches with current branch highlighted.
-    Branches,
-    /// Git stash list.
-    Stashes,
-    /// Recent tags.
-    Tags,
-    /// ASCII git graph (--oneline --graph --all).
-    GitGraph,
-    /// Top contributors by commit count.
-    Contributors,
-    /// TODO/FIXME/HACK comments found in source files.
-    Todos,
-    /// First ~50 lines of README.md.
-    Readme,
-    /// File count by language/extension.
-    Languages,
-    /// Disk usage breakdown (total, .git, build dir).
-    DiskUsage,
-    /// Recent CI runs from GitHub Actions (requires `gh`).
-    CiStatus,
-    /// Open issues from GitHub (requires `gh`).
-    OpenIssues,
-    /// Processes running in the project directory.
-    RunningProcesses,
-}
-
-impl HubWidget {
-    pub fn label(&self) -> &str {
-        match self {
-            Self::ProjectInfo => "Info",
-            Self::RecentCommits => "Commits",
-            Self::ChangedFiles => "Changes",
-            Self::Branches => "Branches",
-            Self::Stashes => "Stashes",
-            Self::Tags => "Tags",
-            Self::GitGraph => "Graph",
-            Self::Contributors => "Contributors",
-            Self::Todos => "TODOs",
-            Self::Readme => "README",
-            Self::Languages => "Languages",
-            Self::DiskUsage => "Disk",
-            Self::CiStatus => "CI",
-            Self::OpenIssues => "Issues",
-            Self::RunningProcesses => "Processes",
-        }
-    }
-
-    /// Return the canonical string name used in commands (e.g. "project_info").
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::ProjectInfo => "project_info",
-            Self::RecentCommits => "recent_commits",
-            Self::ChangedFiles => "changed_files",
-            Self::Branches => "branches",
-            Self::Stashes => "stashes",
-            Self::Tags => "tags",
-            Self::GitGraph => "git_graph",
-            Self::Contributors => "contributors",
-            Self::Todos => "todos",
-            Self::Readme => "readme",
-            Self::Languages => "languages",
-            Self::DiskUsage => "disk_usage",
-            Self::CiStatus => "ci_status",
-            Self::OpenIssues => "open_issues",
-            Self::RunningProcesses => "running_processes",
-        }
-    }
-
-    #[allow(clippy::should_implement_trait)]
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "project_info" => Some(Self::ProjectInfo),
-            "recent_commits" => Some(Self::RecentCommits),
-            "changed_files" => Some(Self::ChangedFiles),
-            "branches" => Some(Self::Branches),
-            "stashes" => Some(Self::Stashes),
-            "tags" => Some(Self::Tags),
-            "git_graph" => Some(Self::GitGraph),
-            "contributors" => Some(Self::Contributors),
-            "todos" => Some(Self::Todos),
-            "readme" => Some(Self::Readme),
-            "languages" => Some(Self::Languages),
-            "disk_usage" => Some(Self::DiskUsage),
-            "ci_status" => Some(Self::CiStatus),
-            "open_issues" => Some(Self::OpenIssues),
-            "running_processes" => Some(Self::RunningProcesses),
-            _ => None,
-        }
-    }
-
-    pub fn all() -> Vec<Self> {
-        vec![
-            Self::ProjectInfo,
-            Self::RecentCommits,
-            Self::ChangedFiles,
-            Self::Branches,
-            Self::Stashes,
-            Self::Tags,
-            Self::GitGraph,
-            Self::Contributors,
-            Self::Todos,
-            Self::Readme,
-            Self::Languages,
-            Self::DiskUsage,
-            Self::CiStatus,
-            Self::OpenIssues,
-            Self::RunningProcesses,
-        ]
-    }
-}
-
-/// Layout configuration for the hub detail panel.
-/// Each inner Vec is a row of widgets displayed side-by-side.
-/// Rows are stacked vertically.
-#[derive(Clone, Debug)]
-pub struct HubLayout {
-    pub rows: Vec<Vec<HubWidget>>,
-}
-
-impl Default for HubLayout {
-    fn default() -> Self {
-        Self {
-            rows: vec![
-                vec![HubWidget::ProjectInfo],
-            ],
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct Behavior {
     pub fold_bar_size: u16,
@@ -341,13 +208,6 @@ pub struct Behavior {
     pub auto_suspend_secs: u64,
     /// Format string for outer terminal title (e.g., "{session} - {workspace}").
     pub terminal_title_format: Option<String>,
-    /// Directories to scan for project repos in the project hub.
-    /// Auto-detected from common locations if empty.
-    pub projects_dirs: Vec<String>,
-    /// Whether to show the project hub on startup.
-    pub show_project_hub_on_start: bool,
-    /// Widget layout for the hub detail panel.
-    pub hub_layout: HubLayout,
     /// Whether the terminal font supports Nerd Font glyphs.
     pub nerd_fonts: bool,
 }
@@ -361,62 +221,8 @@ impl Default for Behavior {
             default_shell: None,
             auto_suspend_secs: 86400,
             terminal_title_format: Some("{session} - {workspace}".to_string()),
-            projects_dirs: Vec::new(),
-            show_project_hub_on_start: false,
-            hub_layout: HubLayout::default(),
             nerd_fonts: false,
         }
-    }
-}
-
-impl Behavior {
-    /// Resolve project directories: use configured dirs if set, otherwise auto-detect.
-    pub fn resolved_projects_dirs(&self) -> Vec<std::path::PathBuf> {
-        if !self.projects_dirs.is_empty() {
-            return self
-                .projects_dirs
-                .iter()
-                .map(|s| {
-                    let expanded = if let Some(rest) = s.strip_prefix('~') {
-                        if let Ok(home) = std::env::var("HOME") {
-                            format!("{}{}", home, rest)
-                        } else {
-                            s.clone()
-                        }
-                    } else {
-                        s.clone()
-                    };
-                    let p = std::path::PathBuf::from(expanded);
-                    p.canonicalize().unwrap_or(p)
-                })
-                .filter(|p| p.is_dir())
-                .collect();
-        }
-
-        // Auto-detect common project directories
-        let home = match std::env::var("HOME") {
-            Ok(h) => std::path::PathBuf::from(h),
-            Err(_) => return Vec::new(),
-        };
-
-        let candidates = [
-            "Developer",
-            "Projects",
-            "repos",
-            "src",
-            "code",
-            "workspace",
-            "work",
-        ];
-
-        candidates
-            .iter()
-            .map(|name| {
-                let p = home.join(name);
-                p.canonicalize().unwrap_or(p)
-            })
-            .filter(|p| p.is_dir())
-            .collect()
     }
 }
 
@@ -706,7 +512,6 @@ fn default_leader_tree() -> LeaderNode {
         insert_leaf(&mut children, "n", Action::NewWorkspace, "New");
         insert_leaf(&mut children, "c", Action::CloseWorkspace, "Close");
         insert_leaf(&mut children, "r", Action::RenameWorkspace, "Rename");
-        insert_leaf(&mut children, "p", Action::ProjectHub, "Projects");
         for n in 1..=9u8 {
             let ch = (b'0' + n) as char;
             let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
@@ -1036,31 +841,6 @@ impl Config {
             if b.terminal_title_format.is_some() {
                 config.behavior.terminal_title_format = b.terminal_title_format;
             }
-            if let Some(dirs) = b.projects_dirs {
-                config.behavior.projects_dirs = dirs;
-            }
-            if let Some(v) = b.show_project_hub_on_start {
-                config.behavior.show_project_hub_on_start = v;
-            }
-            if let Some(raw_layout) = b.hub_layout {
-                let rows: Vec<Vec<HubWidget>> = raw_layout
-                    .into_iter()
-                    .filter_map(|row| {
-                        let widgets: Vec<HubWidget> = row
-                            .iter()
-                            .filter_map(|s| HubWidget::from_str(s))
-                            .collect();
-                        if widgets.is_empty() {
-                            None
-                        } else {
-                            Some(widgets)
-                        }
-                    })
-                    .collect();
-                if !rows.is_empty() {
-                    config.behavior.hub_layout = HubLayout { rows };
-                }
-            }
             if let Some(v) = b.nerd_fonts {
                 config.behavior.nerd_fonts = v;
             }
@@ -1239,11 +1019,6 @@ struct RawBehavior {
     default_shell: Option<String>,
     auto_suspend_secs: Option<u64>,
     terminal_title_format: Option<String>,
-    projects_dirs: Option<Vec<String>>,
-    show_project_hub_on_start: Option<bool>,
-    /// Widget layout: array of arrays of widget names.
-    /// e.g. `[["project_info"], ["recent_commits", "changed_files"]]`
-    hub_layout: Option<Vec<Vec<String>>>,
     nerd_fonts: Option<bool>,
 }
 

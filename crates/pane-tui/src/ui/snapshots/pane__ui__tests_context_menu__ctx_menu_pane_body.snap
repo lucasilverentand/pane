@@ -1,5 +1,6 @@
 ---
 source: crates/pane-tui/src/ui/tests_context_menu.rs
+assertion_line: 134
 expression: output
 ---
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
@@ -20,13 +21,13 @@ expression: output
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
-│                                                           ╭──────────────────╮                                       │
-│                                                           │ Change Widget    │                                       │
-│                                                           │ Add Widget Right │                                       │
-│                                                           │ Add Widget Below │                                       │
-│                                                           │ Remove Widget    │                                       │
-│                                                           ╰──────────────────╯                                       │
-│                                                                                                                      │
+│                                                           ╭─────────────╮                                            │
+│                                                           │ Split Right │                                            │
+│                                                           │ Split Down  │                                            │
+│                                                           │ Close Tab   │                                            │
+│                                                           │ Copy Mode   │                                            │
+│                                                           │ Paste       │                                            │
+│                                                           ╰─────────────╯                                            │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │

@@ -91,33 +91,6 @@ pub fn workspace_bar_menu(x: u16, y: u16) -> ContextMenuState {
     }
 }
 
-/// Create a context menu for right-clicking the pane body on the home workspace.
-pub fn home_body_menu(x: u16, y: u16) -> ContextMenuState {
-    ContextMenuState {
-        items: vec![
-            ContextMenuItem {
-                label: "Change Widget".into(),
-                action: Action::ChangeWidget,
-            },
-            ContextMenuItem {
-                label: "Add Widget Right".into(),
-                action: Action::AddWidgetRight,
-            },
-            ContextMenuItem {
-                label: "Add Widget Below".into(),
-                action: Action::AddWidgetBelow,
-            },
-            ContextMenuItem {
-                label: "Remove Widget".into(),
-                action: Action::CloseTab,
-            },
-        ],
-        selected: 0,
-        context: ContextMenuContext::PaneBody,
-        anchor_x: x,
-        anchor_y: y,
-    }
-}
 
 /// Create a context menu for right-clicking the pane body.
 pub fn pane_body_menu(x: u16, y: u16) -> ContextMenuState {

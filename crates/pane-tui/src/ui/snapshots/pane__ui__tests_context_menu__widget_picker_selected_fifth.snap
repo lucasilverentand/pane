@@ -1,5 +1,6 @@
 ---
 source: crates/pane-tui/src/ui/tests_context_menu.rs
+assertion_line: 193
 expression: output
 ---
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
@@ -11,23 +12,23 @@ expression: output
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
 │                                          ╭ Change Widget ─────────────────╮                                          │
-│                                          │  Info                          │                                          │
-│                                          │  Commits                       │                                          │
-│                                          │  Changes                       │                                          │
-│                                          │  Branches                      │                                          │
-│                                          │  Stashes                       │                                          │
-│                                          │  Tags                          │                                          │
-│                                          │  Graph                         │                                          │
-│                                          │  Contributors                  │                                          │
-│                                          │  TODOs                         │                                          │
-│                                          │  README                        │                                          │
-│                                          │  Languages                     │                                          │
-│                                          │  Disk                          │                                          │
-│                                          │  CI                            │                                          │
-│                                          │  Issues                        │                                          │
-│                                          │  Processes                     │                                          │
 │                                          ╰────────────────────────────────╯                                          │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │

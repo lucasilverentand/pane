@@ -169,7 +169,8 @@ pub async fn run_server(config: Config) -> Result<()> {
 
     let auto_suspend_secs = config.behavior.auto_suspend_secs;
 
-    let state = ServerState::new(&event_tx, 80, 24, config);
+    let state = ServerState::new_with_workspace(&event_tx, 80, 24, config)
+        .expect("failed to create initial workspace");
     // Start plugin manager
     let plugin_configs = state.config.plugins.clone();
     let state = Arc::new(Mutex::new(state));

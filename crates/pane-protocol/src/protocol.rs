@@ -224,9 +224,6 @@ pub struct WorkspaceSnapshot {
     pub folded_windows: HashSet<WindowId>,
     pub zoomed_window: Option<WindowId>,
     pub floating_windows: Vec<FloatingWindowSnapshot>,
-    /// Whether this is the home (project hub) workspace.
-    #[serde(default)]
-    pub is_home: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -437,7 +434,6 @@ mod tests {
                 folded_windows: HashSet::new(),
                 zoomed_window: None,
                 floating_windows: vec![],
-                is_home: false,
             }],
             active_workspace: 0,
         };
@@ -507,7 +503,6 @@ mod tests {
             folded_windows: folded.clone(),
             zoomed_window: None,
             floating_windows: vec![],
-            is_home: false,
         };
 
         let json = serde_json::to_string(&snap).unwrap();
@@ -531,7 +526,6 @@ mod tests {
             folded_windows: HashSet::new(),
             zoomed_window: None,
             floating_windows: vec![],
-            is_home: false,
         };
         let mut json_val: serde_json::Value = serde_json::to_value(&snap).unwrap();
         // Remove the folded_windows field to test serde default
@@ -553,7 +547,6 @@ mod tests {
             folded_windows: HashSet::new(),
             zoomed_window: Some(w1),
             floating_windows: vec![],
-            is_home: false,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored: WorkspaceSnapshot = serde_json::from_str(&json).unwrap();
@@ -580,7 +573,6 @@ mod tests {
             folded_windows: HashSet::new(),
             zoomed_window: None,
             floating_windows: vec![fw],
-            is_home: false,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored: WorkspaceSnapshot = serde_json::from_str(&json).unwrap();
@@ -754,7 +746,6 @@ mod tests {
                     width: 40,
                     height: 20,
                 }],
-                is_home: false,
             }],
             active_workspace: 0,
         };
@@ -896,8 +887,7 @@ mod tests {
                     folded_windows: HashSet::new(),
                     zoomed_window: None,
                     floating_windows: vec![],
-                    is_home: false,
-                },
+                    },
                 WorkspaceSnapshot {
                     name: "2".to_string(),
                     cwd: "/b".to_string(),
@@ -908,8 +898,7 @@ mod tests {
                     folded_windows: HashSet::new(),
                     zoomed_window: None,
                     floating_windows: vec![],
-                    is_home: false,
-                },
+                    },
             ],
             active_workspace: 1,
         };
@@ -985,7 +974,6 @@ mod tests {
             folded_windows: HashSet::new(),
             zoomed_window: None,
             floating_windows: vec![],
-            is_home: false,
         };
         let mut json_val: serde_json::Value = serde_json::to_value(&snap).unwrap();
         json_val.as_object_mut().unwrap().remove("cwd");

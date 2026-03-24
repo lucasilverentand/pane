@@ -147,7 +147,6 @@ fn workspace(
         folded_windows: HashSet::new(),
         zoomed_window: None,
         floating_windows: Vec::new(),
-        is_home: false,
     }
 }
 

@@ -321,14 +321,6 @@ pub fn action_registry() -> &'static [ActionMeta] {
             palette_visible: true,
             action: CloseWorkspace,
         },
-        ActionMeta {
-            name: "project_hub",
-            display_name: "Project Hub",
-            description: "Browse and open project repositories",
-            category: Workspaces,
-            palette_visible: true,
-            action: ProjectHub,
-        },
         // ── Session ─────────────────────────────────────────────────────
         ActionMeta {
             name: "detach",
@@ -394,30 +386,6 @@ pub fn action_registry() -> &'static [ActionMeta] {
             category: Tools,
             palette_visible: true,
             action: ReloadConfig,
-        },
-        ActionMeta {
-            name: "change_widget",
-            display_name: "Change Widget",
-            description: "Replace the focused widget with a different one",
-            category: Tools,
-            palette_visible: true,
-            action: ChangeWidget,
-        },
-        ActionMeta {
-            name: "add_widget_right",
-            display_name: "Add Widget to the Right",
-            description: "Split the focused widget right and pick a new widget",
-            category: Tools,
-            palette_visible: true,
-            action: AddWidgetRight,
-        },
-        ActionMeta {
-            name: "add_widget_below",
-            display_name: "Add Widget Below",
-            description: "Split the focused widget down and pick a new widget",
-            category: Tools,
-            palette_visible: true,
-            action: AddWidgetBelow,
         },
         ActionMeta {
             name: "toggle_sync_panes",

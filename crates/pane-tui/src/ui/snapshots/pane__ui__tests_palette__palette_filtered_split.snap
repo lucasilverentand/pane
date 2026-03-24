@@ -1,5 +1,6 @@
 ---
 source: crates/pane-tui/src/ui/tests_palette.rs
+assertion_line: 142
 expression: output
 ---
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
@@ -18,8 +19,8 @@ expression: output
 │                       │  Split Down — Split the focused window vertically          Space D   │                       │
 │                       │  Equalize Panes — Reset all split ratios to equal        Space w =   │                       │
 │                       │  Toggle Fold — Fold or unfold the focused split                      │                       │
-│                       │  Add Widget to the Right — Split the focused widget right and pick a │                       │
-│                       │  Add Widget Below — Split the focused widget down and pick a new widg│                       │
+│                       │                                                                      │                       │
+│                       │                                                                      │                       │
 │                       │                                                                      │                       │
 │                       │                                                                      │                       │
 │                       │                                                                      │                       │

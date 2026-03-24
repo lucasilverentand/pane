@@ -5,7 +5,6 @@ use crossterm::event::KeyEvent;
 pub struct LeaderState {
     pub path: Vec<KeyEvent>,
     pub current_node: crate::config::LeaderNode,
-    pub popup_visible: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,10 +65,8 @@ mod tests {
         let state = LeaderState {
             path: vec![],
             current_node: crate::config::LeaderNode::PassThrough,
-            popup_visible: false,
         };
         assert!(state.path.is_empty());
-        assert!(!state.popup_visible);
     }
 
     #[test]
@@ -86,11 +83,9 @@ mod tests {
                 label: "window".to_string(),
                 children: HashMap::new(),
             },
-            popup_visible: true,
         };
         assert_eq!(state.path.len(), 1);
         assert_eq!(state.path[0].code, KeyCode::Char('w'));
-        assert!(state.popup_visible);
     }
 
     #[test]
@@ -101,7 +96,6 @@ mod tests {
                 action: crate::config::Action::Quit,
                 label: "quit".to_string(),
             },
-            popup_visible: false,
         };
         match &state.current_node {
             crate::config::LeaderNode::Leaf { action, label } => {

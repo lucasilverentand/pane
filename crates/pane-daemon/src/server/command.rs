@@ -2,12 +2,11 @@
 use anyhow::{bail, Result};
 use tokio::sync::broadcast;
 
-use pane_protocol::config::HubWidget;
 use pane_protocol::layout::{Side, SplitDirection, TabId};
 use crate::server::id_map::IdMap;
 use pane_protocol::protocol::ServerResponse;
 use crate::server::state::{ServerState, render_state_from_server};
-use crate::window::{Tab, TabKind, WindowId};
+use crate::window::{TabKind, WindowId};
 
 /// How to size a new split.
 #[derive(Clone, Debug, PartialEq)]
@@ -122,9 +121,6 @@ pub enum Command {
     // Client commands
     DetachClient,
 
-    // Widget commands (home workspace)
-    AddWidget { widget: String },
-    SetWidget { widget: String },
     SetSplitRatio { path: Vec<Side>, ratio: f64 },
 
     // Scroll
@@ -803,38 +799,6 @@ pub fn execute(
 
         Command::DetachClient => Ok(CommandResult::DetachRequested),
 
-        Command::AddWidget { widget } => {
-            let hw = HubWidget::from_str(widget)
-                .ok_or_else(|| anyhow::anyhow!("unknown widget: {}", widget))?;
-            if !state.active_workspace().is_home {
-                bail!("add-widget only works in the home workspace");
-            }
-            let tab = Tab::new_widget(TabId::new_v4(), hw);
-            let ws = state.active_workspace_mut();
-            if let Some(group) = ws.groups.get_mut(&ws.active_group) {
-                group.add_tab(tab);
-            }
-            broadcast_layout(state, broadcast_tx);
-            Ok(CommandResult::LayoutChanged)
-        }
-
-        Command::SetWidget { widget } => {
-            let hw = HubWidget::from_str(widget)
-                .ok_or_else(|| anyhow::anyhow!("unknown widget: {}", widget))?;
-            if !state.active_workspace().is_home {
-                bail!("set-widget only works in the home workspace");
-            }
-            let ws = state.active_workspace_mut();
-            let active_group_id = ws.active_group;
-            if let Some(group) = ws.groups.get_mut(&active_group_id) {
-                let tab = group.active_tab_mut();
-                tab.kind = TabKind::Widget(hw.clone());
-                tab.title = hw.label().to_string();
-            }
-            broadcast_layout(state, broadcast_tx);
-            Ok(CommandResult::LayoutChanged)
-        }
-
         Command::SetSplitRatio { path, ratio } => {
             let ws = state.active_workspace_mut();
             ws.layout.set_ratio_at_path(path, *ratio);
@@ -873,12 +837,9 @@ pub fn execute(
 }
 
 /// Broadcast a layout update to all connected clients.
-/// Also saves the home workspace layout if the home workspace was modified.
 fn broadcast_layout(state: &ServerState, broadcast_tx: &broadcast::Sender<ServerResponse>) {
     let render_state = render_state_from_server(state);
     let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
-    // Persist home layout after any layout change
-    state.save_home_layout();
 }
 
 /// Resolve a window target to a WindowId.
@@ -1111,7 +1072,6 @@ mod tests {
             zoomed_window: None,
             saved_ratios: None,
             floating_windows: Vec::new(),
-            is_home: false,
         };
         let state = ServerState {
             workspaces: vec![workspace],
@@ -1342,7 +1302,7 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_close_workspace_single_goes_to_hub() {
+    fn test_execute_close_workspace_single() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         let cmd = Command::CloseWorkspace;
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
@@ -2047,14 +2007,14 @@ mod tests {
     // ---- CloseWorkspace when only one exists ----
 
     #[test]
-    fn test_execute_close_workspace_only_one_goes_to_hub() {
+    fn test_execute_close_workspace_only_one() {
         let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
         assert_eq!(state.workspaces.len(), 1);
         let cmd = Command::CloseWorkspace;
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert!(
             matches!(result, CommandResult::LayoutChanged),
-            "closing the only workspace should return to hub"
+            "closing the only workspace should succeed"
         );
         assert_eq!(state.workspaces.len(), 0);
     }

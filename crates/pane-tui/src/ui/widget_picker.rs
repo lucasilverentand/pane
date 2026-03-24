@@ -3,7 +3,7 @@ use ratatui::{
     Frame,
 };
 
-use pane_protocol::config::{HubWidget, Theme};
+use pane_protocol::config::Theme;
 
 use super::dialog;
 
@@ -21,10 +21,13 @@ pub enum WidgetPickerMode {
 }
 
 /// State for the widget picker overlay.
+///
+/// NOTE: The project hub / widget system has been removed. This picker is
+/// currently unused but kept as a skeleton in case widget support returns.
 pub struct WidgetPickerState {
     pub mode: WidgetPickerMode,
     pub selected: usize,
-    pub items: Vec<HubWidget>,
+    pub items: Vec<String>,
 }
 
 impl WidgetPickerState {
@@ -32,7 +35,7 @@ impl WidgetPickerState {
         Self {
             mode,
             selected: 0,
-            items: HubWidget::all(),
+            items: Vec::new(),
         }
     }
 
@@ -64,25 +67,9 @@ impl WidgetPickerState {
         }
     }
 
-    pub fn selected_widget(&self) -> Option<&HubWidget> {
-        self.items.get(self.selected)
+    pub fn selected_label(&self) -> Option<&str> {
+        self.items.get(self.selected).map(|s| s.as_str())
     }
-}
-
-/// Compute the popup rect for hit-testing (matches render logic).
-fn compute_popup_area(state: &WidgetPickerState, area: Rect) -> Rect {
-    let item_count = state.items.len() as u16;
-    let popup_w = 34u16.min(area.width);
-    let popup_h = (item_count + 2).min(area.height);
-
-    dialog::popup_rect(
-        dialog::PopupSize::Fixed {
-            width: popup_w,
-            height: popup_h,
-        },
-        dialog::PopupAnchor::Center,
-        area,
-    )
 }
 
 /// Check whether a click is inside the widget picker popup area.
@@ -91,29 +78,29 @@ pub fn is_inside_popup(state: &WidgetPickerState, area: Rect, x: u16, y: u16) ->
     x >= popup.x && x < popup.x + popup.width && y >= popup.y && y < popup.y + popup.height
 }
 
+fn compute_popup_area(state: &WidgetPickerState, area: Rect) -> Rect {
+    let item_count = state.items.len() as u16;
+    let popup_w = 34u16.min(area.width);
+    let popup_h = (item_count + 2).min(area.height);
+    dialog::popup_rect(
+        dialog::PopupSize::Fixed { width: popup_w, height: popup_h },
+        dialog::PopupAnchor::Center,
+        area,
+    )
+}
+
 /// Hit-test a click against the widget picker list items.
-/// Returns the item index if a valid item row was clicked.
 pub fn hit_test(state: &WidgetPickerState, area: Rect, x: u16, y: u16) -> Option<usize> {
     let popup = compute_popup_area(state, area);
     let inner = dialog::inner_rect(popup);
-
     if x < inner.x || x >= inner.x + inner.width || y < inner.y || y >= inner.y + inner.height {
         return None;
     }
-
     let visible = inner.height as usize;
-    let scroll = if state.selected >= visible {
-        state.selected + 1 - visible
-    } else {
-        0
-    };
+    let scroll = if state.selected >= visible { state.selected + 1 - visible } else { 0 };
     let row = (y - inner.y) as usize;
     let idx = scroll + row;
-    if idx < state.items.len() {
-        Some(idx)
-    } else {
-        None
-    }
+    if idx < state.items.len() { Some(idx) } else { None }
 }
 
 /// Render the widget picker as a popup overlay.
@@ -136,10 +123,7 @@ pub fn render(
     let popup_h = (item_count + 2).min(area.height);
 
     let popup_area = dialog::popup_rect(
-        dialog::PopupSize::Fixed {
-            width: popup_w,
-            height: popup_h,
-        },
+        dialog::PopupSize::Fixed { width: popup_w, height: popup_h },
         dialog::PopupAnchor::Center,
         area,
     );
@@ -149,8 +133,8 @@ pub fn render(
     let items: Vec<dialog::ListItem> = state
         .items
         .iter()
-        .map(|w| dialog::ListItem {
-            label: w.label(),
+        .map(|label| dialog::ListItem {
+            label: label.as_str(),
             description: "",
             section: None,
             hint: None,
@@ -159,4 +143,3 @@ pub fn render(
 
     dialog::render_select_list(frame, inner, &items, state.selected, false, hover, theme);
 }
-

@@ -6,12 +6,12 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
 use crate::client::Focus;
-use pane_protocol::config::{Config, HubWidget};
+use pane_protocol::config::Config;
 use pane_protocol::layout::{LayoutNode, TabId};
 use pane_protocol::protocol::{RenderState, TabSnapshot, WindowSnapshot, WorkspaceSnapshot};
 use pane_protocol::window_types::{TabKind, WindowId};
 
-use crate::client::{Client, ProjectHubState};
+use crate::client::Client;
 use crate::ui;
 use crate::ui::context_menu;
 use crate::ui::widget_picker::{WidgetPickerMode, WidgetPickerState};
@@ -59,7 +59,6 @@ fn workspace(name: &str, windows: Vec<WindowSnapshot>, layout: LayoutNode) -> Wo
         folded_windows: HashSet::new(),
         zoomed_window: None,
         floating_windows: Vec::new(),
-        is_home: false,
     }
 }
 
@@ -85,40 +84,6 @@ fn window(id: WindowId, tabs: Vec<(&str, TabId)>, name: Option<&str>) -> WindowS
     }
 }
 
-fn home_workspace(windows: Vec<WindowSnapshot>, layout: LayoutNode) -> WorkspaceSnapshot {
-    let active_group = windows.first().map(|w| w.id).unwrap_or_else(new_id);
-    WorkspaceSnapshot {
-        name: "home".to_string(),
-        cwd: String::new(),
-        layout,
-        groups: windows,
-        active_group,
-        sync_panes: false,
-        folded_windows: HashSet::new(),
-        zoomed_window: None,
-        floating_windows: Vec::new(),
-        is_home: true,
-    }
-}
-
-fn widget_window(id: WindowId, tab_id: TabId, widget: HubWidget) -> WindowSnapshot {
-    let title = format!("{:?}", widget);
-    WindowSnapshot {
-        id,
-        tabs: vec![TabSnapshot {
-            id: tab_id,
-            kind: TabKind::Widget(widget),
-            title,
-            exited: false,
-            foreground_process: None,
-            cwd: String::new(),
-            cols: 80,
-            rows: 24,
-        }],
-        active_tab: 0,
-        name: None,
-    }
-}
 
 fn base_client() -> Client {
     let mut client = Client::for_test(Config::default());
@@ -163,32 +128,12 @@ fn ctx_menu_workspace_bar() {
 fn ctx_menu_pane_body() {
     let mut client = base_client();
     client.focus = Focus::ContextMenu;
-    client.context_menu_state = Some(context_menu::home_body_menu(60, 18));
-    client.project_hub_state = Some(ProjectHubState::for_test());
+    client.context_menu_state = Some(context_menu::pane_body_menu(60, 18));
 
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("ctx_menu_pane_body", output);
 }
 
-#[test]
-fn ctx_menu_home_body() {
-    let mut client = Client::for_test(Config::default());
-    let w = new_id();
-    let t = new_id();
-    client.render_state = RenderState {
-        workspaces: vec![home_workspace(
-            vec![widget_window(w, t, HubWidget::RecentCommits)],
-            LayoutNode::Leaf(w),
-        )],
-        active_workspace: 0,
-    };
-    client.project_hub_state = Some(ProjectHubState::for_test());
-    client.focus = Focus::ContextMenu;
-    client.context_menu_state = Some(context_menu::home_body_menu(30, 10));
-
-    let output = render_to_string(&mut client, COLS, ROWS);
-    insta::assert_snapshot!("ctx_menu_home_body", output);
-}
 
 #[test]
 fn ctx_menu_clamped_position() {

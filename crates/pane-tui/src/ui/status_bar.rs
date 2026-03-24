@@ -1,6 +1,6 @@
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -12,33 +12,12 @@ use pane_protocol::config::Theme;
 
 /// Return the button definitions for the current client state.
 pub fn get_buttons(client: &Client) -> &'static [(&'static str, &'static str)] {
-    let is_home = client.is_home_active();
-
     match &client.focus {
         Focus::WorkspaceBar => &[
             ("h/l", "switch"),
             ("d", "close"),
             ("n", "new"),
             ("j", "exit bar"),
-        ],
-        Focus::Widget(_) if is_home => &[
-            ("j/k", "navigate"),
-            ("Enter", "copy"),
-            ("Esc", "back"),
-        ],
-        Focus::Sidebar if is_home => &[
-            ("/", "search"),
-            ("Enter", "open"),
-            ("n", "new"),
-            (":", "commands"),
-            ("q", "quit"),
-        ],
-        Focus::Normal if is_home => &[
-            ("/", "search"),
-            ("Enter", "open"),
-            ("n", "new"),
-            (":", "commands"),
-            ("q", "quit"),
         ],
         Focus::Normal => &[
             ("\u{2423}", "leader"),
@@ -136,14 +115,6 @@ pub fn get_buttons(client: &Client) -> &'static [(&'static str, &'static str)] {
                 },
             }
         }
-        // Sidebar/Widget when not on home — fall through to Normal
-        Focus::Sidebar | Focus::Widget(_) => &[
-            ("\u{2423}", "leader"),
-            (":", "commands"),
-            ("n", "new tab"),
-            ("s/v", "split"),
-            ("q", "quit"),
-        ],
     }
 }
 
@@ -207,16 +178,16 @@ fn render_button_bar(
     area: Rect,
 ) {
     let key_style = Style::default()
-        .fg(theme.bg)
+        .fg(theme.status_bar_key_fg())
         .bg(theme.accent)
         .add_modifier(Modifier::BOLD);
-    let label_style = Style::default().fg(theme.fg);
-    let sep_style = Style::default().fg(theme.dim);
+    let label_style = Style::default().fg(theme.dim).bg(Color::Reset);
+    let sep_style = Style::default().fg(theme.dim).bg(Color::Reset);
     let hovered_key_style = Style::default()
-        .fg(theme.bg)
+        .fg(theme.status_bar_key_fg())
         .bg(theme.fg)
         .add_modifier(Modifier::BOLD);
-    let hovered_label_style = Style::default().fg(theme.fg);
+    let hovered_label_style = Style::default().fg(theme.fg).bg(Color::Reset);
 
     let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
     for (i, (key, label)) in buttons.iter().enumerate() {

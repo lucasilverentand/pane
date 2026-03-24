@@ -7,7 +7,7 @@ use ratatui::style::Color;
 use ratatui::Terminal;
 
 use crate::client::Focus;
-use pane_protocol::config::{Config, HubWidget};
+use pane_protocol::config::Config;
 use pane_protocol::layout::{LayoutNode, SplitDirection, TabId};
 use pane_protocol::protocol::{
     FloatingWindowSnapshot, RenderState, TabSnapshot, WindowSnapshot, WorkspaceSnapshot,
@@ -145,7 +145,6 @@ fn workspace(name: &str, windows: Vec<WindowSnapshot>, layout: LayoutNode) -> Wo
         folded_windows: HashSet::new(),
         zoomed_window: None,
         floating_windows: Vec::new(),
-        is_home: false,
     }
 }
 
@@ -171,42 +170,6 @@ fn window(id: WindowId, tabs: Vec<(&str, TabId)>, name: Option<&str>) -> WindowS
     }
 }
 
-#[allow(dead_code)]
-fn widget_window(id: WindowId, tab_id: TabId, widget: HubWidget) -> WindowSnapshot {
-    let title = format!("{:?}", widget);
-    WindowSnapshot {
-        id,
-        tabs: vec![TabSnapshot {
-            id: tab_id,
-            kind: TabKind::Widget(widget),
-            title,
-            exited: false,
-            foreground_process: None,
-            cwd: String::new(),
-            cols: 80,
-            rows: 24,
-        }],
-        active_tab: 0,
-        name: None,
-    }
-}
-
-#[allow(dead_code)]
-fn home_workspace(windows: Vec<WindowSnapshot>, layout: LayoutNode) -> WorkspaceSnapshot {
-    let active_group = windows.first().map(|w| w.id).unwrap_or_else(new_id);
-    WorkspaceSnapshot {
-        name: "home".to_string(),
-        cwd: String::new(),
-        layout,
-        groups: windows,
-        active_group,
-        sync_panes: false,
-        folded_windows: HashSet::new(),
-        zoomed_window: None,
-        floating_windows: Vec::new(),
-        is_home: true,
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests

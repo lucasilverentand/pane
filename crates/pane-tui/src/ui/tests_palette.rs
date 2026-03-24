@@ -1,14 +1,12 @@
-//! Snapshot tests for the palette and leader overlay rendering.
+//! Snapshot tests for the palette rendering.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
-use pane_protocol::app::LeaderState;
 use crate::client::Focus;
-use pane_protocol::config::{Action, Config, LeaderConfig, LeaderNode};
+use pane_protocol::config::{Config, LeaderConfig};
 use pane_protocol::layout::{LayoutNode, TabId};
 use pane_protocol::protocol::{RenderState, TabSnapshot, WindowSnapshot, WorkspaceSnapshot};
 use pane_protocol::window_types::{TabKind, WindowId};
@@ -60,7 +58,6 @@ fn workspace(name: &str, windows: Vec<WindowSnapshot>, layout: LayoutNode) -> Wo
         folded_windows: HashSet::new(),
         zoomed_window: None,
         floating_windows: Vec::new(),
-        is_home: false,
     }
 }
 
@@ -99,15 +96,6 @@ fn base_client() -> Client {
         active_workspace: 0,
     };
     client
-}
-
-fn make_key(c: char) -> KeyEvent {
-    KeyEvent {
-        code: KeyCode::Char(c),
-        modifiers: KeyModifiers::NONE,
-        kind: KeyEventKind::Press,
-        state: KeyEventState::NONE,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -172,106 +160,6 @@ fn palette_selected_third() {
 
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("palette_selected_third", output);
-}
-
-// ---------------------------------------------------------------------------
-// Leader overlay snapshot tests
-// ---------------------------------------------------------------------------
-
-#[test]
-fn leader_compact_hints_root() {
-    let mut client = base_client();
-
-    let mut children = HashMap::new();
-    children.insert(
-        make_key('h'),
-        LeaderNode::Leaf {
-            action: Action::FocusLeft,
-            label: "focus left".into(),
-        },
-    );
-    children.insert(
-        make_key('j'),
-        LeaderNode::Leaf {
-            action: Action::FocusDown,
-            label: "focus down".into(),
-        },
-    );
-    children.insert(
-        make_key('k'),
-        LeaderNode::Leaf {
-            action: Action::FocusUp,
-            label: "focus up".into(),
-        },
-    );
-    children.insert(
-        make_key('l'),
-        LeaderNode::Leaf {
-            action: Action::FocusRight,
-            label: "focus right".into(),
-        },
-    );
-    children.insert(
-        make_key('w'),
-        LeaderNode::Group {
-            label: "window".into(),
-            children: HashMap::new(),
-        },
-    );
-
-    client.focus = Focus::Leader;
-    client.leader_state = Some(LeaderState {
-        path: vec![],
-        current_node: LeaderNode::Group {
-            label: "root".into(),
-            children: children.clone(),
-        },
-        popup_visible: true,
-    });
-
-    let output = render_to_string(&mut client, COLS, ROWS);
-    insta::assert_snapshot!("leader_compact_hints_root", output);
-}
-
-#[test]
-fn leader_subgroup() {
-    let mut client = base_client();
-
-    let mut sub = HashMap::new();
-    sub.insert(
-        make_key('s'),
-        LeaderNode::Leaf {
-            action: Action::SplitHorizontal,
-            label: "split h".into(),
-        },
-    );
-    sub.insert(
-        make_key('v'),
-        LeaderNode::Leaf {
-            action: Action::SplitVertical,
-            label: "split v".into(),
-        },
-    );
-    sub.insert(
-        make_key('c'),
-        LeaderNode::Leaf {
-            action: Action::CloseTab,
-            label: "close".into(),
-        },
-    );
-
-    client.focus = Focus::Leader;
-    client.leader_state = Some(LeaderState {
-        path: vec![make_key('w')],
-        current_node: LeaderNode::Group {
-            label: "window".into(),
-            children: sub,
-        },
-        popup_visible: true,
-    });
-
-    let output = render_to_string(&mut client, COLS, ROWS);
-    insta::assert_snapshot!("leader_subgroup", output);
 }
 
 #[test]
