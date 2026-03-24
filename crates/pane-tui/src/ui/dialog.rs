@@ -28,6 +28,7 @@ pub enum PopupSize {
     FixedClamped { width: u16, height: u16, pad: u16 },
 }
 
+#[allow(dead_code)]
 pub enum PopupAnchor {
     /// Center the popup in the area.
     Center,
