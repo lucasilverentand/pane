@@ -1,0 +1,3 @@
+[submodule "pane-app/ghostty"]
+	path = pane-app/ghostty
+	url = https://github.com/ghostty-org/ghostty.git

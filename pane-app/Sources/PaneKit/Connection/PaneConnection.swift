@@ -11,14 +11,31 @@ public final class PaneConnection: Sendable {
 
     /// The default socket path for the current user.
     ///
-    /// Matches Rust daemon: `$TMPDIR/pane-{uid}/pane.sock`.
-    /// Debug Rust builds use `pane-dev.sock`; the Swift app always connects to
-    /// release (`pane.sock`) since it spawns the installed binary.
+    /// Matches Rust daemon logic:
+    /// - Debug builds prefer `pane-dev.sock` (matches `cargo run`) but fall back to `pane.sock`
+    /// - Release builds use `pane.sock` (matches installed binary)
+    /// - `PANE_SOCKET` env var overrides the socket name
     public static var defaultSocketPath: String {
         let uid = getuid()
         let base = ProcessInfo.processInfo.environment["TMPDIR"]
             ?? NSTemporaryDirectory()
-        return "\(base)pane-\(uid)/pane.sock"
+        let dir = "\(base)pane-\(uid)"
+
+        if let envSocket = ProcessInfo.processInfo.environment["PANE_SOCKET"],
+           !envSocket.isEmpty {
+            return "\(dir)/pane-\(envSocket).sock"
+        }
+
+        #if DEBUG
+        // Prefer dev socket, but fall back to release socket so the app works
+        // against an installed `pane daemon` without needing `cargo run`.
+        let devPath = "\(dir)/pane-dev.sock"
+        if FileManager.default.fileExists(atPath: devPath) {
+            return devPath
+        }
+        #endif
+
+        return "\(dir)/pane.sock"
     }
 
     private init(fd: Int32) {
@@ -174,7 +191,7 @@ public final class PaneConnection: Sendable {
 
 // MARK: - ConnectionError
 
-public enum ConnectionError: Error, Sendable, CustomStringConvertible {
+public enum ConnectionError: Error, Sendable, LocalizedError, CustomStringConvertible {
     case socketCreationFailed(errno: Int32)
     case pathTooLong
     case connectFailed(errno: Int32)
@@ -195,4 +212,6 @@ public enum ConnectionError: Error, Sendable, CustomStringConvertible {
             "Read failed: \(String(cString: strerror(err)))"
         }
     }
+
+    public var errorDescription: String? { description }
 }

@@ -30,6 +30,60 @@ struct PaneCommands: Commands {
 
             Divider()
 
+            // MARK: Focus navigation
+            Button("Focus Left") {
+                Task { try? await client.focusLeft() }
+            }
+            .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+
+            Button("Focus Right") {
+                Task { try? await client.focusRight() }
+            }
+            .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+
+            Button("Focus Up") {
+                Task { try? await client.focusUp() }
+            }
+            .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+
+            Button("Focus Down") {
+                Task { try? await client.focusDown() }
+            }
+            .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+
+            Divider()
+
+            // MARK: Resize panes
+            Button("Resize Left") {
+                Task { try? await client.resizeShrinkH() }
+            }
+            .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+
+            Button("Resize Right") {
+                Task { try? await client.resizeGrowH() }
+            }
+            .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+
+            Button("Resize Up") {
+                Task { try? await client.resizeShrinkV() }
+            }
+            .keyboardShortcut(.upArrow, modifiers: [.command, .control])
+
+            Button("Resize Down") {
+                Task { try? await client.resizeGrowV() }
+            }
+            .keyboardShortcut(.downArrow, modifiers: [.command, .control])
+
+            Divider()
+
+            // MARK: Close pane
+            Button("Close Pane") {
+                Task { try? await client.closePane() }
+            }
+            .keyboardShortcut("w", modifiers: .command)
+
+            Divider()
+
             // MARK: Tabs
             Button("Next Tab") {
                 Task { try? await client.nextTab() }

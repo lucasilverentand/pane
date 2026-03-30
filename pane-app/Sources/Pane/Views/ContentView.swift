@@ -15,9 +15,28 @@ struct ContentView: View {
                     TerminalContainer(workspace: workspace)
                     StatusBarView()
                 }
+                .background(.ultraThinMaterial)
             } else {
                 connectionStatusView
             }
+        }
+        .toolbar {
+            ToolbarItemGroup {
+                toolbarItems
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var toolbarItems: some View {
+        Button("Split Right", systemImage: "rectangle.split.1x2") {
+            Task { try? await appState.client.splitHorizontal() }
+        }
+        Button("Split Down", systemImage: "rectangle.split.2x1") {
+            Task { try? await appState.client.splitVertical() }
+        }
+        Button("Equalize", systemImage: "rectangle.split.3x3") {
+            Task { try? await appState.client.equalizeLayout() }
         }
     }
 
@@ -31,7 +50,7 @@ struct ContentView: View {
                 Text("Start the Pane daemon to connect.")
             } actions: {
                 Button("Connect") { appState.connect() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glass)
             }
         case .connecting:
             ProgressView("Connecting...")
@@ -48,7 +67,7 @@ struct ContentView: View {
                 Text(message)
             } actions: {
                 Button("Reconnect") { appState.reconnect() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glass)
             }
         }
     }

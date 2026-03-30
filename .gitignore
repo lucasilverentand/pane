@@ -1,5 +1,11 @@
 target/
 Cargo.lock
 
-# GhosttyKit.xcframework contains large binaries — managed locally, not committed
-pane-app/Frameworks/
+# GhosttyKit — built locally via scripts/setup.sh, not committed
+pane-app/GhosttyKit.xcframework
+pane-app/ghostty.h
+
+# Tuist generated files
+pane-app/Derived/
+pane-app/*.xcodeproj
+pane-app/*.xcworkspace

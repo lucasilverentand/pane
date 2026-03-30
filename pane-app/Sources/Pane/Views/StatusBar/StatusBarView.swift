@@ -1,22 +1,23 @@
 import SwiftUI
 import PaneKit
 
-/// Bottom status bar showing system stats and connection info.
+/// Bottom status bar showing system stats and connection info, floating over content.
 struct StatusBarView: View {
     @Environment(PaneClient.self) private var client
 
     var body: some View {
-        HStack {
-            // Left: app name
+        HStack(spacing: 12) {
+            // Connection indicator
+            connectionIndicator
+
             Text("pane")
                 .font(.caption)
                 .fontWeight(.medium)
 
-            Spacer()
-
-            // Right: system stats
             if let stats = client.systemStats {
-                HStack(spacing: 12) {
+                Spacer()
+
+                HStack(spacing: 10) {
                     statLabel("CPU", value: String(format: "%.0f%%", stats.cpuPercent))
                     statLabel("MEM", value: String(format: "%.0f%%", stats.memoryPercent))
                     statLabel("LOAD", value: String(format: "%.2f", stats.loadAvg1))
@@ -24,13 +25,12 @@ struct StatusBarView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-
-            // Connection indicator
-            connectionIndicator
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .background(.bar)
+        .padding(.vertical, 6)
+        .glassEffect(.regular, in: .capsule)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
     }
 
     @ViewBuilder

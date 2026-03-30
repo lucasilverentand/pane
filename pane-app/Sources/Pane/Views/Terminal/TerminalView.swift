@@ -1,7 +1,6 @@
 #if canImport(AppKit)
 import AppKit
 import SwiftUI
-import GhosttyKit
 import PaneKit
 
 /// Wraps a ghostty terminal surface for use in SwiftUI.
@@ -55,6 +54,10 @@ final class GhosttyTerminalNSView: NSView {
         super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
 
         wantsLayer = true
+        // Make the view layer transparent so the ghostty Metal content
+        // composites cleanly with the native window background.
+        layer?.isOpaque = false
+        layer?.backgroundColor = .clear
 
         setupBridge()
         setupSurface()
@@ -120,10 +123,17 @@ final class GhosttyTerminalNSView: NSView {
             surface = ghostty_surface_new(app, &config)
         }
 
-        guard surface != nil else {
+        guard let surface else {
             print("[GhosttyTerminal] Failed to create ghostty surface")
             return
         }
+
+        // Tell the surface which color scheme to use so themes with light/dark
+        // variants pick the correct one.
+        let scheme: ghostty_color_scheme_e = GhosttyAppManager.shared.isLightTheme
+            ? GHOSTTY_COLOR_SCHEME_LIGHT
+            : GHOSTTY_COLOR_SCHEME_DARK
+        ghostty_surface_set_color_scheme(surface, scheme)
     }
 
     private func registerForPaneOutput() {
@@ -162,6 +172,12 @@ final class GhosttyTerminalNSView: NSView {
         if let surface {
             ghostty_surface_set_focus(surface, window?.isKeyWindow ?? false)
         }
+        // Apply the terminal theme to the host window: background color,
+        // dark/light appearance, and background blur for translucency.
+        if let window {
+            GhosttyAppManager.shared.configureWindowAppearance(for: window)
+            GhosttyAppManager.shared.applyBackgroundBlur(to: window)
+        }
     }
 
     override func layout() {
@@ -169,6 +185,16 @@ final class GhosttyTerminalNSView: NSView {
         guard let surface else { return }
         let scaledSize = convertToBacking(bounds.size)
         ghostty_surface_set_size(surface, UInt32(scaledSize.width), UInt32(scaledSize.height))
+
+        // Notify the daemon of the new terminal size in cells.
+        // Estimate cell dimensions from the surface grid size if available,
+        // otherwise use a reasonable default (8x16 px per cell at 1x scale).
+        let cols = max(1, UInt16(bounds.width / 8))
+        let rows = max(1, UInt16(bounds.height / 16))
+        let client = self.client
+        Task { @MainActor in
+            try? await client.resize(width: cols, height: rows)
+        }
     }
 
     override func viewDidChangeBackingProperties() {

@@ -22,8 +22,6 @@ public struct WorkspaceSnapshot: Codable, Hashable, Sendable {
     public let foldedWindows: Set<WindowId>
     public let zoomedWindow: WindowId?
     public let floatingWindows: [FloatingWindowSnapshot]
-    /// Whether this is the home (project hub) workspace.
-    public let isHome: Bool
 
     private enum CodingKeys: String, CodingKey {
         case name
@@ -35,7 +33,6 @@ public struct WorkspaceSnapshot: Codable, Hashable, Sendable {
         case foldedWindows = "folded_windows"
         case zoomedWindow = "zoomed_window"
         case floatingWindows = "floating_windows"
-        case isHome = "is_home"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -49,7 +46,6 @@ public struct WorkspaceSnapshot: Codable, Hashable, Sendable {
         foldedWindows = try container.decodeIfPresent(Set<WindowId>.self, forKey: .foldedWindows) ?? []
         zoomedWindow = try container.decodeIfPresent(WindowId.self, forKey: .zoomedWindow)
         floatingWindows = try container.decode([FloatingWindowSnapshot].self, forKey: .floatingWindows)
-        isHome = try container.decodeIfPresent(Bool.self, forKey: .isHome) ?? false
     }
 }
 

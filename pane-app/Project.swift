@@ -7,6 +7,7 @@ let project = Project(
             "DEVELOPMENT_TEAM": "96452FLT2P",
             "CODE_SIGN_STYLE": "Automatic",
             "ENABLE_USER_SCRIPT_SANDBOXING": "YES",
+            "SWIFT_OBJC_BRIDGING_HEADER": "pane-Bridging-Header.h",
         ]
     ),
     targets: [
@@ -35,7 +36,7 @@ let project = Project(
             sources: ["Sources/Pane/**"],
             dependencies: [
                 .target(name: "PaneKit"),
-                .xcframework(path: "Frameworks/GhosttyKit.xcframework"),
+                .xcframework(path: "GhosttyKit.xcframework"),
                 .sdk(name: "z", type: .library),
                 .sdk(name: "c++", type: .library),
                 .sdk(name: "Carbon", type: .framework),

@@ -5,6 +5,12 @@ import PaneKit
 struct PaneApp: App {
     @State private var appState = AppState()
 
+    #if canImport(AppKit)
+    private var colorScheme: ColorScheme {
+        GhosttyAppManager.shared.isLightTheme ? .light : .dark
+    }
+    #endif
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -12,6 +18,9 @@ struct PaneApp: App {
                 .environment(appState.client)
                 .environment(appState.browser)
                 .navigationTitle(appState.windowTitle)
+                #if canImport(AppKit)
+                .preferredColorScheme(colorScheme)
+                #endif
                 .onAppear {
                     appState.connect()
                 }
@@ -19,6 +28,7 @@ struct PaneApp: App {
                     appState.disconnect()
                 }
         }
+        .windowStyle(.automatic)
         .commands {
             PaneCommands(appState: appState)
 
