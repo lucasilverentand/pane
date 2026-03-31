@@ -53,8 +53,10 @@ final class GhosttyAppManager {
             return
         }
 
-        // Load user's ghostty config for fonts/theme, then overlay Pane-specific settings
+        // Load user's ghostty config for fonts/theme, then overlay Pane-specific settings.
+        // The recursive load resolves `theme = ...` and `config-file = ...` directives.
         ghostty_config_load_default_files(config)
+        ghostty_config_load_recursive_files(config)
         loadPaneConfig(config)
         ghostty_config_finalize(config)
 
