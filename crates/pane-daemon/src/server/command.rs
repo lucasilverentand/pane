@@ -307,9 +307,23 @@ pub fn execute(
             if ws.groups.len() <= 1 {
                 bail!("cannot kill the last window");
             }
-            if let Some(new_focus) = ws.layout.close_pane(group_id) {
+            let is_floating = ws.floating_windows.iter().any(|fw| fw.id == group_id);
+            if is_floating {
+                ws.floating_windows.retain(|fw| fw.id != group_id);
+                ws.groups.remove(&group_id);
+                if ws.active_group == group_id {
+                    ws.active_group = ws.layout.first_leaf();
+                }
+                if ws.zoomed_window == Some(group_id) {
+                    ws.zoomed_window = None;
+                }
+                id_map.unregister_window(&group_id);
+            } else if let Some(new_focus) = ws.layout.close_pane(group_id) {
                 ws.groups.remove(&group_id);
                 ws.prune_folded_windows();
+                if ws.zoomed_window == Some(group_id) {
+                    ws.zoomed_window = None;
+                }
                 ws.active_group = new_focus;
                 id_map.unregister_window(&group_id);
             }
@@ -427,9 +441,24 @@ pub fn execute(
                 }
                 Some("close_group") => {
                     let ws = state.active_workspace_mut();
-                    if let Some(new_focus) = ws.layout.close_pane(_group_id) {
+                    let is_floating = ws.floating_windows.iter().any(|fw| fw.id == _group_id);
+                    if is_floating {
+                        ws.floating_windows.retain(|fw| fw.id != _group_id);
+                        ws.groups.remove(&_group_id);
+                        if ws.active_group == _group_id {
+                            ws.active_group = ws.layout.first_leaf();
+                        }
+                        if ws.zoomed_window == Some(_group_id) {
+                            ws.zoomed_window = None;
+                        }
+                        id_map.unregister_window(&_group_id);
+                        id_map.unregister_pane(&pane_id);
+                    } else if let Some(new_focus) = ws.layout.close_pane(_group_id) {
                         ws.groups.remove(&_group_id);
                         ws.prune_folded_windows();
+                        if ws.zoomed_window == Some(_group_id) {
+                            ws.zoomed_window = None;
+                        }
                         ws.active_group = new_focus;
                         id_map.unregister_window(&_group_id);
                         id_map.unregister_pane(&pane_id);
@@ -721,6 +750,11 @@ pub fn execute(
             if let Some(idx) = ws.floating_windows.iter().position(|fw| fw.id == active) {
                 // Unfloat: remove from floating list
                 ws.floating_windows.remove(idx);
+                // If window isn't in the layout (created via NewFloat), add it
+                if !ws.layout.contains(active) {
+                    let tiled_leaf = ws.layout.first_leaf();
+                    ws.layout.split_pane(tiled_leaf, SplitDirection::Horizontal, active);
+                }
             } else {
                 // Float: add to floating list
                 let body_h = h.saturating_sub(1 + bar_h);
@@ -1001,7 +1035,7 @@ mod tests {
     use pane_protocol::layout::TabId;
     use crate::server::id_map::IdMap;
     use crate::window::{Tab, TabKind, Window, WindowId};
-    use crate::workspace::Workspace;
+    use crate::workspace::{FloatingWindow, Workspace};
     use std::collections::{HashMap, HashSet};
     use tokio::sync::mpsc;
 
@@ -2224,5 +2258,85 @@ mod tests {
         };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx);
         assert!(result.is_err());
+    }
+
+    /// Helper: add a floating window (not in layout) to the active workspace.
+    fn add_floating_window(
+        state: &mut ServerState,
+        id_map: &mut IdMap,
+    ) -> (WindowId, TabId) {
+        let gid = WindowId::new_v4();
+        let pid = TabId::new_v4();
+        let pane = Tab::spawn_error(pid, TabKind::Shell, "float");
+        let group = Window::new(gid, pane);
+        let ws = state.active_workspace_mut();
+        ws.groups.insert(gid, group);
+        ws.floating_windows.push(FloatingWindow {
+            id: gid, x: 10, y: 10, width: 40, height: 20,
+        });
+        ws.active_group = gid;
+        id_map.register_window(gid);
+        id_map.register_pane(pid);
+        (gid, pid)
+    }
+
+    #[test]
+    fn test_kill_window_removes_floating_window() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let (float_gid, _) = add_floating_window(&mut state, &mut id_map);
+
+        assert_eq!(state.active_workspace().groups.len(), 2);
+        assert_eq!(state.active_workspace().floating_windows.len(), 1);
+
+        let cmd = Command::KillWindow { target: None };
+        let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert!(matches!(result, CommandResult::LayoutChanged));
+
+        assert_eq!(state.active_workspace().groups.len(), 1);
+        assert!(state.active_workspace().floating_windows.is_empty());
+        assert!(!state.active_workspace().groups.contains_key(&float_gid));
+    }
+
+    #[test]
+    fn test_kill_pane_removes_floating_group() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let (float_gid, _) = add_floating_window(&mut state, &mut id_map);
+
+        let cmd = Command::KillPane { target: None };
+        let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+        assert!(matches!(result, CommandResult::LayoutChanged));
+
+        assert_eq!(state.active_workspace().groups.len(), 1);
+        assert!(state.active_workspace().floating_windows.is_empty());
+        assert!(!state.active_workspace().groups.contains_key(&float_gid));
+    }
+
+    #[test]
+    fn test_kill_window_clears_zoomed_window() {
+        let (mut state, mut id_map, broadcast_tx, gid1, _gid2) = make_split_state();
+        state.active_workspace_mut().active_group = gid1;
+        state.active_workspace_mut().zoomed_window = Some(gid1);
+
+        let cmd = Command::KillWindow { target: None };
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+
+        assert!(state.active_workspace().zoomed_window.is_none());
+    }
+
+    #[test]
+    fn test_toggle_float_unfloat_adds_to_layout() {
+        let (mut state, mut id_map, broadcast_tx, _rx) = make_test_state();
+        let (float_gid, _) = add_floating_window(&mut state, &mut id_map);
+
+        // float_gid is floating and NOT in layout
+        assert!(!state.active_workspace().layout.contains(float_gid));
+
+        // Unfloat via ToggleFloat
+        let cmd = Command::ToggleFloat;
+        execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
+
+        // Should now be in layout and not in floating list
+        assert!(state.active_workspace().layout.contains(float_gid));
+        assert!(state.active_workspace().floating_windows.is_empty());
     }
 }

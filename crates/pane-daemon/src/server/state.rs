@@ -246,22 +246,40 @@ impl ServerState {
             let ws = &self.workspaces[ws_idx];
             if let Some(group) = ws.groups.get(&group_id) {
                 if group.tab_count() <= 1 {
-                    let group_ids = ws.layout.group_ids();
-                    if group_ids.len() <= 1 && self.workspaces.len() <= 1 {
-                        return true; // last pane in last workspace — quit
-                    }
-                    let ws = &mut self.workspaces[ws_idx];
-                    if let Some(new_focus) = ws.layout.close_pane(group_id) {
+                    let is_floating = ws.floating_windows.iter().any(|fw| fw.id == group_id);
+
+                    if is_floating {
+                        // Floating window: remove from floating list and groups
+                        let ws = &mut self.workspaces[ws_idx];
+                        ws.floating_windows.retain(|fw| fw.id != group_id);
                         ws.groups.remove(&group_id);
-                        ws.prune_folded_windows();
-                        ws.active_group = new_focus;
-                    } else if self.workspaces.len() > 1 {
-                        self.workspaces.remove(ws_idx);
-                        if self.active_workspace >= self.workspaces.len() {
-                            self.active_workspace = self.workspaces.len() - 1;
+                        if ws.zoomed_window == Some(group_id) {
+                            ws.zoomed_window = None;
+                        }
+                        if ws.active_group == group_id {
+                            ws.active_group = ws.layout.first_leaf();
                         }
                     } else {
-                        return true; // should_quit
+                        let group_ids = ws.layout.group_ids();
+                        if group_ids.len() <= 1 && self.workspaces.len() <= 1 {
+                            return true; // last pane in last workspace — quit
+                        }
+                        let ws = &mut self.workspaces[ws_idx];
+                        if let Some(new_focus) = ws.layout.close_pane(group_id) {
+                            ws.groups.remove(&group_id);
+                            ws.prune_folded_windows();
+                            if ws.zoomed_window == Some(group_id) {
+                                ws.zoomed_window = None;
+                            }
+                            ws.active_group = new_focus;
+                        } else if self.workspaces.len() > 1 {
+                            self.workspaces.remove(ws_idx);
+                            if self.active_workspace >= self.workspaces.len() {
+                                self.active_workspace = self.workspaces.len() - 1;
+                            }
+                        } else {
+                            return true; // should_quit
+                        }
                     }
                 } else {
                     let ws = &mut self.workspaces[ws_idx];
@@ -906,6 +924,45 @@ mod tests {
         let (mut state, _rx) = make_test_state();
         let should_quit = state.handle_pty_exited(TabId::new_v4());
         assert!(!should_quit);
+    }
+
+    #[test]
+    fn test_handle_pty_exited_floating_window_does_not_quit() {
+        let (mut state, _rx) = make_test_state();
+        // Add a floating window (not in layout)
+        let float_gid = WindowId::new_v4();
+        let float_pid = TabId::new_v4();
+        let pane = Tab::spawn_error(float_pid, TabKind::Shell, "float");
+        let group = Window::new(float_gid, pane);
+        let ws = state.active_workspace_mut();
+        ws.groups.insert(float_gid, group);
+        ws.floating_windows.push(crate::workspace::FloatingWindow {
+            id: float_gid, x: 10, y: 10, width: 40, height: 20,
+        });
+        ws.active_group = float_gid;
+
+        // PTY exit on floating window should NOT quit the daemon
+        let should_quit = state.handle_pty_exited(float_pid);
+        assert!(!should_quit);
+
+        // Floating window should be removed
+        assert!(!state.active_workspace().groups.contains_key(&float_gid));
+        assert!(state.active_workspace().floating_windows.is_empty());
+        // Focus should move back to the tiled window
+        assert!(state.active_workspace().layout.contains(state.active_workspace().active_group));
+    }
+
+    #[test]
+    fn test_handle_pty_exited_clears_zoomed_window() {
+        let (mut state, gid1, gid2, _rx) = make_split_state();
+        state.active_workspace_mut().zoomed_window = Some(gid1);
+
+        // Get the pane id of gid1
+        let pid1 = state.active_workspace().groups.get(&gid1).unwrap().active_tab().id;
+
+        let should_quit = state.handle_pty_exited(pid1);
+        assert!(!should_quit);
+        assert!(state.active_workspace().zoomed_window.is_none());
     }
 
     // ---- focus_group ----
