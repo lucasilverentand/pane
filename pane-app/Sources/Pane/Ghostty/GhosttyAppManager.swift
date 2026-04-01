@@ -8,35 +8,32 @@ import SwiftUI
 /// ghostty app with runtime callbacks, ticks it via a display link, and
 /// provides surface creation for terminal views.
 @MainActor
+@Observable
 final class GhosttyAppManager {
     static let shared = GhosttyAppManager()
 
-    private(set) var app: ghostty_app_t?
-    private var tickTimer: Timer?
+    @ObservationIgnored private(set) var app: ghostty_app_t?
+    @ObservationIgnored private var tickTimer: Timer?
+    @ObservationIgnored private var appearanceObserver: NSKeyValueObservation?
 
     /// The background color configured for the ghostty terminal.
     /// Used by the host views to match their backgrounds to the terminal.
     private(set) var terminalBackground: NSColor = .black
 
+    /// Whether the system is currently in light mode.
+    /// Drives `preferredColorScheme` so the app chrome follows macOS appearance.
+    private(set) var isLightTheme: Bool = false
+
     /// SwiftUI-friendly terminal background color from the ghostty theme.
     var terminalBackgroundColor: Color { Color(nsColor: terminalBackground) }
 
-    /// Whether the terminal theme uses a light background color.
-    var isLightTheme: Bool {
-        guard let srgb = terminalBackground.usingColorSpace(.sRGB) else { return false }
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        srgb.getRed(&r, green: &g, blue: &b, alpha: &a)
-        let luminance = 0.299 * r + 0.587 * g + 0.114 * b
-        return luminance > 0.5
-    }
-
-    /// Configure a window to be transparent with the correct light/dark appearance.
+    /// Configure a window to be transparent, following the system appearance.
     func configureWindowAppearance(for nsWindow: NSWindow) {
         nsWindow.isOpaque = false
         nsWindow.backgroundColor = .clear
-        nsWindow.appearance = isLightTheme
-            ? NSAppearance(named: .aqua)
-            : NSAppearance(named: .darkAqua)
+        // Don't force an appearance — let the window inherit from the system
+        // so the app chrome follows macOS light/dark mode.
+        nsWindow.appearance = nil
     }
 
     private init() {
@@ -62,6 +59,11 @@ final class GhosttyAppManager {
 
         // Extract the resolved background color for theme blending
         terminalBackground = Self.resolvedBackgroundColor(from: config)
+
+        // Derive light/dark from the system appearance, not the terminal theme.
+        // The terminal renders its own colors via Metal; the app chrome should
+        // follow macOS light/dark mode.
+        isLightTheme = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) != .darkAqua
 
         // Set up runtime callbacks
         var runtime = ghostty_runtime_config_s()
@@ -101,16 +103,41 @@ final class GhosttyAppManager {
                 self?.tick()
             }
         }
+
+        // Watch for system appearance changes so we can update surfaces
+        // when the user toggles macOS light/dark mode.
+        appearanceObserver = NSApplication.shared.observe(
+            \.effectiveAppearance,
+            options: [.new]
+        ) { [weak self] _, _ in
+            Task { @MainActor in
+                self?.systemAppearanceDidChange()
+            }
+        }
     }
 
     deinit {
         tickTimer?.invalidate()
+        appearanceObserver?.invalidate()
         if let app { ghostty_app_free(app) }
     }
 
     func tick() {
         guard let app else { return }
         ghostty_app_tick(app)
+    }
+
+    /// Called when macOS switches between light and dark mode.
+    /// Updates the app chrome and notifies ghostty surfaces.
+    private func systemAppearanceDidChange() {
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        isLightTheme = !isDark
+
+        guard let app else { return }
+        let scheme: ghostty_color_scheme_e = isDark
+            ? GHOSTTY_COLOR_SCHEME_DARK
+            : GHOSTTY_COLOR_SCHEME_LIGHT
+        ghostty_app_set_color_scheme(app, scheme)
     }
 
     // MARK: - Callbacks
@@ -193,6 +220,8 @@ final class GhosttyAppManager {
             "window-padding-y = 2",
             // Let the app control the title
             "window-title-font-family = ",
+            // Disable scrollback — the Pane daemon manages scrollback, not ghostty
+            "scrollback-limit = 0",
         ].joined(separator: "\n")
 
         let tmpURL = FileManager.default.temporaryDirectory

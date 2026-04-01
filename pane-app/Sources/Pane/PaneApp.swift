@@ -6,9 +6,7 @@ struct PaneApp: App {
     @State private var appState = AppState()
 
     #if canImport(AppKit)
-    private var colorScheme: ColorScheme {
-        GhosttyAppManager.shared.isLightTheme ? .light : .dark
-    }
+    private var ghosttyManager: GhosttyAppManager { GhosttyAppManager.shared }
     #endif
 
     var body: some Scene {
@@ -19,8 +17,11 @@ struct PaneApp: App {
                 .environment(appState.browser)
                 .navigationTitle(appState.windowTitle)
                 #if canImport(AppKit)
-                .preferredColorScheme(colorScheme)
+                .preferredColorScheme(ghosttyManager.isLightTheme ? .light : .dark)
                 #endif
+                .onChange(of: appState.client.renderState?.activeWorkspace) {
+                    appState.syncWorkspaceFromServer()
+                }
                 .onAppear {
                     appState.connect()
                 }

@@ -110,6 +110,23 @@ impl From<SerializableKeyCode> for KeyCode {
 }
 
 // ---------------------------------------------------------------------------
+// Client type — declared at attach time
+// ---------------------------------------------------------------------------
+
+/// Identifies the type of client connecting to the daemon.
+/// Controls how the daemon handles sizing and input for this connection.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ClientType {
+    /// TUI client (pane binary): uses vt100 rendering, needs cell-based
+    /// coordinates, and relies on the daemon's layout math with TUI chrome overhead.
+    Tui,
+    /// Native app client (macOS/iOS): uses its own terminal renderer (e.g. GhosttyKit),
+    /// sends pre-encoded PTY bytes via RawInput, manages its own layout chrome,
+    /// and sends per-pane resize commands.
+    NativeApp,
+}
+
+// ---------------------------------------------------------------------------
 // Client → Server messages
 // ---------------------------------------------------------------------------
 
@@ -151,6 +168,29 @@ pub enum ClientRequest {
     FocusWindow { id: WindowId },
     /// Focus a window and switch to a specific tab by index.
     SelectTab { window_id: WindowId, tab_index: usize },
+
+    // -- V2 variants for native app clients --
+
+    /// Attach with client metadata. The daemon accepts both `Attach` (defaults
+    /// to Tui) and `AttachV2` as the first message on a new connection.
+    AttachV2 { client_type: ClientType },
+
+    /// Raw PTY input bytes, already encoded by the client's terminal emulator
+    /// (e.g. GhosttyKit). Written directly to the active PTY without UTF-8
+    /// conversion or bracketed paste wrapping. When sync_panes is true, bytes
+    /// are broadcast to all panes in the workspace.
+    RawInput(Vec<u8>),
+
+    /// Per-pane resize for native app clients. Directly resizes the specified
+    /// tab's PTY without applying TUI layout overhead (workspace bar, borders,
+    /// etc.). pixel_width/pixel_height may be 0 if unknown.
+    SetPaneSize {
+        tab_id: TabId,
+        cols: u16,
+        rows: u16,
+        pixel_width: u16,
+        pixel_height: u16,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -698,6 +738,17 @@ mod tests {
             ClientRequest::Command("list-panes".to_string()),
             ClientRequest::Paste("pasted text with spaces\nnewlines".to_string()),
             ClientRequest::CommandSync("split -h".to_string()),
+            ClientRequest::AttachV2 { client_type: ClientType::Tui },
+            ClientRequest::AttachV2 { client_type: ClientType::NativeApp },
+            ClientRequest::RawInput(vec![0x1b, b'[', b'A']),
+            ClientRequest::RawInput(vec![]),
+            ClientRequest::SetPaneSize {
+                tab_id: TabId::new_v4(),
+                cols: 120,
+                rows: 40,
+                pixel_width: 960,
+                pixel_height: 640,
+            },
         ];
 
         for req in &requests {
@@ -979,5 +1030,125 @@ mod tests {
         json_val.as_object_mut().unwrap().remove("cwd");
         let restored: WorkspaceSnapshot = serde_json::from_value(json_val).unwrap();
         assert_eq!(restored.cwd, "");
+    }
+
+    // --- ClientType ---
+
+    #[test]
+    fn test_client_type_roundtrip() {
+        for ct in [ClientType::Tui, ClientType::NativeApp] {
+            let json = serde_json::to_string(&ct).unwrap();
+            let restored: ClientType = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored, ct);
+        }
+    }
+
+    // --- AttachV2 ---
+
+    #[test]
+    fn test_attach_v2_tui() {
+        let req = ClientRequest::AttachV2 { client_type: ClientType::Tui };
+        let json = serde_json::to_string(&req).unwrap();
+        let restored: ClientRequest = serde_json::from_str(&json).unwrap();
+        if let ClientRequest::AttachV2 { client_type } = restored {
+            assert_eq!(client_type, ClientType::Tui);
+        } else {
+            panic!("Expected AttachV2");
+        }
+    }
+
+    #[test]
+    fn test_attach_v2_native_app() {
+        let req = ClientRequest::AttachV2 { client_type: ClientType::NativeApp };
+        let json = serde_json::to_string(&req).unwrap();
+        let restored: ClientRequest = serde_json::from_str(&json).unwrap();
+        if let ClientRequest::AttachV2 { client_type } = restored {
+            assert_eq!(client_type, ClientType::NativeApp);
+        } else {
+            panic!("Expected AttachV2");
+        }
+    }
+
+    // --- RawInput ---
+
+    #[test]
+    fn test_raw_input_with_escape_sequence() {
+        let req = ClientRequest::RawInput(vec![0x1b, b'[', b'A']); // arrow up
+        let json = serde_json::to_string(&req).unwrap();
+        let restored: ClientRequest = serde_json::from_str(&json).unwrap();
+        if let ClientRequest::RawInput(data) = restored {
+            assert_eq!(data, vec![0x1b, b'[', b'A']);
+        } else {
+            panic!("Expected RawInput");
+        }
+    }
+
+    #[test]
+    fn test_raw_input_empty() {
+        let req = ClientRequest::RawInput(vec![]);
+        let json = serde_json::to_string(&req).unwrap();
+        let restored: ClientRequest = serde_json::from_str(&json).unwrap();
+        if let ClientRequest::RawInput(data) = restored {
+            assert!(data.is_empty());
+        } else {
+            panic!("Expected RawInput");
+        }
+    }
+
+    #[test]
+    fn test_raw_input_binary_data() {
+        // Non-UTF-8 bytes that would be lost with String conversion
+        let req = ClientRequest::RawInput(vec![0x80, 0xFF, 0xFE, 0x00]);
+        let json = serde_json::to_string(&req).unwrap();
+        let restored: ClientRequest = serde_json::from_str(&json).unwrap();
+        if let ClientRequest::RawInput(data) = restored {
+            assert_eq!(data, vec![0x80, 0xFF, 0xFE, 0x00]);
+        } else {
+            panic!("Expected RawInput");
+        }
+    }
+
+    // --- SetPaneSize ---
+
+    #[test]
+    fn test_set_pane_size_roundtrip() {
+        let tab_id = TabId::new_v4();
+        let req = ClientRequest::SetPaneSize {
+            tab_id,
+            cols: 120,
+            rows: 40,
+            pixel_width: 960,
+            pixel_height: 640,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let restored: ClientRequest = serde_json::from_str(&json).unwrap();
+        if let ClientRequest::SetPaneSize { tab_id: id, cols, rows, pixel_width, pixel_height } = restored {
+            assert_eq!(id, tab_id);
+            assert_eq!(cols, 120);
+            assert_eq!(rows, 40);
+            assert_eq!(pixel_width, 960);
+            assert_eq!(pixel_height, 640);
+        } else {
+            panic!("Expected SetPaneSize");
+        }
+    }
+
+    #[test]
+    fn test_set_pane_size_zero_pixels() {
+        let req = ClientRequest::SetPaneSize {
+            tab_id: TabId::new_v4(),
+            cols: 80,
+            rows: 24,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let restored: ClientRequest = serde_json::from_str(&json).unwrap();
+        if let ClientRequest::SetPaneSize { pixel_width, pixel_height, .. } = restored {
+            assert_eq!(pixel_width, 0);
+            assert_eq!(pixel_height, 0);
+        } else {
+            panic!("Expected SetPaneSize");
+        }
     }
 }

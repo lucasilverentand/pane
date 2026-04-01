@@ -94,12 +94,15 @@ final class GhosttyTerminalNSView: NSView, NSTextInputClient {
         }
 
         // When ghostty writes key output to nc → bytes arrive here → send to daemon as raw input.
+        // We send focusWindow before rawInput so the daemon knows which pane this input targets.
         bridge.onInput = { [weak self] bytes in
             guard let self else { return }
-            let client = self.client
-            guard let text = String(bytes: bytes, encoding: .utf8) else { return }
+            let data = Data(bytes)
+            let c = self.client
+            let wid = self.windowId
             Task { @MainActor in
-                try? await client.paste(text)
+                try? await c.focusWindow(id: wid)
+                try? await c.rawInput(data)
             }
         }
     }
@@ -187,12 +190,20 @@ final class GhosttyTerminalNSView: NSView, NSTextInputClient {
         let scaledSize = convertToBacking(bounds.size)
         ghostty_surface_set_size(surface, UInt32(scaledSize.width), UInt32(scaledSize.height))
 
-        // Notify the daemon of the new terminal size in cells.
+        // Resize this specific pane's PTY — avoids overwriting other panes' sizes.
         let cols = max(1, UInt16(bounds.width / 8))
         let rows = max(1, UInt16(bounds.height / 16))
-        let client = self.client
+        let pw = UInt16(scaledSize.width)
+        let ph = UInt16(scaledSize.height)
+        let c = self.client
+        let wid = self.windowId
         Task { @MainActor in
-            try? await client.resize(width: cols, height: rows)
+            guard let window = c.renderState?.workspaces
+                .flatMap(\.groups)
+                .first(where: { $0.id == wid }),
+                  window.activeTab < window.tabs.count else { return }
+            let tabId = window.tabs[window.activeTab].id
+            try? await c.setPaneSize(tabId: tabId, cols: cols, rows: rows, pixelWidth: pw, pixelHeight: ph)
         }
     }
 
@@ -210,6 +221,10 @@ final class GhosttyTerminalNSView: NSView, NSTextInputClient {
 
     override func becomeFirstResponder() -> Bool {
         if let surface { ghostty_surface_set_focus(surface, true) }
+        // Tell the daemon this pane is now focused so input routes here.
+        let c = client
+        let wid = windowId
+        Task { @MainActor in try? await c.focusWindow(id: wid) }
         return true
     }
 
@@ -392,10 +407,13 @@ final class GhosttyTerminalNSView: NSView, NSTextInputClient {
             return
         }
 
-        // Direct insertText outside keyDown (e.g. from emoji picker) — paste directly.
-        let client = self.client
+        // Direct insertText outside keyDown (e.g. from emoji picker) — send as raw input.
+        let c = self.client
+        let wid = self.windowId
+        let data = Data(chars.utf8)
         Task { @MainActor in
-            try? await client.paste(chars)
+            try? await c.focusWindow(id: wid)
+            try? await c.rawInput(data)
         }
     }
 
@@ -482,6 +500,8 @@ final class GhosttyTerminalNSView: NSView, NSTextInputClient {
     }
 
     override func mouseDown(with event: NSEvent) {
+        // Claim focus so the daemon knows which pane is active.
+        window?.makeFirstResponder(self)
         guard let surface else { return }
         let mods = ghosttyMods(event.modifierFlags)
         ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, mods)
@@ -523,31 +543,18 @@ final class GhosttyTerminalNSView: NSView, NSTextInputClient {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard let surface else { return }
-
-        var x = event.scrollingDeltaX
-        var y = event.scrollingDeltaY
-        let precision = event.hasPreciseScrollingDeltas
-
-        if precision {
-            // 2x multiplier matches Ghostty's own feel
-            x *= 2
-            y *= 2
+        // Forward scroll to the daemon instead of Ghostty. The daemon manages
+        // scrollback and mouse-mode forwarding; Ghostty's own scrollback is
+        // disabled since it only sees the nc relay, not the real PTY.
+        let deltaY = event.scrollingDeltaY
+        guard abs(deltaY) > 0.5 else { return }
+        let up = deltaY > 0
+        let c = self.client
+        let wid = self.windowId
+        Task { @MainActor in
+            try? await c.focusWindow(id: wid)
+            try? await c.send(.mouseScroll(up: up))
         }
-
-        // Build scroll mods: bit 0 = precision, bits 1+ = momentum phase
-        let momentum: Int32
-        switch event.momentumPhase {
-        case .began:    momentum = 1
-        case .changed:  momentum = 2
-        case .ended:    momentum = 3
-        case .cancelled: momentum = 4
-        case .mayBegin: momentum = 5
-        default:        momentum = 0  // none
-        }
-        let scrollMods: ghostty_input_scroll_mods_t = (precision ? 1 : 0) | (momentum << 1)
-
-        ghostty_surface_mouse_scroll(surface, x, y, scrollMods)
     }
 
     // MARK: - Modifier conversion helpers

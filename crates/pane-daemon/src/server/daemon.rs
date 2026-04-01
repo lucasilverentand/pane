@@ -14,7 +14,7 @@ use crate::server::command_parser;
 use pane_protocol::framing;
 use crate::server::id_map::IdMap;
 use pane_protocol::protocol::{
-    ClientRequest, SerializableSystemStats, ServerResponse,
+    ClientRequest, ClientType, SerializableSystemStats, ServerResponse,
 };
 use crate::server::state::{ServerState, render_state_from_server, render_state_for_client};
 use crate::system_stats;
@@ -28,6 +28,7 @@ struct ClientInfo {
     width: u16,
     height: u16,
     active_workspace: usize,
+    client_type: ClientType,
 }
 
 /// Registry of connected clients with their terminal sizes and workspace views.
@@ -44,13 +45,14 @@ impl ClientRegistry {
         }
     }
 
-    async fn register(&self, id: u64, width: u16, height: u16, active_workspace: usize) {
+    async fn register(&self, id: u64, width: u16, height: u16, active_workspace: usize, client_type: ClientType) {
         self.inner.lock().await.insert(
             id,
             ClientInfo {
                 width,
                 height,
                 active_workspace,
+                client_type,
             },
         );
     }
@@ -76,16 +78,37 @@ impl ClientRegistry {
         self.inner.lock().await.remove(&id);
     }
 
-    /// Return the minimum width and height across all connected clients.
-    /// Returns None if no clients are connected.
-    async fn min_size(&self) -> Option<(u16, u16)> {
+    /// Return the effective terminal size for the TUI layout engine.
+    ///
+    /// TUI clients constrain each other (smallest wins) because they all render
+    /// from the same vt100 screen buffer. NativeApp clients are excluded from
+    /// this calculation — they manage per-pane sizes via `SetPaneSize`.
+    ///
+    /// When only NativeApp clients are connected, returns the largest native
+    /// size so the daemon has a reasonable default PTY size.
+    async fn effective_size(&self) -> Option<(u16, u16)> {
         let clients = self.inner.lock().await;
         if clients.is_empty() {
             return None;
         }
-        let min_w = clients.values().map(|i| i.width).min().unwrap_or(80);
-        let min_h = clients.values().map(|i| i.height).min().unwrap_or(24);
-        Some((min_w, min_h))
+
+        let tui_sizes: Vec<_> = clients
+            .values()
+            .filter(|c| c.client_type == ClientType::Tui)
+            .map(|c| (c.width, c.height))
+            .collect();
+
+        if !tui_sizes.is_empty() {
+            // TUI clients: use the smallest size across all TUI clients
+            let min_w = tui_sizes.iter().map(|(w, _)| *w).min().unwrap();
+            let min_h = tui_sizes.iter().map(|(_, h)| *h).min().unwrap();
+            return Some((min_w, min_h));
+        }
+
+        // Only NativeApp clients: use the largest size as a reasonable default
+        let max_w = clients.values().map(|c| c.width).max().unwrap_or(80);
+        let max_h = clients.values().map(|c| c.height).max().unwrap_or(24);
+        Some((max_w, max_h))
     }
 
     async fn count(&self) -> usize {
@@ -543,14 +566,18 @@ async fn handle_client(
         return Ok(());
     }
 
-    if !matches!(&first_msg, ClientRequest::Attach) {
-        framing::send(
-            &mut stream,
-            &ServerResponse::Error("expected Attach as first message".to_string()),
-        )
-        .await?;
-        return Ok(());
-    }
+    let client_type = match &first_msg {
+        ClientRequest::Attach => ClientType::Tui,
+        ClientRequest::AttachV2 { client_type } => client_type.clone(),
+        _ => {
+            framing::send(
+                &mut stream,
+                &ServerResponse::Error("expected Attach or AttachV2 as first message".to_string()),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
 
     // Send attached confirmation
     framing::send(&mut stream, &ServerResponse::Attached).await?;
@@ -560,7 +587,7 @@ async fn handle_client(
         let state_guard = state.lock().await;
         let (w, h) = state_guard.last_size;
         clients
-            .register(client_id, w, h, state_guard.active_workspace)
+            .register(client_id, w, h, state_guard.active_workspace, client_type.clone())
             .await;
         let count = clients.count().await as u32;
         let _ = broadcast_tx.send(ServerResponse::ClientCountChanged(count));
@@ -649,7 +676,7 @@ async fn handle_client(
             ClientRequest::Resize { width, height } => {
                 clients.update_size(client_id, width, height).await;
                 // Use the smallest terminal size across all connected clients
-                let (eff_w, eff_h) = clients.min_size().await.unwrap_or((width, height));
+                let (eff_w, eff_h) = clients.effective_size().await.unwrap_or((width, height));
                 let mut state = state.lock().await;
                 state.last_size = (eff_w, eff_h);
                 state.resize_all_tabs(eff_w, eff_h);
@@ -810,11 +837,34 @@ async fn handle_client(
                 let render_state = render_state_for_client(&state, cws);
                 let _ = broadcast_tx.send(ServerResponse::LayoutChanged { render_state });
             }
-            ClientRequest::Attach => {
+            ClientRequest::Attach | ClientRequest::AttachV2 { .. } => {
                 // Already attached, ignore
             }
             ClientRequest::CommandSync(_) => {
                 // CommandSync is handled before attach; ignore if received mid-session
+            }
+            ClientRequest::RawInput(bytes) => {
+                // Write pre-encoded bytes directly to the active PTY.
+                // Used by the native macOS app where ghostty has already
+                // processed the key into terminal byte sequences.
+                if bytes.is_empty() { continue; }
+                let mut state = state.lock().await;
+                if state.workspaces.is_empty() { continue; }
+                if let Some(cws) = clients.get_active_workspace(client_id).await {
+                    state.active_workspace = cws;
+                }
+                let ws = state.active_workspace_mut();
+                if let Some(group) = ws.groups.get_mut(&ws.active_group) {
+                    group.active_tab_mut().write_input(&bytes);
+                }
+            }
+            ClientRequest::SetPaneSize { tab_id, cols, rows, pixel_width, pixel_height } => {
+                // Per-pane resize for native clients. Directly resizes
+                // the specified tab's PTY without TUI layout overhead.
+                let mut state = state.lock().await;
+                if let Some(tab) = state.find_tab_mut(tab_id) {
+                    tab.resize_pty_with_pixels(cols, rows, pixel_width, pixel_height);
+                }
             }
         }
     }
@@ -827,7 +877,7 @@ async fn handle_client(
         let count = clients.count().await as u32;
         let _ = broadcast_tx.send(ServerResponse::ClientCountChanged(count));
     }
-    if let Some((eff_w, eff_h)) = clients.min_size().await {
+    if let Some((eff_w, eff_h)) = clients.effective_size().await {
         let mut state = state.lock().await;
         state.last_size = (eff_w, eff_h);
         state.resize_all_tabs(eff_w, eff_h);
@@ -1549,40 +1599,66 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_client_registry_min_size() {
+    async fn test_client_registry_effective_size_tui() {
         let registry = ClientRegistry::new();
-        assert_eq!(registry.min_size().await, None);
+        assert_eq!(registry.effective_size().await, None);
 
-        registry.register(1, 120, 40, 0).await;
-        assert_eq!(registry.min_size().await, Some((120, 40)));
+        registry.register(1, 120, 40, 0, ClientType::Tui).await;
+        assert_eq!(registry.effective_size().await, Some((120, 40)));
 
-        registry.register(2, 80, 24, 0).await;
-        assert_eq!(registry.min_size().await, Some((80, 24)));
+        registry.register(2, 80, 24, 0, ClientType::Tui).await;
+        assert_eq!(registry.effective_size().await, Some((80, 24)));
 
-        registry.register(3, 100, 30, 0).await;
-        assert_eq!(registry.min_size().await, Some((80, 24)));
+        registry.register(3, 100, 30, 0, ClientType::Tui).await;
+        assert_eq!(registry.effective_size().await, Some((80, 24)));
 
         registry.unregister(2).await;
-        assert_eq!(registry.min_size().await, Some((100, 30)));
+        assert_eq!(registry.effective_size().await, Some((100, 30)));
 
         registry.unregister(1).await;
-        assert_eq!(registry.min_size().await, Some((100, 30)));
+        assert_eq!(registry.effective_size().await, Some((100, 30)));
 
         registry.unregister(3).await;
-        assert_eq!(registry.min_size().await, None);
+        assert_eq!(registry.effective_size().await, None);
+    }
+
+    #[tokio::test]
+    async fn test_client_registry_effective_size_native_only() {
+        let registry = ClientRegistry::new();
+
+        // Native clients use max() instead of min()
+        registry.register(1, 80, 24, 0, ClientType::NativeApp).await;
+        assert_eq!(registry.effective_size().await, Some((80, 24)));
+
+        registry.register(2, 120, 40, 0, ClientType::NativeApp).await;
+        assert_eq!(registry.effective_size().await, Some((120, 40)));
+    }
+
+    #[tokio::test]
+    async fn test_client_registry_effective_size_mixed() {
+        let registry = ClientRegistry::new();
+
+        // TUI clients constrain size; native clients are ignored
+        registry.register(1, 120, 40, 0, ClientType::Tui).await;
+        registry.register(2, 200, 60, 0, ClientType::NativeApp).await;
+        // Only TUI sizes matter when TUI clients exist
+        assert_eq!(registry.effective_size().await, Some((120, 40)));
+
+        registry.register(3, 80, 24, 0, ClientType::Tui).await;
+        assert_eq!(registry.effective_size().await, Some((80, 24)));
     }
 
     #[tokio::test]
     async fn test_client_registry_update_size() {
         let registry = ClientRegistry::new();
 
-        registry.register(1, 120, 40, 0).await;
-        registry.register(2, 80, 24, 0).await;
-        assert_eq!(registry.min_size().await, Some((80, 24)));
+        registry.register(1, 120, 40, 0, ClientType::Tui).await;
+        registry.register(2, 80, 24, 0, ClientType::Tui).await;
+        assert_eq!(registry.effective_size().await, Some((80, 24)));
 
         // Client 2 resizes larger
         registry.update_size(2, 200, 50).await;
-        assert_eq!(registry.min_size().await, Some((120, 40)));
+        assert_eq!(registry.effective_size().await, Some((120, 40)));
     }
 
     // --- CommandSync protocol tests ---

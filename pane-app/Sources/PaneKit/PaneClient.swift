@@ -70,8 +70,8 @@ public final class PaneClient: @unchecked Sendable {
             let conn = try PaneConnection.connect(path: path)
             connection = conn
 
-            // Send attach request
-            try await conn.send(ClientRequest.attach)
+            // Send attach request — identify as a native macOS app client
+            try await conn.send(ClientRequest.attachV2(clientType: .nativeApp))
 
             // Start the receive loop
             receiveTask = Task { [weak self] in
@@ -126,6 +126,17 @@ public final class PaneClient: @unchecked Sendable {
     /// Convenience: paste text to the active PTY.
     public func paste(_ text: String) async throws {
         try await send(.paste(text))
+    }
+
+    /// Write raw bytes directly to the active PTY.
+    /// Used by the native terminal emulator — bytes are already encoded by ghostty.
+    public func rawInput(_ data: Data) async throws {
+        try await send(.rawInput(data))
+    }
+
+    /// Resize a specific pane's PTY (no TUI layout overhead applied).
+    public func setPaneSize(tabId: TabId, cols: UInt16, rows: UInt16, pixelWidth: UInt16 = 0, pixelHeight: UInt16 = 0) async throws {
+        try await send(.setPaneSize(tabId: tabId, cols: cols, rows: rows, pixelWidth: pixelWidth, pixelHeight: pixelHeight))
     }
 
     /// Convenience: focus a window by ID.

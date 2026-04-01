@@ -380,6 +380,19 @@ impl Tab {
     }
 
     pub fn resize_pty(&mut self, cols: u16, rows: u16) {
+        self.resize_pty_with_pixels(cols, rows, 0, 0);
+    }
+
+    /// Resize the PTY with pixel dimensions. Native app clients (e.g. GhosttyKit)
+    /// provide pixel_width/pixel_height so the kernel's TIOCSWINSZ includes them,
+    /// enabling Sixel graphics, kitty image protocol, etc.
+    pub fn resize_pty_with_pixels(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        pixel_width: u16,
+        pixel_height: u16,
+    ) {
         let cols = cols.max(1);
         let rows = rows.max(1);
         if self.scroll_offset > 0 {
@@ -390,8 +403,8 @@ impl Tab {
             let _ = master.resize(PtySize {
                 rows,
                 cols,
-                pixel_width: 0,
-                pixel_height: 0,
+                pixel_width,
+                pixel_height,
             });
         }
     }

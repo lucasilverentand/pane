@@ -12,6 +12,10 @@ final class AppState {
     var selectedWorkspaceIndex: Int = 0
     var selectedWindowId: WindowId?
 
+    /// When true, we've sent a workspace switch to the daemon and are waiting
+    /// for the server to confirm by setting `activeWorkspace` to match.
+    private var pendingWorkspaceSwitch = false
+
     init() {
         mcpServer = BrowserMCPServer(browser: browser)
     }
@@ -26,20 +30,32 @@ final class AppState {
     }
 
     var currentWorkspace: WorkspaceSnapshot? {
-        // Sync with server's active workspace when render state updates
-        if let state = client.renderState,
-           state.activeWorkspace != selectedWorkspaceIndex,
-           state.workspaces.indices.contains(state.activeWorkspace)
-        {
-            selectedWorkspaceIndex = state.activeWorkspace
-        }
-
         guard let state = client.renderState,
               state.workspaces.indices.contains(selectedWorkspaceIndex)
         else {
             return nil
         }
         return state.workspaces[selectedWorkspaceIndex]
+    }
+
+    /// Sync local selection with the server's active workspace.
+    /// Called when `renderState` updates. Skips sync while a local switch is pending.
+    func syncWorkspaceFromServer() {
+        guard let state = client.renderState else { return }
+
+        if pendingWorkspaceSwitch {
+            // Server caught up — clear the pending flag
+            if state.activeWorkspace == selectedWorkspaceIndex {
+                pendingWorkspaceSwitch = false
+            }
+            // Either way, don't override the local selection while pending
+            return
+        }
+
+        guard state.activeWorkspace != selectedWorkspaceIndex,
+              state.workspaces.indices.contains(state.activeWorkspace)
+        else { return }
+        selectedWorkspaceIndex = state.activeWorkspace
     }
 
     var isConnected: Bool {
@@ -113,6 +129,7 @@ final class AppState {
 
     func selectWorkspace(_ index: Int) {
         selectedWorkspaceIndex = index
+        pendingWorkspaceSwitch = true
         Task {
             try? await client.setActiveWorkspace(index)
         }

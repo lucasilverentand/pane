@@ -262,7 +262,7 @@ struct TerminalPane: View {
                 .rotationEffect(isVerticalStrip ? .degrees(-90) : .degrees(0))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .glassEffect(
-                    isActive ? .regular.tint(.white.opacity(0.12)) : .regular,
+                    isActive ? .regular.tint(.primary.opacity(0.12)) : .regular,
                     in: .rect(cornerRadius: 8)
                 )
         }
@@ -477,7 +477,7 @@ struct TerminalPane: View {
             .frame(height: 32)
             .padding(.horizontal, 10)
             .glassEffect(
-                isSelected ? .regular.tint(.white.opacity(0.12)).interactive() : .regular.interactive(),
+                isSelected ? .regular.tint(.primary.opacity(0.12)).interactive() : .regular.interactive(),
                 in: .capsule
             )
             .contentShape(.capsule)

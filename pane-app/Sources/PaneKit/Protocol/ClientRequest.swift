@@ -11,8 +11,15 @@ import Foundation
 /// - `{"FocusWindow": {"id": "uuid"}}` (struct variant)
 /// - `{"SelectTab": {"window_id": "uuid", "tab_index": 0}}` (struct variant)
 /// - `{"SetActiveWorkspace": 0}` (newtype variant)
+/// Mirrors Rust `ClientType` enum.
+public enum ClientType: String, Codable, Sendable {
+    case tui = "Tui"
+    case nativeApp = "NativeApp"
+}
+
 public enum ClientRequest: Codable, Sendable {
     case attach
+    case attachV2(clientType: ClientType)
     case detach
     case resize(width: UInt16, height: UInt16)
     case key(SerializableKeyEvent)
@@ -26,9 +33,12 @@ public enum ClientRequest: Codable, Sendable {
     case commandSync(String)
     case focusWindow(id: WindowId)
     case selectTab(windowId: WindowId, tabIndex: Int)
+    case rawInput(Data)
+    case setPaneSize(tabId: TabId, cols: UInt16, rows: UInt16, pixelWidth: UInt16, pixelHeight: UInt16)
 
     private enum CodingKeys: String, CodingKey {
         case attach = "Attach"
+        case attachV2 = "AttachV2"
         case detach = "Detach"
         case resize = "Resize"
         case key = "Key"
@@ -42,6 +52,8 @@ public enum ClientRequest: Codable, Sendable {
         case commandSync = "CommandSync"
         case focusWindow = "FocusWindow"
         case selectTab = "SelectTab"
+        case rawInput = "RawInput"
+        case setPaneSize = "SetPaneSize"
     }
 
     // Struct payloads
@@ -66,6 +78,18 @@ public enum ClientRequest: Codable, Sendable {
     private struct SelectTabPayload: Codable {
         let window_id: WindowId
         let tab_index: Int
+    }
+
+    private struct AttachV2Payload: Codable {
+        let client_type: ClientType
+    }
+
+    private struct SetPaneSizePayload: Codable {
+        let tab_id: TabId
+        let cols: UInt16
+        let rows: UInt16
+        let pixel_width: UInt16
+        let pixel_height: UInt16
     }
 
     public init(from decoder: any Decoder) throws {
@@ -110,6 +134,15 @@ public enum ClientRequest: Codable, Sendable {
             self = .focusWindow(id: payload.id)
         } else if let payload = try container.decodeIfPresent(SelectTabPayload.self, forKey: .selectTab) {
             self = .selectTab(windowId: payload.window_id, tabIndex: payload.tab_index)
+        } else if let payload = try container.decodeIfPresent(AttachV2Payload.self, forKey: .attachV2) {
+            self = .attachV2(clientType: payload.client_type)
+        } else if let bytes = try container.decodeIfPresent([UInt8].self, forKey: .rawInput) {
+            self = .rawInput(Data(bytes))
+        } else if let payload = try container.decodeIfPresent(SetPaneSizePayload.self, forKey: .setPaneSize) {
+            self = .setPaneSize(
+                tabId: payload.tab_id, cols: payload.cols, rows: payload.rows,
+                pixelWidth: payload.pixel_width, pixelHeight: payload.pixel_height
+            )
         } else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "Unknown ClientRequest variant")
@@ -161,6 +194,21 @@ public enum ClientRequest: Codable, Sendable {
         case .selectTab(let windowId, let tabIndex):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(SelectTabPayload(window_id: windowId, tab_index: tabIndex), forKey: .selectTab)
+        case .attachV2(let clientType):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(AttachV2Payload(client_type: clientType), forKey: .attachV2)
+        case .rawInput(let data):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode([UInt8](data), forKey: .rawInput)
+        case .setPaneSize(let tabId, let cols, let rows, let pixelWidth, let pixelHeight):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(
+                SetPaneSizePayload(
+                    tab_id: tabId, cols: cols, rows: rows,
+                    pixel_width: pixelWidth, pixel_height: pixelHeight
+                ),
+                forKey: .setPaneSize
+            )
         }
     }
 }

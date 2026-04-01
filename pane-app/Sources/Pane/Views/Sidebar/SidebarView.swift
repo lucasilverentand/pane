@@ -414,7 +414,7 @@ private struct WorkspaceRow: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .glassEffect(
-                isSelected ? .regular.tint(.white.opacity(0.12)).interactive() : .regular.interactive(),
+                isSelected ? .regular.tint(.primary.opacity(0.12)).interactive() : .regular.interactive(),
                 in: .rect(cornerRadius: 10)
             )
             .contentShape(.rect(cornerRadius: 10))
