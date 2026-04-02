@@ -177,8 +177,17 @@ public final class PaneClient: @unchecked Sendable {
     }
 
     /// Create a new window in the current workspace.
-    public func newWindow() async throws {
-        try await send(.command("new-window"))
+    public func newWindow(kind: String? = nil) async throws {
+        if let kind {
+            try await send(.command("new-window -k \(kind)"))
+        } else {
+            try await send(.command("new-window"))
+        }
+    }
+
+    /// Add a new tab to the active window with the specified kind.
+    public func newTab(kind: String) async throws {
+        try await send(.command("new-window -k \(kind)"))
     }
 
     /// Toggle zoom on the active window (full-screen the focused window).

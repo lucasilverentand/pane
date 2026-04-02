@@ -20,24 +20,6 @@ struct ContentView: View {
                 connectionStatusView
             }
         }
-        .toolbar {
-            ToolbarItemGroup {
-                toolbarItems
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var toolbarItems: some View {
-        Button("Split Right", systemImage: "rectangle.split.1x2") {
-            Task { try? await appState.client.splitHorizontal() }
-        }
-        Button("Split Down", systemImage: "rectangle.split.2x1") {
-            Task { try? await appState.client.splitVertical() }
-        }
-        Button("Equalize", systemImage: "rectangle.split.3x3") {
-            Task { try? await appState.client.equalizeLayout() }
-        }
     }
 
     @ViewBuilder

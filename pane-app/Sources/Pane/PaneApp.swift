@@ -16,6 +16,7 @@ struct PaneApp: App {
                 .environment(appState.client)
                 .environment(appState.browser)
                 .navigationTitle(appState.windowTitle)
+                .toolbarTitleDisplayMode(.inline)
                 #if canImport(AppKit)
                 .preferredColorScheme(ghosttyManager.isLightTheme ? .light : .dark)
                 #endif

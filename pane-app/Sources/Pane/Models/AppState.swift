@@ -26,7 +26,7 @@ final class AppState {
         else {
             return "Pane"
         }
-        return "Pane - \(state.workspaces[selectedWorkspaceIndex].name)"
+        return state.workspaces[selectedWorkspaceIndex].name
     }
 
     var currentWorkspace: WorkspaceSnapshot? {
