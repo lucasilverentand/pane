@@ -502,10 +502,11 @@ fn parse_resize_pane(args: &[String]) -> Result<Command> {
             "-R" => direction = ResizeDirection::Right,
             "-U" => direction = ResizeDirection::Up,
             "-D" => direction = ResizeDirection::Down,
-            s if s.parse::<u16>().is_ok() => {
-                amount = s.parse().unwrap();
+            s => {
+                if let Ok(n) = s.parse::<u16>() {
+                    amount = n;
+                }
             }
-            _ => {}
         }
         i += 1;
     }

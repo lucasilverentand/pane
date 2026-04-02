@@ -2533,7 +2533,9 @@ async fn send_request(
     request: &ClientRequest,
 ) -> Result<()> {
     let json = serde_json::to_vec(request)?;
-    let len = json.len() as u32;
+    let len: u32 = json.len().try_into().map_err(|_| {
+        anyhow::anyhow!("request too large: {} bytes", json.len())
+    })?;
     writer.write_all(&len.to_be_bytes()).await?;
     writer.write_all(&json).await?;
     writer.flush().await?;

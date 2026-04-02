@@ -9,7 +9,18 @@ const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
 
 /// Write a length-prefixed frame to the stream.
 pub async fn write_frame(stream: &mut UnixStream, data: &[u8]) -> std::io::Result<()> {
-    let len = data.len() as u32;
+    let len: u32 = data.len().try_into().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("frame too large to send: {} bytes", data.len()),
+        )
+    })?;
+    if len > MAX_FRAME_SIZE {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("frame too large to send: {} bytes", len),
+        ));
+    }
     stream.write_all(&len.to_be_bytes()).await?;
     stream.write_all(data).await?;
     stream.flush().await?;
