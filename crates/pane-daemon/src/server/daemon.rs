@@ -955,8 +955,8 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
                                     state.active_workspace_mut().active_group_mut().active_tab = i;
                                 }
                                 crate::tab_bar::TabBarClick::NewTab => {
-                                    let cols = w.saturating_sub(4);
-                                    let rows = h.saturating_sub(1 + bar_h + 2 + 2);
+                                    let cols = w.saturating_sub(2);
+                                    let rows = h.saturating_sub(1 + bar_h + 2);
                                     let _ = state.add_tab_to_active_group(
                                         crate::window::TabKind::Shell,
                                         None,
@@ -1029,22 +1029,17 @@ fn forward_mouse_to_pty(state: &mut ServerState, button: u8, x: u16, y: u16, pre
 }
 
 /// Compute the content area (where terminal output is rendered) within a window rect.
-/// This accounts for the border, padding, tab bar, and separator.
+/// This accounts for padding, tab bar, and separator (no borders).
 fn window_content_rect(rect: ratatui::layout::Rect) -> Option<ratatui::layout::Rect> {
-    use ratatui::widgets::{Block, Borders, BorderType};
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
-    let inner = block.inner(rect);
-    if inner.width <= 2 || inner.height <= 2 {
+    if rect.width < 3 || rect.height < 3 {
         return None;
     }
     // Padded area: 1 char padding on each side, then tab bar (1 row) + separator (1 row)
     Some(ratatui::layout::Rect::new(
-        inner.x + 1,
-        inner.y + 2,
-        inner.width - 2,
-        inner.height.saturating_sub(2),
+        rect.x + 1,
+        rect.y + 2,
+        rect.width.saturating_sub(2),
+        rect.height.saturating_sub(2),
     ))
 }
 

@@ -4,7 +4,6 @@
 //! allowing the server to detect clicks on tabs and the [+] button.
 
 use ratatui::layout::Rect;
-use ratatui::widgets::{Block, BorderType, Borders};
 
 use pane_protocol::config::Theme;
 use crate::window::Window;
@@ -32,14 +31,10 @@ pub enum TabBarClick {
 /// Compute the tab bar area for a given pane group within its visible rect.
 /// Returns None if the area is too small.
 pub fn tab_bar_area(_group: &Window, area: Rect) -> Option<Rect> {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
-    let inner = block.inner(area);
-    if inner.width <= 2 || inner.height == 0 {
+    if area.width < 3 || area.height < 3 {
         return None;
     }
-    let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, 1);
+    let padded = Rect::new(area.x + 1, area.y, area.width.saturating_sub(2), 1);
     Some(padded)
 }
 
@@ -199,8 +194,8 @@ mod tests {
     #[test]
     fn test_tab_bar_area_too_small_width() {
         let group = make_group_with_tabs(&["shell"]);
-        // Width too narrow: border (2) + padding (2) = need at least 5 width for inner > 2
-        let area = Rect::new(0, 0, 4, 10);
+        // Width too narrow: need at least 3 for padding (2) + 1 content
+        let area = Rect::new(0, 0, 2, 10);
         let result = tab_bar_area(&group, area);
         assert!(result.is_none());
     }
@@ -208,7 +203,7 @@ mod tests {
     #[test]
     fn test_tab_bar_area_too_small_height() {
         let group = make_group_with_tabs(&["shell"]);
-        // Height 2: border takes 2, inner height = 0
+        // Height 2: need at least 3 (tab bar + separator + content)
         let area = Rect::new(0, 0, 80, 2);
         let result = tab_bar_area(&group, area);
         assert!(result.is_none());
@@ -217,13 +212,13 @@ mod tests {
     #[test]
     fn test_tab_bar_area_minimum_viable() {
         let group = make_group_with_tabs(&["shell"]);
-        // Border 2 + padding 2 inner = 1, border 2 inner height = 1
+        // Padding 2, so width 6 gives 4 content width
         let area = Rect::new(0, 0, 6, 3);
         let result = tab_bar_area(&group, area);
         assert!(result.is_some());
         let bar = result.unwrap();
         assert_eq!(bar.height, 1);
-        assert_eq!(bar.width, 2); // inner.width(4) - 2 padding
+        assert_eq!(bar.width, 4); // 6 - 2 padding
     }
 
     // ---- tab_bar_layout ----

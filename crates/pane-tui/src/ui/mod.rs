@@ -34,10 +34,10 @@ use ratatui::Frame;
 
 use crate::client::{Client, Focus};
 
-/// Cursor X offset within a window: 1 (border) + 1 (padding).
-const WINDOW_CONTENT_X_OFFSET: u16 = 2;
-/// Cursor Y offset within a window: 1 (border) + 1 (tab bar) + 1 (separator).
-const WINDOW_CONTENT_Y_OFFSET: u16 = 3;
+/// Cursor X offset within a window: 1 (padding).
+const WINDOW_CONTENT_X_OFFSET: u16 = 1;
+/// Cursor Y offset within a window: 1 (tab bar) + 1 (separator).
+const WINDOW_CONTENT_Y_OFFSET: u16 = 2;
 
 /// Render the TUI for a connected client (daemon mode).
 pub fn render_client(client: &mut Client, frame: &mut Frame) {
@@ -169,6 +169,9 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
                     window_view::render_folded(is_active, *direction, theme, frame, *rect);
                 }
             }
+
+            // Third pass: separators between adjacent panes
+            render_pane_separators(&resolved, theme, frame);
 
             // Cursor position
             if !ws_bar_focused && matches!(client.focus, Focus::Normal | Focus::Interact) {
@@ -986,6 +989,60 @@ fn render_resize_borders(
             let y = rect.y + rect.height.saturating_sub(1);
             for x in rect.x..rect.x + rect.width {
                 if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
+                    cell.set_style(style);
+                }
+            }
+        }
+    }
+}
+
+/// Draw thin separator lines between horizontally adjacent panes.
+fn render_pane_separators(
+    resolved: &[pane_protocol::layout::ResolvedPane],
+    theme: &pane_protocol::config::Theme,
+    frame: &mut Frame,
+) {
+    use ratatui::style::Style;
+
+    let visible: Vec<Rect> = resolved
+        .iter()
+        .filter_map(|rp| {
+            if let pane_protocol::layout::ResolvedPane::Visible { rect, .. } = rp {
+                Some(*rect)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let style = Style::default().fg(theme.dim);
+    let buf = frame.buffer_mut();
+
+    for i in 0..visible.len() {
+        for j in (i + 1)..visible.len() {
+            let a = visible[i];
+            let b = visible[j];
+
+            // Detect horizontal adjacency (shared vertical edge)
+            let (left, right) = if a.x + a.width == b.x {
+                (a, b)
+            } else if b.x + b.width == a.x {
+                (b, a)
+            } else {
+                continue;
+            };
+
+            let overlap_top = left.y.max(right.y);
+            let overlap_bottom = (left.y + left.height).min(right.y + right.height);
+            if overlap_top >= overlap_bottom {
+                continue;
+            }
+
+            // Draw │ in the last column of the left pane (padding area)
+            let x = left.x + left.width - 1;
+            for y in overlap_top..overlap_bottom {
+                if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
+                    cell.set_symbol("│");
                     cell.set_style(style);
                 }
             }

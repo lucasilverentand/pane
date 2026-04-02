@@ -534,8 +534,8 @@ impl ServerState {
                         id: group_id, rect, ..
                     } => {
                         if let Some(group) = ws.groups.get_mut(&group_id) {
-                            let cols = rect.width.saturating_sub(4);
-                            let rows = rect.height.saturating_sub(4); // 2 borders + tab bar + separator
+                            let cols = rect.width.saturating_sub(2); // padding left + right
+                            let rows = rect.height.saturating_sub(2); // tab bar + separator
                             if cols > 0 && rows > 0 {
                                 for pane in &mut group.tabs {
                                     pane.resize_pty(cols, rows);
@@ -566,8 +566,8 @@ impl ServerState {
         for rp in &resolved {
             if let ResolvedPane::Visible { id, rect, .. } = rp {
                 if *id == ws.active_group {
-                    let cols = rect.width.saturating_sub(4);
-                    let rows = rect.height.saturating_sub(4);
+                    let cols = rect.width.saturating_sub(2);
+                    let rows = rect.height.saturating_sub(2);
                     if cols > 0 && rows > 0 {
                         return (cols, rows);
                     }
@@ -576,8 +576,8 @@ impl ServerState {
         }
 
         // Fallback: assume single window fills body
-        let cols = w.saturating_sub(4);
-        let rows = body_height.saturating_sub(4);
+        let cols = w.saturating_sub(2);
+        let rows = body_height.saturating_sub(2);
         (cols.max(1), rows.max(1))
     }
 

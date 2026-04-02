@@ -2,6 +2,7 @@
 use anyhow::{bail, Result};
 
 use crate::server::command::*;
+use crate::window::TabKind;
 
 /// Parse a tmux-style command string into a `Command`.
 ///
@@ -216,11 +217,23 @@ fn parse_new_workspace(args: &[String]) -> Result<Command> {
     Ok(Command::NewWorkspace { window_name, cwd })
 }
 
+/// Parse a `-k` value into a `TabKind`.
+fn parse_kind(s: &str) -> Result<TabKind> {
+    match s.to_ascii_lowercase().as_str() {
+        "shell" => Ok(TabKind::Shell),
+        "agent" | "claude" => Ok(TabKind::Agent),
+        "nvim" => Ok(TabKind::Nvim),
+        "devserver" | "dev-server" | "server" => Ok(TabKind::DevServer),
+        _ => bail!("unknown tab kind: {s}"),
+    }
+}
+
 fn parse_new_window(args: &[String]) -> Result<Command> {
     let mut target_session = None;
     let mut window_name = None;
     let mut command = None;
     let mut shell = None;
+    let mut kind = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -240,6 +253,10 @@ fn parse_new_window(args: &[String]) -> Result<Command> {
                 shell = Some(args[i + 1].clone());
                 i += 2;
             }
+            "-k" if i + 1 < args.len() => {
+                kind = Some(parse_kind(&args[i + 1])?);
+                i += 2;
+            }
             "-P" | "-F" => {
                 i += 1;
                 if args.get(i).map(|a| !a.starts_with('-')).unwrap_or(false) {
@@ -256,6 +273,7 @@ fn parse_new_window(args: &[String]) -> Result<Command> {
         window_name,
         command,
         shell,
+        kind,
     })
 }
 
@@ -290,6 +308,7 @@ fn parse_split_window(args: &[String]) -> Result<Command> {
     let mut size = None;
     let mut command = None;
     let mut shell = None;
+    let mut kind = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -311,6 +330,10 @@ fn parse_split_window(args: &[String]) -> Result<Command> {
             }
             "-s" if i + 1 < args.len() => {
                 shell = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "-k" if i + 1 < args.len() => {
+                kind = Some(parse_kind(&args[i + 1])?);
                 i += 2;
             }
             "-l" if i + 1 < args.len() => {
@@ -340,6 +363,7 @@ fn parse_split_window(args: &[String]) -> Result<Command> {
         size,
         command,
         shell,
+        kind,
     })
 }
 
@@ -651,6 +675,7 @@ mod tests {
                 window_name: None,
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
     }
@@ -666,6 +691,7 @@ mod tests {
                 size: None,
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
     }
@@ -681,6 +707,7 @@ mod tests {
                 size: None,
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
     }
@@ -696,6 +723,7 @@ mod tests {
                 size: None,
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
     }
@@ -711,6 +739,7 @@ mod tests {
                 size: Some(SplitSize::Percent(70)),
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
     }
@@ -1093,6 +1122,7 @@ mod tests {
                 size: Some(SplitSize::Percent(50)),
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
     }
@@ -1109,6 +1139,7 @@ mod tests {
                 size: None,
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
     }
@@ -1124,6 +1155,7 @@ mod tests {
                 size: Some(SplitSize::Percent(0)),
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
     }
@@ -1140,6 +1172,7 @@ mod tests {
                 size: Some(SplitSize::Percent(255)),
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
     }
@@ -1155,6 +1188,7 @@ mod tests {
                 size: Some(SplitSize::Cells(20)),
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
     }
@@ -1187,6 +1221,7 @@ mod tests {
                 size: None,
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
     }
@@ -1202,6 +1237,7 @@ mod tests {
                 size: None,
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
     }
@@ -1408,6 +1444,7 @@ mod tests {
                 window_name: None,
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
         assert_eq!(
@@ -1434,6 +1471,7 @@ mod tests {
                 size: None,
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
         assert_eq!(parse("killp").unwrap(), Command::KillPane { target: None });
@@ -1575,6 +1613,7 @@ mod tests {
                 window_name: Some("mywin".to_string()),
                 command: None,
                 shell: None,
+                kind: None,
             }
         );
     }
@@ -1589,6 +1628,38 @@ mod tests {
                 window_name: Some("mywin".to_string()),
                 command: None,
                 shell: None,
+                kind: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_new_window_with_kind() {
+        let cmd = parse("new-window -k agent").unwrap();
+        assert_eq!(
+            cmd,
+            Command::NewWindow {
+                target_session: None,
+                window_name: None,
+                command: None,
+                shell: None,
+                kind: Some(TabKind::Agent),
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_split_window_with_kind() {
+        let cmd = parse("split-window -h -k nvim").unwrap();
+        assert_eq!(
+            cmd,
+            Command::SplitWindow {
+                horizontal: true,
+                target: None,
+                size: None,
+                command: None,
+                shell: None,
+                kind: Some(TabKind::Nvim),
             }
         );
     }

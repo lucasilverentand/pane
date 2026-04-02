@@ -31,6 +31,8 @@ pub enum Command {
         command: Option<String>,
         /// Shell to wrap the command in (e.g. "/bin/zsh -c command").
         shell: Option<String>,
+        /// Tab kind — defaults to Shell when absent.
+        kind: Option<TabKind>,
     },
     KillWindow {
         target: Option<TargetWindow>,
@@ -54,6 +56,8 @@ pub enum Command {
         command: Option<String>,
         /// Shell to wrap the command in.
         shell: Option<String>,
+        /// Tab kind — defaults to Shell when absent.
+        kind: Option<TabKind>,
     },
     KillPane {
         target: Option<TargetPane>,
@@ -278,11 +282,13 @@ pub fn execute(
             window_name,
             command,
             shell,
+            kind,
             ..
         } => {
+            let tab_kind = kind.clone().unwrap_or(TabKind::Shell);
             let (cols, rows) = state.active_window_pty_size();
             let pane_id =
-                state.add_tab_to_active_group(TabKind::Shell, command.clone(), shell.clone(), cols, rows)?;
+                state.add_tab_to_active_group(tab_kind, command.clone(), shell.clone(), cols, rows)?;
             if let Some(wname) = window_name {
                 let ws = state.active_workspace_mut();
                 if let Some(group) = ws.groups.get_mut(&ws.active_group) {
@@ -387,12 +393,13 @@ pub fn execute(
         }
 
         Command::SplitWindow {
-            horizontal, target, command, shell, ..
+            horizontal, target, command, shell, kind, ..
         } => {
             if let Some(target) = target {
                 let group_id = resolve_pane_to_group(target, state, id_map)?;
                 state.active_workspace_mut().active_group = group_id;
             }
+            let tab_kind = kind.clone().unwrap_or(TabKind::Shell);
             let direction = if *horizontal {
                 SplitDirection::Horizontal
             } else {
@@ -400,7 +407,7 @@ pub fn execute(
             };
             let (cols, rows) = state.active_window_pty_size();
             let (new_group_id, new_pane_id) =
-                state.split_active_group(direction, TabKind::Shell, command.clone(), shell.clone(), cols, rows)?;
+                state.split_active_group(direction, tab_kind, command.clone(), shell.clone(), cols, rows)?;
             let pane_n = id_map.register_pane(new_pane_id);
             let win_n = id_map.register_window(new_group_id);
             broadcast_layout(state, broadcast_tx);
@@ -984,11 +991,11 @@ fn expand_format(
     result = result.replace("#{pane_active}", if is_active { "1" } else { "0" });
     result = result.replace(
         "#{pane_width}",
-        &format!("{}", state.last_size.0.saturating_sub(4)),
+        &format!("{}", state.last_size.0.saturating_sub(2)),
     );
     result = result.replace(
         "#{pane_height}",
-        &format!("{}", state.last_size.1.saturating_sub(4)),
+        &format!("{}", state.last_size.1.saturating_sub(2)),
     );
     // Handle pane_pid: not available directly, use 0 as placeholder
     result = result.replace("#{pane_pid}", "0");
@@ -1791,6 +1798,7 @@ mod tests {
             size: None,
             command: None,
             shell: None,
+            kind: None,
         };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
@@ -1814,6 +1822,7 @@ mod tests {
             size: None,
             command: None,
             shell: None,
+            kind: None,
         };
         execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         assert_eq!(state.active_workspace().groups.len(), 2);
@@ -1829,6 +1838,7 @@ mod tests {
             window_name: None,
             command: None,
             shell: None,
+            kind: None,
         };
         let result = execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         match result {
@@ -1851,6 +1861,7 @@ mod tests {
             window_name: Some("my-named-window".to_string()),
             command: None,
             shell: None,
+            kind: None,
         };
         execute(&cmd, &mut state, &mut id_map, &broadcast_tx).unwrap();
         let ws = state.active_workspace();

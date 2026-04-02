@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
@@ -58,7 +58,7 @@ pub fn render_group_from_snapshot(
     group: &pane_protocol::protocol::WindowSnapshot,
     screen: Option<&vt100::Screen>,
     is_active: bool,
-    is_interact: bool,
+    _is_interact: bool,
     copy_mode_state: Option<&CopyModeState>,
     config: &Config,
     hover: Option<(u16, u16)>,
@@ -75,31 +75,11 @@ pub fn render_group_from_snapshot(
         .and_then(|proc| config.decoration_for(proc))
         .map(|d| d.border_color);
 
-    let border_style = if is_active {
-        let base = decoration_color.unwrap_or(theme.accent);
-        let color = if is_interact {
-            base
-        } else {
-            Theme::dim_color(base, 0.45)
-        };
-        Style::default().fg(color)
-    } else {
-        Style::default().fg(theme.border_inactive)
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(border_style);
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.width <= 2 || inner.height == 0 {
+    if area.width < 3 || area.height < 3 {
         return;
     }
 
-    let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, inner.height);
+    let padded = Rect::new(area.x + 1, area.y, area.width.saturating_sub(2), area.height);
 
     let cms = if is_active { copy_mode_state } else { None };
     let show_search = cms.is_some_and(|c| c.search_active);
