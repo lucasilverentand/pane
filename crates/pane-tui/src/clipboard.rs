@@ -170,7 +170,7 @@ mod tests {
             let expected_len = if n == 0 {
                 0
             } else {
-                ((n as usize + 2) / 3) * 4
+                (n as usize).div_ceil(3) * 4
             };
             assert_eq!(
                 result.len(),
@@ -208,7 +208,7 @@ mod tests {
         assert!(result.ends_with('='));
         assert!(!result.ends_with("=="));
 
-        let expected_len = ((5000 + 2) / 3) * 4;
+        let expected_len = 5000_usize.div_ceil(3) * 4;
         assert_eq!(result.len(), expected_len);
     }
 

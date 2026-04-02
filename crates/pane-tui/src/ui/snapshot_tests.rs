@@ -20,7 +20,7 @@ use pane_protocol::layout::{LayoutNode, Side, SplitDirection, TabId};
 use pane_protocol::protocol::{RenderState, TabSnapshot, WindowSnapshot, WorkspaceSnapshot};
 use pane_protocol::window_types::{TabKind, WindowId};
 
-use crate::client::{Client, Focus};
+use crate::client::Client;
 use crate::ui;
 
 /// Standard terminal size for snapshot tests.
@@ -76,34 +76,31 @@ fn buffer_to_string(buf: &ratatui::buffer::Buffer) -> String {
     output
 }
 
-/// Check if a foreground color is "bright" (active border) vs "dim" (inactive).
-fn is_bright_fg(fg: Color) -> bool {
-    let (r, g, b) = match fg {
-        Color::Rgb(r, g, b) => (r as u16, g as u16, b as u16),
-        Color::White => (255, 255, 255),
-        Color::Gray => (229, 229, 229),
-        Color::DarkGray => (127, 127, 127),
-        // Named accent colors used for active/focused borders
-        Color::Cyan | Color::Yellow | Color::Green | Color::Magenta | Color::Blue | Color::Red => {
-            return true;
-        }
-        _ => return false,
-    };
-    let avg = (r + g + b) / 3;
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let saturation = max - min;
-    // Bright grayscale (dimmed white, DarkGray) or saturated color (accent / dimmed accent)
-    avg > 100 || (max > 80 && saturation > 30)
-}
-
-/// Box-drawing characters (rounded)
-const BORDER_CHARS: &[&str] = &["╭", "╮", "╰", "╯", "│", "─", "┤", "├"];
-
 /// Render with focus markers: active borders use heavy box drawing (┏┓┗┛┃━),
 /// inactive borders stay as thin rounded (╭╮╰╯│─). This makes focus state
 /// visible in text snapshots.
+#[allow(dead_code)]
 fn render_to_styled_string(client: &mut Client, cols: u16, rows: u16) -> String {
+    let border_chars: &[&str] = &["╭", "╮", "╰", "╯", "│", "─", "┤", "├"];
+
+    let is_bright_fg = |fg: Color| -> bool {
+        let (r, g, b) = match fg {
+            Color::Rgb(r, g, b) => (r as u16, g as u16, b as u16),
+            Color::White => (255, 255, 255),
+            Color::Gray => (229, 229, 229),
+            Color::DarkGray => (127, 127, 127),
+            Color::Cyan | Color::Yellow | Color::Green | Color::Magenta | Color::Blue | Color::Red => {
+                return true;
+            }
+            _ => return false,
+        };
+        let avg = (r + g + b) / 3;
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let saturation = max - min;
+        avg > 100 || (max > 80 && saturation > 30)
+    };
+
     let backend = TestBackend::new(cols, rows);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
@@ -116,8 +113,7 @@ fn render_to_styled_string(client: &mut Client, cols: u16, rows: u16) -> String 
         for x in 0..buf.area.width {
             let cell = &buf[(x, y)];
             let sym = cell.symbol();
-            // Replace border characters based on brightness
-            if BORDER_CHARS.contains(&sym) && is_bright_fg(cell.fg) {
+            if border_chars.contains(&sym) && is_bright_fg(cell.fg) {
                 let heavy = match sym {
                     "╭" => "┏",
                     "╮" => "┓",

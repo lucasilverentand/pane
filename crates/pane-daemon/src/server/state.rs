@@ -589,6 +589,94 @@ impl ServerState {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Build RenderState from ServerState
+// ---------------------------------------------------------------------------
+
+use pane_protocol::protocol::{
+    FloatingWindowSnapshot, RenderState, TabSnapshot, WindowSnapshot, WorkspaceSnapshot,
+};
+
+/// Build a RenderState for a specific client, using their active_workspace.
+pub fn render_state_for_client(state: &ServerState, active_workspace: usize) -> RenderState {
+    let mut rs = render_state_from_server(state);
+    rs.active_workspace = active_workspace.min(rs.workspaces.len().saturating_sub(1));
+    rs
+}
+
+#[allow(dead_code)]
+pub fn render_state_from_server(state: &ServerState) -> RenderState {
+    let workspaces = state
+        .workspaces
+        .iter()
+        .map(|ws| {
+            let groups = ws
+                .groups
+                .iter()
+                .map(|(gid, group)| WindowSnapshot {
+                    id: *gid,
+                    tabs: group
+                        .tabs
+                        .iter()
+                        .map(|pane| {
+                            let (rows, cols) = pane.screen().size();
+                            let fg = match (&pane.foreground_process, &pane.foreground_process_path) {
+                                (Some(name), _) if state.config.decoration_for(name).is_some() => {
+                                    Some(name.clone())
+                                }
+                                (_, Some(path)) => {
+                                    let resolved = state.config.decoration_for_path(path)
+                                        .map(|d| d.process.clone());
+                                    resolved.or_else(|| pane.foreground_process.clone())
+                                }
+                                (name, _) => name.clone(),
+                            };
+                            TabSnapshot {
+                                id: pane.id,
+                                kind: pane.kind.clone(),
+                                title: pane.title.clone(),
+                                exited: pane.exited,
+                                foreground_process: fg,
+                                cwd: pane.cwd.to_string_lossy().to_string(),
+                                cols,
+                                rows,
+                            }
+                        })
+                        .collect(),
+                    active_tab: group.active_tab,
+                    name: group.name.clone(),
+                })
+                .collect();
+            WorkspaceSnapshot {
+                name: ws.name.clone(),
+                cwd: ws.cwd.to_string_lossy().to_string(),
+                layout: ws.layout.clone(),
+                groups,
+                active_group: ws.active_group,
+                sync_panes: ws.sync_panes,
+                folded_windows: ws.folded_windows.clone(),
+                zoomed_window: ws.zoomed_window,
+                floating_windows: ws
+                    .floating_windows
+                    .iter()
+                    .map(|fw| FloatingWindowSnapshot {
+                        id: fw.id,
+                        x: fw.x,
+                        y: fw.y,
+                        width: fw.width,
+                        height: fw.height,
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+
+    RenderState {
+        workspaces,
+        active_workspace: state.active_workspace,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -954,7 +1042,7 @@ mod tests {
 
     #[test]
     fn test_handle_pty_exited_clears_zoomed_window() {
-        let (mut state, gid1, gid2, _rx) = make_split_state();
+        let (mut state, gid1, _gid2, _rx) = make_split_state();
         state.active_workspace_mut().zoomed_window = Some(gid1);
 
         // Get the pane id of gid1
@@ -1452,96 +1540,5 @@ mod tests {
         state.active_workspace_mut().zoomed_window = Some(gid1);
         let rs = render_state_from_server(&state);
         assert_eq!(rs.workspaces[0].zoomed_window, Some(gid1));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Build RenderState from ServerState
-// ---------------------------------------------------------------------------
-
-use pane_protocol::protocol::{
-    FloatingWindowSnapshot, RenderState, TabSnapshot, WindowSnapshot, WorkspaceSnapshot,
-};
-
-/// Build a RenderState for a specific client, using their active_workspace.
-pub fn render_state_for_client(state: &ServerState, active_workspace: usize) -> RenderState {
-    let mut rs = render_state_from_server(state);
-    rs.active_workspace = active_workspace.min(rs.workspaces.len().saturating_sub(1));
-    rs
-}
-
-#[allow(dead_code)]
-pub fn render_state_from_server(state: &ServerState) -> RenderState {
-    let workspaces = state
-        .workspaces
-        .iter()
-        .map(|ws| {
-            let groups = ws
-                .groups
-                .iter()
-                .map(|(gid, group)| WindowSnapshot {
-                    id: *gid,
-                    tabs: group
-                        .tabs
-                        .iter()
-                        .map(|pane| {
-                            let (rows, cols) = pane.screen().size();
-                            // Resolve foreground process name: if the binary name
-                            // doesn't match any decoration, check the full path.
-                            // e.g. claude installs as `~/.local/share/claude/versions/2.1.74`
-                            let fg = match (&pane.foreground_process, &pane.foreground_process_path) {
-                                (Some(name), _) if state.config.decoration_for(name).is_some() => {
-                                    Some(name.clone())
-                                }
-                                (_, Some(path)) => {
-                                    let resolved = state.config.decoration_for_path(path)
-                                        .map(|d| d.process.clone());
-                                    resolved.or_else(|| pane.foreground_process.clone())
-                                }
-                                (name, _) => name.clone(),
-                            };
-                            TabSnapshot {
-                                id: pane.id,
-                                kind: pane.kind.clone(),
-                                title: pane.title.clone(),
-                                exited: pane.exited,
-                                foreground_process: fg,
-                                cwd: pane.cwd.to_string_lossy().to_string(),
-                                cols,
-                                rows,
-                            }
-                        })
-                        .collect(),
-                    active_tab: group.active_tab,
-                    name: group.name.clone(),
-                })
-                .collect();
-            WorkspaceSnapshot {
-                name: ws.name.clone(),
-                cwd: ws.cwd.to_string_lossy().to_string(),
-                layout: ws.layout.clone(),
-                groups,
-                active_group: ws.active_group,
-                sync_panes: ws.sync_panes,
-                folded_windows: ws.folded_windows.clone(),
-                zoomed_window: ws.zoomed_window,
-                floating_windows: ws
-                    .floating_windows
-                    .iter()
-                    .map(|fw| FloatingWindowSnapshot {
-                        id: fw.id,
-                        x: fw.x,
-                        y: fw.y,
-                        width: fw.width,
-                        height: fw.height,
-                    })
-                    .collect(),
-            }
-        })
-        .collect();
-
-    RenderState {
-        workspaces,
-        active_workspace: state.active_workspace,
     }
 }

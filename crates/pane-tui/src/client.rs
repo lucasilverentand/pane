@@ -75,10 +75,11 @@ pub struct Client {
 /// Each variant implies both *what* is focused and *which keybinds* are active.
 /// Modal variants (Palette, Leader, …) are pushed onto the focus stack and
 /// popped on dismiss.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Focus {
     // Primary modes
     /// Vim-style keybinds, pane navigation.
+    #[default]
     Normal,
     /// Forward all keys to PTY except global bindings.
     Interact,
@@ -99,12 +100,6 @@ pub enum Focus {
     NewWorkspace,
     Scroll,
     Copy,
-}
-
-impl Default for Focus {
-    fn default() -> Self {
-        Focus::Normal
-    }
 }
 
 impl Focus {

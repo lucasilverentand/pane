@@ -87,11 +87,11 @@ fn is_light_terminal() -> bool {
         // macOS: absence of AppleInterfaceStyle means light mode
         #[cfg(target_os = "macos")]
         {
-            return std::process::Command::new("defaults")
+            std::process::Command::new("defaults")
                 .args(["read", "-g", "AppleInterfaceStyle"])
                 .output()
                 .map(|o| !o.status.success())
-                .unwrap_or(false);
+                .unwrap_or(false)
         }
         #[cfg(not(target_os = "macos"))]
         false

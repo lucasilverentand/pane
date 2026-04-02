@@ -36,7 +36,7 @@ mod tests {
     fn resize_border_clone_and_copy() {
         let border = ResizeBorder::Top;
         let copied = border; // Copy
-        let cloned = border.clone();
+        let cloned = border;
         assert_eq!(border, copied);
         assert_eq!(border, cloned);
     }

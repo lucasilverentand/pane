@@ -381,7 +381,7 @@ mod tests {
         let lines = render_screen(parser.screen(), area);
 
         let row0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(row0.chars().nth(0), Some('A'));
+        assert_eq!(row0.chars().next(), Some('A'));
     }
 
     #[test]

@@ -170,7 +170,7 @@ fn nerd_font_home_icon() {
 
     let w_id = new_id();
     let t_id = new_id();
-    let mut home_ws = workspace(
+    let home_ws = workspace(
         "home",
         vec![window(w_id, vec![("zsh", t_id)], None)],
         LayoutNode::Leaf(w_id),

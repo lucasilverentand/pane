@@ -1689,8 +1689,8 @@ mod tests {
 
     #[test]
     fn test_parse_list_windows_with_format() {
-        let fmt = format!("list-windows -F \"#{{window_id}}: #{{window_name}}\"");
-        let cmd = parse(&fmt).unwrap();
+        let fmt = "list-windows -F \"#{window_id}: #{window_name}\"";
+        let cmd = parse(fmt).unwrap();
         assert_eq!(
             cmd,
             Command::ListWindows {
@@ -1701,8 +1701,8 @@ mod tests {
 
     #[test]
     fn test_parse_list_panes_with_format_and_target() {
-        let fmt = format!("list-panes -t @0 -F \"#{{pane_id}}\"");
-        let cmd = parse(&fmt).unwrap();
+        let fmt = "list-panes -t @0 -F \"#{pane_id}\"";
+        let cmd = parse(fmt).unwrap();
         assert_eq!(
             cmd,
             Command::ListPanes {

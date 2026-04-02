@@ -882,6 +882,104 @@ pub fn is_inside_popup(area: Rect, x: u16, y: u16) -> bool {
     x >= popup.x && x < popup.x + popup.width && y >= popup.y && y < popup.y + popup.height
 }
 
+pub fn render(state: &TabPickerState, theme: &Theme, hover: Option<(u16, u16)>, frame: &mut Frame, area: Rect) {
+    let popup_area = compute_popup_area(area);
+
+    let title = match state.mode {
+        TabPickerMode::NewTab => "New Tab",
+        TabPickerMode::SplitHorizontal => "Split Right",
+        TabPickerMode::SplitVertical => "Split Down",
+    };
+
+    let inner = dialog::render_popup(frame, popup_area, title, theme);
+
+    if inner.height < 3 || inner.width < 10 {
+        return;
+    }
+
+    // Filter input with animated placeholder
+    let input_area = Rect::new(inner.x, inner.y, inner.width, 1);
+    let placeholder = state.animated_placeholder();
+    let ph = if placeholder.is_empty() { None } else { Some(placeholder.as_str()) };
+    dialog::render_filter_input_placeholder(frame, input_area, &state.input, ph, theme);
+
+    // Junction separator: ├───┤ connecting to the left/right borders
+    let sep_y = inner.y + 1;
+    let border_style = Style::default().fg(theme.accent);
+    let inner_width = popup_area.width.saturating_sub(2) as usize;
+    let sep_str = format!("├{}┤", "─".repeat(inner_width));
+    let buf = frame.buffer_mut();
+    buf.set_string(popup_area.x, sep_y, &sep_str, border_style);
+
+    // Build list items with section info
+    let filtered = state.filtered_entries();
+    let show_sections = state.input.is_empty();
+    let has_input = !state.input.trim().is_empty();
+    let no_matches = filtered.is_empty();
+
+    // Custom command label shown when input doesn't match or as first option
+    let run_label = format!("Run '{}'", state.input.trim());
+    let run_desc = "Custom command".to_string();
+    let user_shell = default_shell();
+    let shell_hint = std::path::Path::new(&user_shell)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("shell")
+        .to_string();
+
+    let mut items: Vec<dialog::ListItem> = Vec::new();
+
+    // Show "Run '<input>'" at the top when there are no matches
+    if has_input && no_matches {
+        items.push(dialog::ListItem {
+            label: &run_label,
+            description: &run_desc,
+            section: None,
+            hint: Some(&shell_hint),
+        });
+    }
+
+    // Build hint strings for each entry (needs to live long enough)
+    let hints: Vec<Option<String>> = filtered
+        .iter()
+        .map(|(_, entry)| {
+            entry.shell.as_ref().map(|s| {
+                std::path::Path::new(s)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("shell")
+                    .to_string()
+            })
+        })
+        .collect();
+
+    for (idx, (_, entry)) in filtered.iter().enumerate() {
+        let section_label = if show_sections {
+            if entry.favorite {
+                Some("★ Favorites")
+            } else {
+                Some(entry.section.label())
+            }
+        } else {
+            None
+        };
+        items.push(dialog::ListItem {
+            label: &entry.name,
+            description: &entry.description,
+            section: section_label,
+            hint: hints[idx].as_deref(),
+        });
+    }
+
+    let list_area = Rect::new(
+        inner.x,
+        inner.y + 2,
+        inner.width,
+        inner.height.saturating_sub(2),
+    );
+    dialog::render_select_list(frame, list_area, &items, state.selected, show_sections, hover, theme);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1464,102 +1562,4 @@ mod tests {
         assert_eq!(TabPickerSection::from_category("cluster"), TabPickerSection::Cluster);
         assert_eq!(TabPickerSection::from_category("something"), TabPickerSection::Other);
     }
-}
-
-pub fn render(state: &TabPickerState, theme: &Theme, hover: Option<(u16, u16)>, frame: &mut Frame, area: Rect) {
-    let popup_area = compute_popup_area(area);
-
-    let title = match state.mode {
-        TabPickerMode::NewTab => "New Tab",
-        TabPickerMode::SplitHorizontal => "Split Right",
-        TabPickerMode::SplitVertical => "Split Down",
-    };
-
-    let inner = dialog::render_popup(frame, popup_area, title, theme);
-
-    if inner.height < 3 || inner.width < 10 {
-        return;
-    }
-
-    // Filter input with animated placeholder
-    let input_area = Rect::new(inner.x, inner.y, inner.width, 1);
-    let placeholder = state.animated_placeholder();
-    let ph = if placeholder.is_empty() { None } else { Some(placeholder.as_str()) };
-    dialog::render_filter_input_placeholder(frame, input_area, &state.input, ph, theme);
-
-    // Junction separator: ├───┤ connecting to the left/right borders
-    let sep_y = inner.y + 1;
-    let border_style = Style::default().fg(theme.accent);
-    let inner_width = popup_area.width.saturating_sub(2) as usize;
-    let sep_str = format!("├{}┤", "─".repeat(inner_width));
-    let buf = frame.buffer_mut();
-    buf.set_string(popup_area.x, sep_y, &sep_str, border_style);
-
-    // Build list items with section info
-    let filtered = state.filtered_entries();
-    let show_sections = state.input.is_empty();
-    let has_input = !state.input.trim().is_empty();
-    let no_matches = filtered.is_empty();
-
-    // Custom command label shown when input doesn't match or as first option
-    let run_label = format!("Run '{}'", state.input.trim());
-    let run_desc = "Custom command".to_string();
-    let user_shell = default_shell();
-    let shell_hint = std::path::Path::new(&user_shell)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("shell")
-        .to_string();
-
-    let mut items: Vec<dialog::ListItem> = Vec::new();
-
-    // Show "Run '<input>'" at the top when there are no matches
-    if has_input && no_matches {
-        items.push(dialog::ListItem {
-            label: &run_label,
-            description: &run_desc,
-            section: None,
-            hint: Some(&shell_hint),
-        });
-    }
-
-    // Build hint strings for each entry (needs to live long enough)
-    let hints: Vec<Option<String>> = filtered
-        .iter()
-        .map(|(_, entry)| {
-            entry.shell.as_ref().map(|s| {
-                std::path::Path::new(s)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("shell")
-                    .to_string()
-            })
-        })
-        .collect();
-
-    for (idx, (_, entry)) in filtered.iter().enumerate() {
-        let section_label = if show_sections {
-            if entry.favorite {
-                Some("★ Favorites")
-            } else {
-                Some(entry.section.label())
-            }
-        } else {
-            None
-        };
-        items.push(dialog::ListItem {
-            label: &entry.name,
-            description: &entry.description,
-            section: section_label,
-            hint: hints[idx].as_deref(),
-        });
-    }
-
-    let list_area = Rect::new(
-        inner.x,
-        inner.y + 2,
-        inner.width,
-        inner.height.saturating_sub(2),
-    );
-    dialog::render_select_list(frame, list_area, &items, state.selected, show_sections, hover, theme);
 }
