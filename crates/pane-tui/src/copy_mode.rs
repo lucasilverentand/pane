@@ -388,15 +388,19 @@ impl CopyModeState {
             return;
         }
         let query = &self.search_query;
+        let query_char_len = query.chars().count();
         let rows = screen.size().0 as usize;
         for row in 0..rows {
             let line = self.get_line_text(screen, row);
-            let mut start = 0;
-            while let Some(pos) = line[start..].find(query) {
-                let col_start = start + pos;
-                let col_end = col_start + query.len().saturating_sub(1);
+            let mut byte_start = 0;
+            while let Some(pos) = line[byte_start..].find(query) {
+                let match_byte = byte_start + pos;
+                // Convert byte offset to char index for column-based highlighting
+                let col_start = line[..match_byte].chars().count();
+                let col_end = col_start + query_char_len.saturating_sub(1);
                 self.search_matches.push((row, col_start, col_end));
-                start = col_start + 1;
+                // Advance past the first byte of the match
+                byte_start = match_byte + line[match_byte..].chars().next().map_or(1, |c| c.len_utf8());
             }
         }
     }
