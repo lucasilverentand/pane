@@ -674,11 +674,25 @@ fn detect_js_runner(dir: &std::path::Path) -> &'static str {
 }
 
 fn truncate_script_desc(s: &str, max: usize) -> String {
-    if s.len() > max {
-        format!("{}…", &s[..max - 1])
-    } else {
-        s.to_string()
+    use unicode_width::UnicodeWidthStr;
+    if s.width() <= max {
+        return s.to_string();
     }
+    if max <= 1 {
+        return "…".to_string();
+    }
+    let target = max - 1;
+    let mut w = 0;
+    let mut end = 0;
+    for (i, ch) in s.char_indices() {
+        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if w + cw > target {
+            break;
+        }
+        w += cw;
+        end = i + ch.len_utf8();
+    }
+    format!("{}…", &s[..end])
 }
 
 // ---------------------------------------------------------------------------

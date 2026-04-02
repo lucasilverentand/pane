@@ -31,8 +31,57 @@ pub mod workspace_bar;
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use crate::client::{Client, Focus};
+
+/// Truncate a string to at most `max` display-width columns, adding "…" prefix.
+/// Used for path displays that should show the tail end.
+fn truncate_start(s: &str, max: usize) -> String {
+    if s.width() <= max {
+        return s.to_string();
+    }
+    if max <= 1 {
+        return "…".to_string();
+    }
+    let target = max - 1; // leave room for "…"
+    // Walk from end, collecting chars until we hit the target width
+    let chars: Vec<char> = s.chars().collect();
+    let mut w = 0;
+    let mut start = chars.len();
+    for i in (0..chars.len()).rev() {
+        let cw = unicode_width::UnicodeWidthChar::width(chars[i]).unwrap_or(0);
+        if w + cw > target {
+            break;
+        }
+        w += cw;
+        start = i;
+    }
+    let tail: String = chars[start..].iter().collect();
+    format!("…{}", tail)
+}
+
+/// Truncate a string to at most `max` display-width columns, adding "…" suffix.
+fn truncate_end(s: &str, max: usize) -> String {
+    if s.width() <= max {
+        return s.to_string();
+    }
+    if max <= 1 {
+        return "…".to_string();
+    }
+    let target = max - 1; // leave room for "…"
+    let mut w = 0;
+    let mut end = 0;
+    for (i, ch) in s.char_indices() {
+        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if w + cw > target {
+            break;
+        }
+        w += cw;
+        end = i + ch.len_utf8();
+    }
+    format!("{}…", &s[..end])
+}
 
 /// Cursor X offset within a window: 1 (padding).
 const WINDOW_CONTENT_X_OFFSET: u16 = 1;
@@ -475,11 +524,7 @@ fn render_new_workspace_dir_stage(
 
     let input_line = if search_mode {
         let max_w = inner.width.saturating_sub(4) as usize;
-        let display = if path_display.len() > max_w {
-            format!("…{}", &path_display[path_display.len() - max_w + 1..])
-        } else {
-            path_display
-        };
+        let display = truncate_start(&path_display, max_w);
         if has_filter {
             Line::from(vec![
                 Span::styled(" > ", Style::default().fg(theme.accent)),
@@ -498,11 +543,7 @@ fn render_new_workspace_dir_stage(
         let suffix = if has_filter { "_" } else { " →" };
         let reserved = back_prefix.len() + suffix.len();
         let max_w = (inner.width as usize).saturating_sub(reserved + 1);
-        let display = if path_display.len() > max_w {
-            format!("…{}", &path_display[path_display.len() - max_w + 1..])
-        } else {
-            path_display
-        };
+        let display = truncate_start(&path_display, max_w);
         let mut spans = vec![
             Span::styled(
                 format!(" {}", back_prefix),
@@ -600,11 +641,7 @@ fn render_new_workspace_dir_stage(
                     let is_selected = zi == selected;
                     let short = shorten_path(zpath);
                     let display = format!("  {}", short);
-                    let display = if display.len() > max_w {
-                        format!("{}…", &display[..max_w - 1])
-                    } else {
-                        display
-                    };
+                    let display = truncate_end(&display, max_w);
                     let style = if is_selected { selected_style } else { dir_style };
                     let line = Line::from(vec![Span::styled(display, style)]);
                     let line_y = row + (visual_row - scroll) as u16;
@@ -622,11 +659,7 @@ fn render_new_workspace_dir_stage(
                 if visual_row >= scroll {
                     let is_selected = i == selected;
                     let display = format!("  {}/", entry.name);
-                    let display = if display.len() > max_w {
-                        format!("{}…", &display[..max_w - 1])
-                    } else {
-                        display
-                    };
+                    let display = truncate_end(&display, max_w);
                     let style = if is_selected { selected_style } else { dir_style };
                     let line = Line::from(vec![Span::styled(display, style)]);
                     let line_y = row + (visual_row - scroll) as u16;
@@ -715,11 +748,7 @@ fn render_new_workspace_name_stage(
     // ── Selected directory (dimmed context) ──
     let path_display = state.browser.display_path();
     let max_path = inner.width.saturating_sub(4) as usize;
-    let path_short = if path_display.len() > max_path {
-        format!("…{}", &path_display[path_display.len() - max_path + 1..])
-    } else {
-        path_display
-    };
+    let path_short = truncate_start(&path_display, max_path);
     let dir_line = Line::from(vec![
         Span::raw("  "),
         Span::styled(path_short, Style::default().fg(theme.dim)),
