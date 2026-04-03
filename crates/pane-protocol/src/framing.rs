@@ -193,4 +193,26 @@ mod tests {
         let json2 = serde_json::to_string(&received).unwrap();
         assert_eq!(json1, json2);
     }
+
+    #[tokio::test]
+    async fn test_write_frame_rejects_oversized() {
+        let (mut a, mut _b) = UnixStream::pair().unwrap();
+        // MAX_FRAME_SIZE + 1 should be rejected
+        let data = vec![0u8; MAX_FRAME_SIZE as usize + 1];
+        let result = write_frame(&mut a, &data).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[tokio::test]
+    async fn test_read_frame_rejects_oversized() {
+        let (mut a, mut b) = UnixStream::pair().unwrap();
+        // Manually write a length header that exceeds MAX_FRAME_SIZE
+        use tokio::io::AsyncWriteExt;
+        let bad_len: u32 = MAX_FRAME_SIZE + 1;
+        a.write_all(&bad_len.to_be_bytes()).await.unwrap();
+        let result = read_frame(&mut b).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    }
 }
