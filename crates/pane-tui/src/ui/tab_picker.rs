@@ -762,12 +762,7 @@ fn build_entries(
 // ---------------------------------------------------------------------------
 
 fn favorites_path() -> Option<std::path::PathBuf> {
-    std::env::var("HOME").ok().map(|h| {
-        std::path::PathBuf::from(h)
-            .join(".config")
-            .join("pane")
-            .join("favorites")
-    })
+    dirs::config_dir().map(|d| d.join("pane").join("favorites"))
 }
 
 /// Load the set of favorited entry names from disk.
@@ -788,6 +783,9 @@ pub fn load_favorites() -> HashSet<String> {
 /// Persist the set of favorited entry names to disk.
 pub fn save_favorites(favorites: &HashSet<String>) {
     let Some(path) = favorites_path() else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let mut lines: Vec<&str> = favorites.iter().map(|s| s.as_str()).collect();
     lines.sort();
     let content = lines.join("\n") + "\n";
