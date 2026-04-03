@@ -23,6 +23,8 @@ impl Tui {
 
     pub fn enter(&mut self) -> anyhow::Result<()> {
         terminal::enable_raw_mode()?;
+        // Save terminal title (xterm title stack)
+        let _ = io::Write::write_all(&mut io::stdout(), b"\x1b[22;0t");
         execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture,)?;
         self.terminal.clear()?;
         self.entered = true;
@@ -34,6 +36,9 @@ impl Tui {
             self.entered = false;
             let _ = self.terminal.show_cursor();
             let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen,);
+            // Restore terminal title (xterm title stack)
+            let _ = io::Write::write_all(&mut io::stdout(), b"\x1b[23;0t");
+            let _ = io::Write::flush(&mut io::stdout());
             let _ = terminal::disable_raw_mode();
         }
     }
@@ -61,6 +66,9 @@ pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = terminal::disable_raw_mode();
         let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen,);
+        // Restore terminal title
+        let _ = io::Write::write_all(&mut io::stdout(), b"\x1b[23;0t");
+        let _ = io::Write::flush(&mut io::stdout());
         original_hook(panic_info);
     }));
 }
