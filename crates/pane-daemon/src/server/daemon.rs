@@ -749,12 +749,12 @@ async fn handle_client(
                 forward_mouse_to_pty(&mut state, 35, x, y, true);
             }
             ClientRequest::MouseUp { x, y } => {
-                let had_drag = state.lock().await.drag_state.is_some();
                 let mut state = state.lock().await;
                 if state.workspaces.is_empty() { continue; }
                 if let Some(cws) = clients.get_active_workspace(client_id).await {
                     state.active_workspace = cws;
                 }
+                let had_drag = state.drag_state.is_some();
                 if had_drag {
                     state.drag_state = None;
                     let (w, h) = state.last_size;
