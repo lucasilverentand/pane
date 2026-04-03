@@ -192,3 +192,23 @@ fn widget_picker_selected_fifth() {
     let output = render_to_string(&mut client, COLS, ROWS);
     insta::assert_snapshot!("widget_picker_selected_fifth", output);
 }
+
+/// Verify context menu rendering doesn't panic at tiny terminal sizes.
+#[test]
+fn context_menu_tiny_no_panic() {
+    for (cols, rows) in [(1, 1), (5, 5), (10, 8), (0, 0)] {
+        let mut client = base_client();
+        client.focus = Focus::ContextMenu;
+        client.context_menu_state = Some(context_menu::ContextMenuState {
+            items: vec![context_menu::ContextMenuItem {
+                label: "Close".to_string(),
+                action: pane_protocol::config::Action::CloseTab,
+            }],
+            selected: 0,
+            context: context_menu::ContextMenuContext::PaneBody,
+            anchor_x: 5,
+            anchor_y: 5,
+        });
+        let _output = render_to_string(&mut client, cols, rows);
+    }
+}

@@ -67,7 +67,7 @@ pub fn popup_rect(size: PopupSize, anchor: PopupAnchor, area: Rect) -> Rect {
         ),
     };
 
-    match anchor {
+    let rect = match anchor {
         PopupAnchor::Center => {
             let x = area.x + (area.width.saturating_sub(w)) / 2;
             let y = area.y + (area.height.saturating_sub(h)) / 2;
@@ -87,7 +87,9 @@ pub fn popup_rect(size: PopupSize, anchor: PopupAnchor, area: Rect) -> Rect {
             let y = area.y + area.height.saturating_sub(h + 2);
             Rect::new(x, y, w, h)
         }
-    }
+    };
+    // Final clamp: ensure popup stays within the available area
+    rect.intersection(area)
 }
 
 /// Compute the inner area of a popup without rendering (for hit-testing).
