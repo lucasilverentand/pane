@@ -2546,7 +2546,7 @@ async fn send_request(
 fn action_to_command(action: &Action) -> Option<String> {
     match action {
         Action::CloseWorkspace => Some("close-workspace".to_string()),
-        Action::SwitchWorkspace(n) => Some(format!("select-workspace -t {}", (*n as usize) - 1)),
+        Action::SwitchWorkspace(n) => Some(format!("select-workspace -t {}", (*n as usize).saturating_sub(1))),
         // Action::NewTab is handled client-side (opens picker)
         Action::NextTab => Some("next-tab".to_string()),
         Action::PrevTab => Some("prev-tab".to_string()),
@@ -2569,7 +2569,7 @@ fn action_to_command(action: &Action) -> Option<String> {
         Action::ToggleSyncPanes => Some("toggle-sync".to_string()),
         Action::SelectLayout(name) => Some(format!("select-layout {}", name)),
         Action::FocusGroupN(n) => {
-            let ws_idx = (*n as usize) - 1;
+            let ws_idx = (*n as usize).saturating_sub(1);
             Some(format!("select-window -t {}", ws_idx))
         }
         Action::ReloadConfig => Some("reload-config".to_string()),
