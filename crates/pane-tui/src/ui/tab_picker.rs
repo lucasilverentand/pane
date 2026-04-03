@@ -1576,4 +1576,36 @@ mod tests {
         assert_eq!(TabPickerSection::from_category("cluster"), TabPickerSection::Cluster);
         assert_eq!(TabPickerSection::from_category("something"), TabPickerSection::Other);
     }
+
+    #[test]
+    fn truncate_script_desc_short() {
+        assert_eq!(truncate_script_desc("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_script_desc_exact() {
+        assert_eq!(truncate_script_desc("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_script_desc_long() {
+        assert_eq!(truncate_script_desc("hello world", 6), "hello…");
+    }
+
+    #[test]
+    fn truncate_script_desc_max_one() {
+        assert_eq!(truncate_script_desc("hello", 1), "…");
+    }
+
+    #[test]
+    fn truncate_script_desc_multibyte() {
+        // Ensure no panic on multi-byte input
+        assert_eq!(truncate_script_desc("café au lait", 5), "café…");
+    }
+
+    #[test]
+    fn truncate_script_desc_cjk() {
+        // Each CJK char is 2 display columns
+        assert_eq!(truncate_script_desc("你好世界", 5), "你好…");
+    }
 }

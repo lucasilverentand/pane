@@ -1079,3 +1079,98 @@ fn render_pane_separators(
     }
 }
 
+#[cfg(test)]
+mod tests_truncate {
+    use super::*;
+
+    // ── truncate_end ──
+
+    #[test]
+    fn end_short_string_unchanged() {
+        assert_eq!(truncate_end("hello", 10), "hello");
+    }
+
+    #[test]
+    fn end_exact_fit_unchanged() {
+        assert_eq!(truncate_end("hello", 5), "hello");
+    }
+
+    #[test]
+    fn end_truncates_with_ellipsis() {
+        assert_eq!(truncate_end("hello world", 6), "hello…");
+    }
+
+    #[test]
+    fn end_max_one_gives_ellipsis() {
+        assert_eq!(truncate_end("hello", 1), "…");
+    }
+
+    #[test]
+    fn end_max_zero_gives_ellipsis() {
+        assert_eq!(truncate_end("hello", 0), "…");
+    }
+
+    #[test]
+    fn end_empty_string_unchanged() {
+        assert_eq!(truncate_end("", 5), "");
+    }
+
+    #[test]
+    fn end_multibyte_chars_safe() {
+        // "café" — 'é' is 1 display col; 4 total cols; truncate to 3 → "ca…"
+        assert_eq!(truncate_end("café", 3), "ca…");
+    }
+
+    #[test]
+    fn end_cjk_wide_chars() {
+        // Each CJK char is 2 columns wide; "你好世" = 6 cols
+        let r = truncate_end("你好世", 5);
+        assert_eq!(r, "你好…"); // 2+2+1(…) = 5
+    }
+
+    #[test]
+    fn end_emoji_safe() {
+        // "📁data" → emoji is 2 cols, d/a/t/a are 1 each → 6 total
+        let r = truncate_end("📁data", 4);
+        assert_eq!(r, "📁d…"); // 2+1+1(…) = 4
+    }
+
+    // ── truncate_start ──
+
+    #[test]
+    fn start_short_unchanged() {
+        assert_eq!(truncate_start("hello", 10), "hello");
+    }
+
+    #[test]
+    fn start_exact_fit() {
+        assert_eq!(truncate_start("hello", 5), "hello");
+    }
+
+    #[test]
+    fn start_truncates_from_left() {
+        assert_eq!(truncate_start("/a/b/c/d", 5), "…/c/d");
+    }
+
+    #[test]
+    fn start_max_one_gives_ellipsis() {
+        assert_eq!(truncate_start("hello", 1), "…");
+    }
+
+    #[test]
+    fn start_empty_unchanged() {
+        assert_eq!(truncate_start("", 5), "");
+    }
+
+    #[test]
+    fn start_multibyte_safe() {
+        // "données" = 7 display cols; truncate_start to 5 → "…nées"
+        assert_eq!(truncate_start("données", 5), "…nées");
+    }
+
+    #[test]
+    fn start_cjk_wide_chars() {
+        // "你好世界" = 8 cols; truncate_start to 5 → "…世界" (1+2+2=5)
+        assert_eq!(truncate_start("你好世界", 5), "…世界");
+    }
+}
