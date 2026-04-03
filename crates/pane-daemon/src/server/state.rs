@@ -154,6 +154,11 @@ impl ServerState {
         self.next_pane_number.saturating_sub(1)
     }
 
+    /// Resolve the shell for a new tab: explicit shell > config default_shell > $SHELL > /bin/bash.
+    fn resolve_shell(&self, shell: Option<String>) -> Option<String> {
+        shell.or_else(|| self.config.behavior.default_shell.clone())
+    }
+
     pub fn active_workspace(&self) -> &Workspace {
         let idx = self.active_workspace.min(self.workspaces.len().saturating_sub(1));
         &self.workspaces[idx]
@@ -348,6 +353,7 @@ impl ServerState {
         rows: u16,
     ) -> anyhow::Result<TabId> {
         let pane_id = TabId::new_v4();
+        let resolved_shell = self.resolve_shell(shell);
         let tmux_env = self.next_tmux_env();
         let ws_cwd = self.active_workspace().cwd.clone();
         let pane = match Tab::spawn_with_env(
@@ -357,7 +363,7 @@ impl ServerState {
             rows,
             self.event_tx.clone(),
             command,
-            shell,
+            resolved_shell,
             Some(tmux_env),
             Some(&ws_cwd),
         ) {
@@ -387,6 +393,7 @@ impl ServerState {
     ) -> anyhow::Result<(WindowId, TabId)> {
         let new_group_id = WindowId::new_v4();
         let pane_id = TabId::new_v4();
+        let resolved_shell = self.resolve_shell(shell);
         let tmux_env = self.next_tmux_env();
         let ws_cwd = self.active_workspace().cwd.clone();
 
@@ -397,7 +404,7 @@ impl ServerState {
             rows,
             self.event_tx.clone(),
             command,
-            shell,
+            resolved_shell,
             Some(tmux_env),
             Some(&ws_cwd),
         ) {
@@ -430,6 +437,7 @@ impl ServerState {
             }
         });
 
+        let resolved_shell = self.resolve_shell(None);
         let pane = match Tab::spawn_with_env(
             pane_id,
             TabKind::Shell,
@@ -437,7 +445,7 @@ impl ServerState {
             rows,
             self.event_tx.clone(),
             None,
-            None,
+            resolved_shell,
             Some(tmux_env),
             Some(&cwd),
         ) {
@@ -493,6 +501,7 @@ impl ServerState {
             return Ok(());
         }
 
+        let resolved_shell = self.resolve_shell(None);
         let tmux_env = self.next_tmux_env();
         let ws_cwd = self.active_workspace().cwd.clone();
         let new_pane = match Tab::spawn_with_env(
@@ -502,7 +511,7 @@ impl ServerState {
             rows,
             self.event_tx.clone(),
             command,
-            None,
+            resolved_shell,
             Some(tmux_env),
             Some(&ws_cwd),
         ) {
