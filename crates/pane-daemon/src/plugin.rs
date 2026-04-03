@@ -182,14 +182,26 @@ impl PluginManager {
         for i in &matching {
             if let Some(ref mut pc) = self.children[*i] {
                 let line = format!("{}\n", json);
-                if timeout(Duration::from_secs(2), pc.stdin.write_all(line.as_bytes()))
-                    .await
-                    .is_err()
-                {
-                    eprintln!(
-                        "pane: plugin '{}' timed out on write",
-                        self.configs[*i].command
-                    );
+                let write_result =
+                    timeout(Duration::from_secs(2), pc.stdin.write_all(line.as_bytes())).await;
+                let failed = match write_result {
+                    Err(_) => {
+                        eprintln!(
+                            "pane: plugin '{}' timed out on write",
+                            self.configs[*i].command
+                        );
+                        true
+                    }
+                    Ok(Err(e)) => {
+                        eprintln!(
+                            "pane: plugin '{}' write error: {}",
+                            self.configs[*i].command, e
+                        );
+                        true
+                    }
+                    Ok(Ok(())) => false,
+                };
+                if failed {
                     let _ = pc.child.kill().await;
                     self.children[*i] = None;
                     to_restart.push(*i);
