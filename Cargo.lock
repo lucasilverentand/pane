@@ -1068,7 +1068,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "crossterm",
- "dirs",
  "nix 0.29.0",
  "pane-protocol",
  "portable-pty",
@@ -1077,7 +1076,6 @@ dependencies = [
  "serde_json",
  "sysinfo",
  "tokio",
- "uuid",
  "vt100",
 ]
 
@@ -1086,7 +1084,6 @@ name = "pane-protocol"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "crossterm",
  "dirs",
  "ratatui",
@@ -1104,7 +1101,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
- "chrono",
  "clap",
  "crossterm",
  "dirs",
@@ -1113,7 +1109,6 @@ dependencies = [
  "pane-daemon",
  "pane-protocol",
  "ratatui",
- "serde",
  "serde_json",
  "tokio",
  "unicode-width 0.2.0",
