@@ -5,7 +5,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
 /// Maximum frame size: 16 MiB. Prevents memory exhaustion from bad data.
-const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
+pub const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
 
 /// Write a length-prefixed frame to the stream.
 pub async fn write_frame(stream: &mut UnixStream, data: &[u8]) -> std::io::Result<()> {

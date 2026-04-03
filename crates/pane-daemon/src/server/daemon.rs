@@ -638,7 +638,10 @@ async fn handle_client(
                 Ok(j) => j,
                 Err(_) => continue,
             };
-            let len = json.len() as u32;
+            let len: u32 = match json.len().try_into() {
+                Ok(l) if l <= pane_protocol::framing::MAX_FRAME_SIZE => l,
+                _ => continue,
+            };
             use tokio::io::AsyncWriteExt;
             if writer.write_all(&len.to_be_bytes()).await.is_err() {
                 break;
@@ -659,7 +662,7 @@ async fn handle_client(
             Err(_) => break, // Client disconnected
         }
         let len = u32::from_be_bytes(len_buf);
-        if len > 16 * 1024 * 1024 {
+        if len > pane_protocol::framing::MAX_FRAME_SIZE {
             break;
         }
         let mut buf = vec![0u8; len as usize];
@@ -1314,7 +1317,10 @@ pub async fn send_keys(keys: &str) -> Result<()> {
     }
     let mut stream = UnixStream::connect(&path).await?;
     framing::send(&mut stream, &ClientRequest::Attach).await?;
+    // Drain the handshake responses (Attached + LayoutChanged + screen dumps)
     let _: ServerResponse = framing::recv_required(&mut stream).await?;
+    // Read LayoutChanged, ignore
+    let _ = framing::recv::<ServerResponse>(&mut stream).await;
 
     // Parse keys: simple text for now, each character as a key event
     for ch in keys.chars() {

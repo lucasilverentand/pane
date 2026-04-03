@@ -598,7 +598,7 @@ impl Client {
                     Err(_) => break,
                 }
                 let len = u32::from_be_bytes(len_buf);
-                if len > 16 * 1024 * 1024 {
+                if len > pane_protocol::framing::MAX_FRAME_SIZE {
                     break;
                 }
                 let mut buf = vec![0u8; len as usize];
