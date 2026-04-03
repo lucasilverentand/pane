@@ -105,8 +105,9 @@ pub fn dim_background(frame: &mut Frame, area: Rect) {
     let buf = frame.buffer_mut();
     for y in area.y..area.y + area.height {
         for x in area.x..area.x + area.width {
-            let cell = &mut buf[(x, y)];
-            cell.set_style(Style::default().add_modifier(Modifier::DIM));
+            if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
+                cell.set_style(Style::default().add_modifier(Modifier::DIM));
+            }
         }
     }
 }
@@ -503,17 +504,19 @@ pub fn handle_text_input(key: crossterm::event::KeyCode, input: &mut String) -> 
 
 /// Compute a centered rectangle as a percentage of the given area.
 pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let px = percent_x.min(100);
+    let py = percent_y.min(100);
     let vertical = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage((100 - py) / 2),
+        Constraint::Percentage(py),
+        Constraint::Percentage((100 - py) / 2),
     ])
     .split(area);
 
     Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage((100 - px) / 2),
+        Constraint::Percentage(px),
+        Constraint::Percentage((100 - px) / 2),
     ])
     .split(vertical[1])[1]
 }
