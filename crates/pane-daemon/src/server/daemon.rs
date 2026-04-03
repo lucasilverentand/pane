@@ -309,6 +309,7 @@ pub async fn run_server(config: Config) -> Result<()> {
 
     // Set up SIGHUP handler for config reload
     let state_clone = Arc::clone(&state);
+    let broadcast_tx_hup = broadcast_tx.clone();
     tokio::spawn(async move {
         let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
             .expect("failed to register SIGHUP handler");
@@ -317,6 +318,9 @@ pub async fn run_server(config: Config) -> Result<()> {
             let new_config = Config::load();
             let mut state = state_clone.lock().await;
             state.config = new_config;
+            // Broadcast layout so clients pick up theme/decoration changes
+            let render_state = render_state_from_server(&state);
+            let _ = broadcast_tx_hup.send(ServerResponse::LayoutChanged { render_state });
         }
     });
 
