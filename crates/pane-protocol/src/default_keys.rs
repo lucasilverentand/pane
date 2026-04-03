@@ -81,3 +81,32 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
     ]
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::parse_key;
+
+    /// Verify every default key string actually parses into a valid KeyEvent.
+    /// A typo in a key string (e.g. "shfit+h") would silently produce no binding.
+    #[test]
+    fn all_global_defaults_parse() {
+        for (key_str, _action) in global_defaults() {
+            assert!(
+                parse_key(key_str).is_some(),
+                "global default key {:?} failed to parse",
+                key_str,
+            );
+        }
+    }
+
+    #[test]
+    fn all_normal_defaults_parse() {
+        for (key_str, _action) in normal_defaults() {
+            assert!(
+                parse_key(key_str).is_some(),
+                "normal default key {:?} failed to parse",
+                key_str,
+            );
+        }
+    }
+}
