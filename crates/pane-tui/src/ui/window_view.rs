@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
 };
 
@@ -75,25 +75,39 @@ pub fn render_group_from_snapshot(
         .and_then(|proc| config.decoration_for(proc))
         .map(|d| d.border_color);
 
-    if area.width < 3 || area.height < 3 {
+    // Single chrome color: border, active tab, separators, +, indicators all match
+    let chrome_color = if is_active {
+        decoration_color.unwrap_or(theme.accent)
+    } else {
+        theme.border_inactive
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(chrome_color));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.width <= 2 || inner.height == 0 {
         return;
     }
 
-    let padded = Rect::new(area.x + 1, area.y, area.width.saturating_sub(2), area.height);
+    // 1-cell padding inside the border on each side
+    let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, inner.height);
 
     let cms = if is_active { copy_mode_state } else { None };
     let show_search = cms.is_some_and(|c| c.search_active);
-    let mut constraints = vec![Constraint::Length(1), Constraint::Length(1), Constraint::Fill(1)];
+    let mut constraints = vec![Constraint::Length(1), Constraint::Fill(1)];
     if show_search {
         constraints.push(Constraint::Length(1));
     }
     let areas = Layout::vertical(constraints).split(padded);
 
-    let tab_accent = decoration_color;
-    render_tab_bar_from_snapshot(group, theme, tab_accent, is_active, hover, frame, areas[0]);
-    render_tab_separator(theme, is_active, frame, areas[1]);
-    let content_area = areas[2];
-    let search_area = areas.get(3).copied();
+    render_tab_bar_from_snapshot(group, theme, chrome_color, is_active, hover, frame, areas[0]);
+    let content_area = areas[1];
+    let search_area = areas.get(2).copied();
 
     if let Some(screen) = screen {
         render_content(screen, cms, frame, content_area);
@@ -102,17 +116,6 @@ pub fn render_group_from_snapshot(
     if show_search {
         if let Some(search_area) = search_area {
             render_search_bar(cms.unwrap(), theme, frame, search_area);
-        }
-    }
-}
-
-fn render_tab_separator(theme: &Theme, is_active: bool, frame: &mut Frame, area: Rect) {
-    let style = Style::default().fg(if is_active { theme.dim } else { theme.border_inactive });
-    let buf = frame.buffer_mut();
-    for x in area.x..area.x + area.width {
-        if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y: area.y }) {
-            cell.set_symbol("─");
-            cell.set_style(style);
         }
     }
 }
@@ -173,7 +176,7 @@ fn ticker_title(title: &str, max: usize) -> String {
 fn render_tab_bar_from_snapshot(
     group: &pane_protocol::protocol::WindowSnapshot,
     theme: &Theme,
-    decoration_color: Option<Color>,
+    chrome_color: Color,
     is_active: bool,
     hover: Option<(u16, u16)>,
     frame: &mut Frame,
@@ -264,8 +267,7 @@ fn render_tab_bar_from_snapshot(
 
     // Left overflow indicator
     if hidden_left > 0 {
-        let indicator_color = if is_active { theme.dim } else { theme.border_inactive };
-        spans.push(Span::styled("\u{25C2} ", Style::default().fg(indicator_color)));
+        spans.push(Span::styled("\u{25C2} ", Style::default().fg(chrome_color)));
     }
 
     let mut first_visible = true;
@@ -276,8 +278,7 @@ fn render_tab_bar_from_snapshot(
             .enumerate()
         {
             if !first_visible {
-                let sep_color = if is_active { theme.dim } else { theme.border_inactive };
-                spans.push(Span::styled(SEP, Style::default().fg(sep_color)));
+                spans.push(Span::styled(SEP, Style::default().fg(chrome_color)));
             }
             first_visible = false;
 
@@ -287,9 +288,8 @@ fn render_tab_bar_from_snapshot(
             let style = if !is_active {
                 Style::default().fg(theme.border_inactive)
             } else if is_active_tab {
-                let color = decoration_color.unwrap_or(theme.tab_active);
                 Style::default()
-                    .fg(color)
+                    .fg(chrome_color)
                     .add_modifier(Modifier::BOLD)
             } else if is_hovered {
                 Style::default().fg(theme.fg)
@@ -309,8 +309,7 @@ fn render_tab_bar_from_snapshot(
 
     // Right overflow indicator
     if hidden_right > 0 {
-        let indicator_color = if is_active { theme.dim } else { theme.border_inactive };
-        spans.push(Span::styled(" \u{25B8}", Style::default().fg(indicator_color)));
+        spans.push(Span::styled(" \u{25B8}", Style::default().fg(chrome_color)));
     }
 
     let line = Line::from(spans);
@@ -326,7 +325,7 @@ fn render_tab_bar_from_snapshot(
         } else if plus_hovered {
             Style::default().fg(theme.fg)
         } else {
-            Style::default().fg(theme.dim)
+            Style::default().fg(chrome_color)
         };
         frame.buffer_mut().set_string(plus_x, area.y, " + ", plus_style);
     }

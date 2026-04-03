@@ -83,9 +83,9 @@ fn truncate_end(s: &str, max: usize) -> String {
     format!("{}…", &s[..end])
 }
 
-/// Cursor X offset within a window: 1 (padding).
-const WINDOW_CONTENT_X_OFFSET: u16 = 1;
-/// Cursor Y offset within a window: 1 (tab bar) + 1 (separator).
+/// Cursor X offset within a window: 1 (border) + 1 (padding).
+const WINDOW_CONTENT_X_OFFSET: u16 = 2;
+/// Cursor Y offset within a window: 1 (border) + 1 (tab bar).
 const WINDOW_CONTENT_Y_OFFSET: u16 = 2;
 
 /// Render the TUI for a connected client (daemon mode).

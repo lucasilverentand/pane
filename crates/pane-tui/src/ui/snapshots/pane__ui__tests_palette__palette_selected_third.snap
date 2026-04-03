@@ -5,24 +5,36 @@ expression: output
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │  1                                                                                                                +  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  zsh                                                                                                                +
- ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                        ╭ command ─────────────────────────────────────────────────────────────╮
-                        │  _                                                                   │
-                        │──────────────────────────────────────────────────────────────────────│
-                        │  Mode                                                                │
-                        │  Enter Interact Mode — Switch to interact mode (forward keys to PTY) │
-                        │  Enter Normal Mode — Switch to normal mode (vim-style navigation)Ctrl│
-                        │                                                                      │
-                        │  Navigation                                                          │
-                        │  Focus Left — Move focus to the left window              Space w h   │
-                        │  Focus Down — Move focus to the window below             Space w j   │
-                        │  Focus Up — Move focus to the window above               Space w k   │
-                        │  Focus Right — Move focus to the right window            Space w l   │
-                        │                                                                      │
-                        │  Tabs                                                                │
-                        │  New Tab — Open a new tab in the current window          Space t n   │
-                        │  Next Tab — Switch to the next tab                       Space t ]   │
-                        │  Previous Tab — Switch to the previous tab               Space t [   │
-                        ╰──────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  zsh                                                                                                              +  │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                       ╭ command ─────────────────────────────────────────────────────────────╮                       │
+│                       │  _                                                                   │                       │
+│                       │──────────────────────────────────────────────────────────────────────│                       │
+│                       │  Mode                                                                │                       │
+│                       │  Enter Interact Mode — Switch to interact mode (forward keys to PTY) │                       │
+│                       │  Enter Normal Mode — Switch to normal mode (vim-style navigation)Ctrl│                       │
+│                       │                                                                      │                       │
+│                       │  Navigation                                                          │                       │
+│                       │  Focus Left — Move focus to the left window              Space w h   │                       │
+│                       │  Focus Down — Move focus to the window below             Space w j   │                       │
+│                       │  Focus Up — Move focus to the window above               Space w k   │                       │
+│                       │  Focus Right — Move focus to the right window            Space w l   │                       │
+│                       │                                                                      │                       │
+│                       │  Tabs                                                                │                       │
+│                       │  New Tab — Open a new tab in the current window          Space t n   │                       │
+│                       │  Next Tab — Switch to the next tab                       Space t ]   │                       │
+│                       │  Previous Tab — Switch to the previous tab               Space t [   │                       │
+│                       ╰──────────────────────────────────────────────────────────────────────╯                       │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
   type  filter ·  Enter  run ·  Esc  cancel

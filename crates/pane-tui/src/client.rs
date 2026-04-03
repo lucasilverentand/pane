@@ -2405,11 +2405,16 @@ impl Client {
         for rp in &resolved {
             if let pane_protocol::layout::ResolvedPane::Visible { id: group_id, rect } = rp {
                 if let Some(group) = ws.groups.iter().find(|g| g.id == *group_id) {
-                    // Compute tab bar area (no borders, just padding)
-                    if rect.width < 3 || rect.height < 3 {
+                    // Compute tab bar area (inside border + padding)
+                    use ratatui::widgets::{Block, Borders, BorderType};
+                    let block = Block::default()
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded);
+                    let inner = block.inner(*rect);
+                    if inner.width <= 2 || inner.height == 0 {
                         continue;
                     }
-                    let padded = Rect::new(rect.x + 1, rect.y, rect.width.saturating_sub(2), 1);
+                    let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, 1);
                     if y != padded.y {
                         continue;
                     }

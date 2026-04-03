@@ -1039,17 +1039,22 @@ fn forward_mouse_to_pty(state: &mut ServerState, button: u8, x: u16, y: u16, pre
 }
 
 /// Compute the content area (where terminal output is rendered) within a window rect.
-/// This accounts for padding, tab bar, and separator (no borders).
+/// This accounts for the border, padding, and tab bar.
 fn window_content_rect(rect: ratatui::layout::Rect) -> Option<ratatui::layout::Rect> {
-    if rect.width < 3 || rect.height < 3 {
+    use ratatui::widgets::{Block, Borders, BorderType};
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(rect);
+    if inner.width <= 2 || inner.height <= 1 {
         return None;
     }
-    // Padded area: 1 char padding on each side, then tab bar (1 row) + separator (1 row)
+    // Inside border: 1 char padding on each side, then tab bar (1 row)
     Some(ratatui::layout::Rect::new(
-        rect.x + 1,
-        rect.y + 2,
-        rect.width.saturating_sub(2),
-        rect.height.saturating_sub(2),
+        inner.x + 1,
+        inner.y + 1,
+        inner.width - 2,
+        inner.height.saturating_sub(1),
     ))
 }
 

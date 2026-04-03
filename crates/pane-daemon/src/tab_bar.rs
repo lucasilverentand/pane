@@ -31,10 +31,15 @@ pub enum TabBarClick {
 /// Compute the tab bar area for a given pane group within its visible rect.
 /// Returns None if the area is too small.
 pub fn tab_bar_area(_group: &Window, area: Rect) -> Option<Rect> {
-    if area.width < 3 || area.height < 3 {
+    use ratatui::widgets::{Block, Borders, BorderType};
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(area);
+    if inner.width <= 2 || inner.height == 0 {
         return None;
     }
-    let padded = Rect::new(area.x + 1, area.y, area.width.saturating_sub(2), 1);
+    let padded = Rect::new(inner.x + 1, inner.y, inner.width - 2, 1);
     Some(padded)
 }
 
@@ -203,7 +208,7 @@ mod tests {
     #[test]
     fn test_tab_bar_area_too_small_height() {
         let group = make_group_with_tabs(&["shell"]);
-        // Height 2: need at least 3 (tab bar + separator + content)
+        // Height 2: border takes 2, leaving 0 inner height
         let area = Rect::new(0, 0, 80, 2);
         let result = tab_bar_area(&group, area);
         assert!(result.is_none());
@@ -212,13 +217,13 @@ mod tests {
     #[test]
     fn test_tab_bar_area_minimum_viable() {
         let group = make_group_with_tabs(&["shell"]);
-        // Padding 2, so width 6 gives 4 content width
-        let area = Rect::new(0, 0, 6, 3);
+        // Border 2 + padding 2 = 4, so width 8 gives inner 6, padded 4
+        let area = Rect::new(0, 0, 8, 5);
         let result = tab_bar_area(&group, area);
         assert!(result.is_some());
         let bar = result.unwrap();
         assert_eq!(bar.height, 1);
-        assert_eq!(bar.width, 4); // 6 - 2 padding
+        assert_eq!(bar.width, 4); // 8 - 2 border - 2 padding
     }
 
     // ---- tab_bar_layout ----
