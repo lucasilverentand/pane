@@ -460,7 +460,8 @@ impl ServerState {
         if self.workspaces.is_empty() {
             return true;
         }
-        self.workspaces.remove(self.active_workspace);
+        let idx = self.active_workspace.min(self.workspaces.len() - 1);
+        self.workspaces.remove(idx);
         if self.workspaces.is_empty() {
             self.active_workspace = 0;
             return true;
