@@ -373,3 +373,33 @@ fn resize_small_terminal() {
     let output = render_to_accent_string(&mut client, 60, 20);
     insta::assert_snapshot!("resize_small_terminal", output);
 }
+
+/// Verify resize mode doesn't panic at degenerate terminal sizes.
+#[test]
+fn resize_tiny_no_panic() {
+    for (cols, rows) in [(1, 1), (5, 5), (10, 8), (0, 0)] {
+        let mut client = Client::for_test(Config::default());
+        let w1 = new_id();
+        let w2 = new_id();
+        let t1 = new_id();
+        let t2 = new_id();
+        let layout = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(w1)),
+            second: Box::new(LayoutNode::Leaf(w2)),
+        };
+        client.render_state = RenderState {
+            workspaces: vec![workspace("1", vec![
+                window(w1, vec![("zsh", t1)], None),
+                window(w2, vec![("zsh", t2)], None),
+            ], layout)],
+            active_workspace: 0,
+        };
+        client.focus = Focus::Resize;
+        client.resize_state = Some(ResizeState {
+            selected: Some(ResizeBorder::Left),
+        });
+        let _output = render_to_accent_string(&mut client, cols, rows);
+    }
+}

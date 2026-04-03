@@ -249,3 +249,15 @@ fn tab_picker_small_terminal() {
     let output = render_to_string(&mut client, 60, 20);
     insta::assert_snapshot!("tab_picker_small_terminal", output);
 }
+
+/// Verify tab picker doesn't panic at degenerate terminal sizes.
+#[test]
+fn tab_picker_tiny_no_panic() {
+    for (cols, rows) in [(1, 1), (5, 5), (10, 8), (0, 0)] {
+        let mut client = base_client();
+        client.focus = Focus::TabPicker;
+        let state = TabPickerState::new(&test_programs(), &[], &HashSet::new());
+        client.tab_picker_state = Some(state);
+        let _output = render_to_string(&mut client, cols, rows);
+    }
+}
