@@ -348,9 +348,9 @@ impl Tab {
     }
 
     pub fn scroll_up(&mut self, n: usize) {
-        let max_offset = self.vt.screen().size().0 as usize;
-        self.scroll_offset = self.scroll_offset.saturating_add(n).min(max_offset);
+        self.scroll_offset = self.scroll_offset.saturating_add(n);
         self.vt.screen_mut().set_scrollback(self.scroll_offset);
+        // Re-read: set_scrollback clamps to the actual scrollback length
         self.scroll_offset = self.vt.screen().scrollback();
     }
 
