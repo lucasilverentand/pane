@@ -1,5 +1,4 @@
 target/
-Cargo.lock
 
 # GhosttyKit — built locally via scripts/setup.sh, not committed
 pane-app/GhosttyKit.xcframework
