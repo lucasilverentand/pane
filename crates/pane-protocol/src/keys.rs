@@ -16,6 +16,20 @@ pub fn key_to_bytes(key: KeyEvent, application_cursor: bool) -> Vec<u8> {
                 if c.is_ascii_uppercase() {
                     return vec![c.to_ascii_lowercase() as u8 - b'a' + 1];
                 }
+                // Ctrl + punctuation that maps to control codes
+                return match c {
+                    ' ' | '@' => vec![0x00], // NUL
+                    '[' => vec![0x1b],        // ESC
+                    '\\' => vec![0x1c],       // FS (SIGQUIT)
+                    ']' => vec![0x1d],        // GS
+                    '^' => vec![0x1e],        // RS
+                    '_' | '/' => vec![0x1f],  // US
+                    _ => {
+                        // Unknown Ctrl combo — just send the char
+                        let mut buf = [0u8; 4];
+                        c.encode_utf8(&mut buf).as_bytes().to_vec()
+                    }
+                };
             }
             if mods.contains(KeyModifiers::ALT) {
                 let mut bytes = vec![0x1b];
@@ -432,6 +446,57 @@ mod tests {
     fn unicode_char() {
         let bytes = kb(plain(KeyCode::Char('é')));
         assert_eq!(bytes, "é".as_bytes().to_vec());
+    }
+
+    // --- Ctrl+punctuation ---
+
+    #[test]
+    fn ctrl_space_is_nul() {
+        assert_eq!(
+            kb(key(KeyCode::Char(' '), KeyModifiers::CONTROL)),
+            vec![0x00]
+        );
+    }
+
+    #[test]
+    fn ctrl_backslash_is_fs() {
+        // Ctrl+\ sends SIGQUIT to foreground process
+        assert_eq!(
+            kb(key(KeyCode::Char('\\'), KeyModifiers::CONTROL)),
+            vec![0x1c]
+        );
+    }
+
+    #[test]
+    fn ctrl_bracket_is_esc() {
+        assert_eq!(
+            kb(key(KeyCode::Char('['), KeyModifiers::CONTROL)),
+            vec![0x1b]
+        );
+    }
+
+    #[test]
+    fn ctrl_close_bracket_is_gs() {
+        assert_eq!(
+            kb(key(KeyCode::Char(']'), KeyModifiers::CONTROL)),
+            vec![0x1d]
+        );
+    }
+
+    #[test]
+    fn ctrl_caret_is_rs() {
+        assert_eq!(
+            kb(key(KeyCode::Char('^'), KeyModifiers::CONTROL)),
+            vec![0x1e]
+        );
+    }
+
+    #[test]
+    fn ctrl_underscore_is_us() {
+        assert_eq!(
+            kb(key(KeyCode::Char('_'), KeyModifiers::CONTROL)),
+            vec![0x1f]
+        );
     }
 
     // --- Unmapped keycodes ---
