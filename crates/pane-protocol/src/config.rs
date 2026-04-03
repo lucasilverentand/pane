@@ -345,7 +345,7 @@ impl KeyMap {
         self.map.get(key)
     }
 
-    /// Build a reverse map: Action → Vec<KeyEvent> for display purposes.
+    /// Build a reverse map: `Action → Vec<KeyEvent>` for display purposes.
     pub fn reverse_map(&self) -> HashMap<Action, Vec<KeyEvent>> {
         let mut reverse: HashMap<Action, Vec<KeyEvent>> = HashMap::new();
         for (key, action) in &self.map {

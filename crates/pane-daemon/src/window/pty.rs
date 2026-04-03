@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 /// Environment variables to make child processes think they're inside tmux.
 pub struct TmuxEnv {
-    /// Value for $TMUX: "<socket_path>,<pid>,0"
+    /// Value for `$TMUX`: `"<socket_path>,<pid>,0"`
     pub tmux_value: String,
     /// Value for $TMUX_PANE: "%N"
     pub tmux_pane: String,
