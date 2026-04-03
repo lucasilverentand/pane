@@ -378,6 +378,61 @@ fn small_terminal() {
     insta::assert_snapshot!("small_terminal", output);
 }
 
+/// Verify rendering doesn't panic at extreme terminal sizes.
+#[test]
+fn tiny_terminal_no_panic() {
+    let mut client = Client::for_test(Config::default());
+    let w_id = new_id();
+    let t_id = new_id();
+
+    client.render_state = RenderState {
+        workspaces: vec![workspace(
+            "1",
+            vec![window(w_id, vec![("zsh", t_id)], None)],
+            LayoutNode::Leaf(w_id),
+        )],
+        active_workspace: 0,
+    };
+
+    // These should not panic even at degenerate sizes
+    for (cols, rows) in [(1, 1), (3, 3), (5, 5), (10, 4), (4, 10), (0, 0)] {
+        let _output = render_to_string(&mut client, cols, rows);
+    }
+}
+
+/// Verify split layouts don't panic at tiny sizes.
+#[test]
+fn tiny_terminal_split_no_panic() {
+    let mut client = Client::for_test(Config::default());
+    let w1 = new_id();
+    let w2 = new_id();
+    let t1 = new_id();
+    let t2 = new_id();
+
+    let layout = LayoutNode::Split {
+        direction: pane_protocol::layout::SplitDirection::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Leaf(w1)),
+        second: Box::new(LayoutNode::Leaf(w2)),
+    };
+
+    client.render_state = RenderState {
+        workspaces: vec![workspace(
+            "1",
+            vec![
+                window(w1, vec![("zsh", t1)], None),
+                window(w2, vec![("zsh", t2)], None),
+            ],
+            layout,
+        )],
+        active_workspace: 0,
+    };
+
+    for (cols, rows) in [(1, 1), (3, 3), (5, 5), (10, 5), (0, 0)] {
+        let _output = render_to_string(&mut client, cols, rows);
+    }
+}
+
 #[test]
 fn named_window() {
     let mut client = Client::for_test(Config::default());

@@ -57,7 +57,10 @@ pub fn popup_rect(size: PopupSize, anchor: PopupAnchor, area: Rect) -> Rect {
                 }
             };
         }
-        PopupSize::Fixed { width, height } => (width, height),
+        PopupSize::Fixed { width, height } => (
+            width.min(area.width),
+            height.min(area.height),
+        ),
         PopupSize::FixedClamped { width, height, pad } => (
             width.min(area.width.saturating_sub(pad)),
             height.min(area.height.saturating_sub(pad)),

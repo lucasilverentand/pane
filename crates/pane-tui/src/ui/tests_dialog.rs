@@ -134,6 +134,38 @@ fn confirm_small_terminal() {
     insta::assert_snapshot!("confirm_small_terminal", output);
 }
 
+/// Verify dialog overlays don't panic at degenerate terminal sizes.
+#[test]
+fn dialogs_at_tiny_sizes_no_panic() {
+    for (cols, rows) in [(1, 1), (5, 5), (10, 8), (0, 0)] {
+        // Confirm dialog
+        {
+            let mut client = base_client();
+            client.focus = Focus::Confirm;
+            client.confirm_message = Some("test?".into());
+            let _output = render_to_string(&mut client, cols, rows);
+        }
+        // Rename dialog
+        {
+            let mut client = base_client();
+            client.focus = Focus::Rename;
+            client.rename_target = RenameTarget::Window;
+            client.rename_input = "x".into();
+            let _output = render_to_string(&mut client, cols, rows);
+        }
+        // Palette
+        {
+            let mut client = base_client();
+            client.focus = Focus::Palette;
+            client.palette_state = Some(crate::ui::palette::UnifiedPaletteState::new_full_search(
+                &client.config.keys,
+                &client.config.leader,
+            ));
+            let _output = render_to_string(&mut client, cols, rows);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Rename dialog tests
 // ---------------------------------------------------------------------------
