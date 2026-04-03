@@ -55,11 +55,15 @@ impl Workspace {
 
     #[allow(dead_code)]
     pub fn active_group(&self) -> &Window {
-        self.groups.get(&self.active_group).unwrap()
+        self.groups.get(&self.active_group).expect(
+            "active_group ID not in groups map — layout/groups out of sync",
+        )
     }
 
     pub fn active_group_mut(&mut self) -> &mut Window {
-        self.groups.get_mut(&self.active_group).unwrap()
+        self.groups.get_mut(&self.active_group).expect(
+            "active_group ID not in groups map — layout/groups out of sync",
+        )
     }
 
     #[allow(dead_code)]

@@ -959,7 +959,10 @@ fn handle_mouse_down_server(state: &mut ServerState, x: u16, y: u16) {
                             state.active_workspace_mut().active_group = *group_id;
                             match click {
                                 crate::tab_bar::TabBarClick::Tab(i) => {
-                                    state.active_workspace_mut().active_group_mut().active_tab = i;
+                                    let group = state.active_workspace_mut().active_group_mut();
+                                    if i < group.tabs.len() {
+                                        group.active_tab = i;
+                                    }
                                 }
                                 crate::tab_bar::TabBarClick::NewTab => {
                                     let cols = w.saturating_sub(2);
