@@ -78,6 +78,7 @@ pub fn normal_defaults() -> Vec<(&'static str, Action)> {
         (":", Action::CommandPalette),   // Open the command palette
         // ── Quit ────────────────────────────────────────────────────────
         ("q", Action::Quit),             // Quit pane
+        ("o", Action::ToggleOverview),   // Toggle workspace overview grid
     ]
 }
 

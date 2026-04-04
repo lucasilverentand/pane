@@ -19,6 +19,11 @@ pub fn get_buttons(client: &Client) -> &'static [(&'static str, &'static str)] {
             ("n", "new"),
             ("j", "exit bar"),
         ],
+        Focus::Overview => &[
+            ("hjkl", "navigate"),
+            ("Enter", "switch"),
+            ("Esc", "back"),
+        ],
         Focus::Normal => &[
             ("\u{2423}", "leader"),
             (":", "commands"),

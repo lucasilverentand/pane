@@ -321,6 +321,14 @@ pub fn action_registry() -> &'static [ActionMeta] {
             palette_visible: true,
             action: CloseWorkspace,
         },
+        ActionMeta {
+            name: "toggle_overview",
+            display_name: "Overview",
+            description: "Toggle workspace overview grid",
+            category: Workspaces,
+            palette_visible: true,
+            action: ToggleOverview,
+        },
         // ── Session ─────────────────────────────────────────────────────
         ActionMeta {
             name: "detach",
@@ -639,7 +647,7 @@ mod tests {
 
     #[test]
     fn workspace_actions_in_workspaces_category() {
-        for name in ["new_workspace", "close_workspace", "rename_workspace"] {
+        for name in ["new_workspace", "close_workspace", "rename_workspace", "toggle_overview"] {
             let meta = action_by_name(name).unwrap();
             assert_eq!(
                 meta.category,

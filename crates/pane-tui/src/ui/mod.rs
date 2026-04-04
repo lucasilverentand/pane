@@ -20,6 +20,7 @@ pub mod status_bar;
 #[cfg(test)]
 mod tests_tab_picker;
 pub mod tab_picker;
+pub mod overview;
 #[allow(dead_code)]
 pub mod widget_picker;
 #[cfg(test)]
@@ -132,7 +133,9 @@ pub fn render_client(client: &mut Client, frame: &mut Frame) {
     // Status bar
     status_bar::render_client(client, theme, frame, footer);
 
-    if let Some(ws) = client.active_workspace() {
+    if client.focus == Focus::Overview {
+        overview::render_overview(client, frame, body);
+    } else if let Some(ws) = client.active_workspace() {
         let copy_mode_state = if client.focus == Focus::Copy {
             client.copy_mode_state.as_ref()
         } else {

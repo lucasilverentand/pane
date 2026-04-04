@@ -56,6 +56,7 @@ pub enum Action {
     ToggleFold,
     ReloadConfig,
     ResizeMode,
+    ToggleOverview,
 }
 
 // ---------------------------------------------------------------------------
@@ -512,6 +513,7 @@ fn default_leader_tree() -> LeaderNode {
         insert_leaf(&mut children, "n", Action::NewWorkspace, "New");
         insert_leaf(&mut children, "c", Action::CloseWorkspace, "Close");
         insert_leaf(&mut children, "r", Action::RenameWorkspace, "Rename");
+        insert_leaf(&mut children, "o", Action::ToggleOverview, "Overview");
         for n in 1..=9u8 {
             let ch = (b'0' + n) as char;
             let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);

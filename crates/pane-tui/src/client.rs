@@ -68,6 +68,8 @@ pub struct Client {
     pub new_workspace_input: Option<NewWorkspaceInputState>,
     /// State for the widget picker overlay.
     pub widget_picker_state: Option<WidgetPickerState>,
+    /// Selected workspace index in overview mode.
+    pub overview_selected: usize,
 }
 
 /// Unified focus state: replaces the old Mode + FocusLocation + focused_widget.
@@ -83,6 +85,8 @@ pub enum Focus {
     Normal,
     /// Forward all keys to PTY except global bindings.
     Interact,
+    /// Grid view of all workspaces for monitoring.
+    Overview,
 
     // UI chrome
     /// Workspace bar has focus (left/right to switch workspaces).
@@ -457,6 +461,7 @@ impl Client {
             rename_target: RenameTarget::Window,
             new_workspace_input: None,
             widget_picker_state: None,
+            overview_selected: 0,
         }
     }
 
@@ -494,6 +499,7 @@ impl Client {
             rename_target: RenameTarget::Window,
             new_workspace_input: None,
             widget_picker_state: None,
+            overview_selected: 0,
         }
     }
 
@@ -1033,6 +1039,28 @@ impl Client {
                             }
                         }
                     }
+                } else if self.focus == Focus::Overview {
+                    // Check workspace bar clicks in overview too
+                    let show_workspace_bar = !self.render_state.workspaces.is_empty();
+                    if show_workspace_bar && y < crate::ui::workspace_bar::HEIGHT {
+                        // Ignore workspace bar clicks in overview — stay in overview
+                    } else {
+                        // Hit-test overview tiles
+                        let body_y = if show_workspace_bar { crate::ui::workspace_bar::HEIGHT } else { 0 };
+                        let size = tui.size()?;
+                        let body = Rect::new(0, body_y, size.width, size.height.saturating_sub(body_y + 1));
+                        let count = self.render_state.workspaces.len();
+                        if let Some(idx) = crate::ui::overview::hit_test_tile(count, body, x, y) {
+                            self.render_state.active_workspace = idx;
+                            self.focus = Focus::Normal;
+                            let mut w = writer.lock().await;
+                            let _ = send_request(
+                                &mut w,
+                                &ClientRequest::Command(format!("select-workspace -t {}", idx)),
+                            )
+                            .await;
+                        }
+                    }
                 } else if matches!(self.focus, Focus::Normal | Focus::Interact | Focus::WorkspaceBar)
                 {
                     // Check workspace bar clicks (client-side)
@@ -1231,6 +1259,7 @@ impl Client {
             Focus::ContextMenu => return self.handle_context_menu_key(key, tui, writer).await,
             Focus::WidgetPicker => return self.handle_widget_picker_key(key, writer).await,
             Focus::Resize => return self.handle_resize_key(key, writer).await,
+            Focus::Overview => return self.handle_overview_key(key, tui, writer).await,
             Focus::Normal | Focus::WorkspaceBar => return self.handle_normal_key(key, tui, writer).await,
             Focus::Interact => return self.handle_interact_key(key, tui, writer).await,
         }
@@ -1457,6 +1486,16 @@ impl Client {
 
         // Client-only actions
         match &action {
+            Action::ToggleOverview => {
+                if self.focus == Focus::Overview {
+                    self.focus = Focus::Normal;
+                } else {
+                    self.overview_selected = self.render_state.active_workspace;
+                    self.focus_stack.clear();
+                    self.focus = Focus::Overview;
+                }
+                return Ok(());
+            }
             Action::Quit => {
                 self.should_quit = true;
                 return Ok(());
@@ -1911,6 +1950,84 @@ impl Client {
                     ui::dialog::handle_text_input(key.code, &mut state.name);
                 }
             },
+        }
+        Ok(())
+    }
+
+    async fn handle_overview_key(
+        &mut self,
+        key: KeyEvent,
+        _tui: &Tui,
+        writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    ) -> Result<()> {
+        // Check global keybinds first (quit, etc.)
+        if let Some(action) = self.config.keys.lookup(&key).cloned() {
+            match action {
+                Action::Quit => {
+                    self.should_quit = true;
+                    return Ok(());
+                }
+                Action::ToggleOverview => {
+                    self.focus = Focus::Normal;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
+        let count = self.render_state.workspaces.len();
+        let (cols, _rows) = crate::ui::overview::compute_grid(count);
+
+        match key.code {
+            KeyCode::Esc => {
+                self.focus = Focus::Normal;
+            }
+            KeyCode::Enter | KeyCode::Char('i') => {
+                // Switch to selected workspace and exit overview
+                if self.overview_selected < count {
+                    self.render_state.active_workspace = self.overview_selected;
+                    self.focus = Focus::Normal;
+                    let mut w = writer.lock().await;
+                    let _ = send_request(
+                        &mut w,
+                        &ClientRequest::Command(format!(
+                            "select-workspace -t {}",
+                            self.overview_selected,
+                        )),
+                    )
+                    .await;
+                }
+            }
+            KeyCode::Char('h') | KeyCode::Left => {
+                self.overview_selected =
+                    crate::ui::overview::grid_navigate(self.overview_selected, count, cols, -1, 0);
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                self.overview_selected =
+                    crate::ui::overview::grid_navigate(self.overview_selected, count, cols, 1, 0);
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.overview_selected =
+                    crate::ui::overview::grid_navigate(self.overview_selected, count, cols, 0, 1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.overview_selected =
+                    crate::ui::overview::grid_navigate(self.overview_selected, count, cols, 0, -1);
+            }
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = (c as usize) - ('1' as usize);
+                if idx < count {
+                    self.render_state.active_workspace = idx;
+                    self.focus = Focus::Normal;
+                    let mut w = writer.lock().await;
+                    let _ = send_request(
+                        &mut w,
+                        &ClientRequest::Command(format!("select-workspace -t {}", idx)),
+                    )
+                    .await;
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -2598,7 +2715,8 @@ fn action_to_command(action: &Action) -> Option<String> {
         | Action::NewTab // NewTab opens picker client-side
         | Action::SplitHorizontal // opens picker client-side
         | Action::SplitVertical // opens picker client-side
-        | Action::ResizeMode => None,
+        | Action::ResizeMode
+        | Action::ToggleOverview => None,
     }
 }
 

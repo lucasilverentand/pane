@@ -11,7 +11,7 @@ use crate::copy_mode::CopyModeState;
 use pane_protocol::layout::SplitDirection;
 use crate::window::terminal::{render_screen, render_screen_copy_mode};
 
-fn render_content(
+pub(crate) fn render_content(
     screen: &vt100::Screen,
     cms: Option<&CopyModeState>,
     frame: &mut Frame,
