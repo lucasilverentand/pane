@@ -1,0 +1,76 @@
+---
+title: pane
+description: A terminal multiplexer for modern development workflows.
+template: splash
+hero:
+  tagline: Persistent daemon. Reconnectable clients. Keyboard-first multiplexer UX for shells, editors, agents, and dev servers.
+  image:
+    file: ../../assets/logo.svg
+    alt: pane logo
+  actions:
+    - text: Get Started
+      link: /getting-started/install/
+      icon: right-arrow
+    - text: GitHub
+      link: https://github.com/lucasilverentand/pane
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Built for Real Dev Sessions
+
+`pane` is a Rust terminal multiplexer that keeps state in a local daemon while
+lightweight TUI clients attach and detach as needed. It is aimed at the kind of
+workflow where shells, editors, AI agents, and local servers all need to stay
+alive without turning one terminal tab into your entire operating environment.
+
+<CardGrid stagger>
+  <Card title="Persistent by default" icon="hourglass">
+    The daemon owns PTYs and workspace state, so processes survive client
+    disconnects and reattaches.
+  </Card>
+  <Card title="Structured layouts" icon="seti:window">
+    Workspaces contain split trees, tabs, floating windows, fold, zoom, and an
+    overview mode for switching context quickly.
+  </Card>
+  <Card title="Modal control" icon="seti:vim">
+    Normal mode, Interact mode, a command palette, and leader-key support keep
+    navigation fast without giving up full terminal fidelity.
+  </Card>
+  <Card title="Process-aware UI" icon="setting">
+    Pane decorations recognize tools like `claude`, `codex`, `nvim`, `k9s`,
+    `python`, and `node` out of the box.
+  </Card>
+  <Card title="Script-friendly surface" icon="terminal-window">
+    A compact CLI plus a tmux compatibility shim make it easier to adopt in
+    existing terminal-heavy environments.
+  </Card>
+  <Card title="Customizable" icon="pencil">
+    Themes, keymaps, status-bar segments, plugins, and tab-picker entries are
+    all configurable through `config.toml`.
+  </Card>
+</CardGrid>
+
+## Quick Start
+
+```sh
+cargo install --path crates/pane-tui
+pane
+```
+
+Once attached:
+
+- `i` or `Enter` enters Interact mode
+- `Ctrl+Space` returns to Normal mode
+- `:` opens the command palette
+- `n` opens the tab picker
+- `o` toggles the workspace overview
+
+## Documentation
+
+- Start with [Install and Usage](/getting-started/install/)
+- Customize behavior in [Configuration](/reference/configuration/)
+- Learn the internals in [Architecture](/reference/architecture/)
+- Contribute using [Development](/project/development/)

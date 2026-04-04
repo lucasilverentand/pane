@@ -1,0 +1,39 @@
+:root {
+  --sl-color-accent-low: #0b2f28;
+  --sl-color-accent: #34d399;
+  --sl-color-accent-high: #c7f9e6;
+  --sl-color-text-accent: #9ef0ce;
+}
+
+[data-has-hero] .hero {
+  position: relative;
+  overflow: hidden;
+}
+
+[data-has-hero] .hero::before {
+  content: "";
+  position: absolute;
+  inset: -4rem auto auto -6rem;
+  width: 18rem;
+  height: 18rem;
+  background: radial-gradient(circle, rgb(52 211 153 / 0.22), transparent 70%);
+  pointer-events: none;
+}
+
+[data-has-hero] .hero::after {
+  content: "";
+  position: absolute;
+  inset: auto -7rem -5rem auto;
+  width: 24rem;
+  height: 24rem;
+  background: radial-gradient(circle, rgb(96 165 250 / 0.16), transparent 70%);
+  pointer-events: none;
+}
+
+.hero .tagline {
+  max-width: 50rem;
+}
+
+.card {
+  border-radius: 1.2rem;
+}

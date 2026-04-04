@@ -1,4 +1,6 @@
 target/
+site/node_modules/
+site/dist/
 
 # GhosttyKit — built locally via scripts/setup.sh, not committed
 pane-app/GhosttyKit.xcframework

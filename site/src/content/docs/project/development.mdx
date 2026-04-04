@@ -1,0 +1,86 @@
+---
+title: Development
+description: Build, test, and contribute to pane.
+---
+
+## Repository Layout
+
+`pane` is a Rust workspace with four crates:
+
+```text
+pane-tui (binary)  -->  pane-daemon  -->  pane-protocol
+                        \-> vt100-patched
+```
+
+- `crates/pane-tui`: TUI client binary and rendering
+- `crates/pane-daemon`: daemon, PTY lifecycle, session state, and socket handling
+- `crates/pane-protocol`: shared config, actions, protocol types, and layout model
+- `crates/vt100-patched`: local fork of `vt100` with project-specific terminal support
+
+## Build
+
+```sh
+cargo build
+cargo build --release
+```
+
+Run the client:
+
+```sh
+cargo run -p pane-tui -- --help
+cargo run -p pane-tui
+```
+
+Run the daemon in the foreground:
+
+```sh
+cargo run -p pane-tui -- daemon
+```
+
+## Test
+
+```sh
+cargo test
+cargo test -p pane-tui -- snapshot_tests
+```
+
+Snapshot workflow:
+
+```sh
+cargo insta review
+```
+
+## Documentation Layout
+
+- The repo root `README.md` is the GitHub landing page
+- `site/` contains the Astro and Starlight docs site
+- `docs/` and top-level markdown files still hold source material during the transition
+
+## Site Tooling
+
+The docs site uses Bun for package management and task running.
+
+```sh
+cd site
+bun install
+bun run dev
+bun run build
+```
+
+## Contributor Notes
+
+- Keep CLI docs aligned with `crates/pane-tui/src/main.rs`
+- Keep configuration docs aligned with `crates/pane-protocol/src/config.rs`
+- Keep bindable action names aligned with `crates/pane-protocol/src/registry.rs`
+- If you change UI output, expect snapshot updates in `pane-tui`
+
+## Useful Commands
+
+```sh
+git status --short
+cargo fmt
+cargo clippy --all-targets --all-features
+cargo test
+(cd site && bun run dev)
+(cd site && bun run build)
+```

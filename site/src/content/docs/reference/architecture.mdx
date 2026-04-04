@@ -1,0 +1,84 @@
+---
+title: Architecture
+description: The conceptual model and crate layout behind pane.
+---
+
+## Hierarchy
+
+```text
+Server (one per machine, runs as daemon)
+├── Workspace (full-screen split layout, shared)
+│   ├── Window (region in split tree, holds tabs)
+│   │   └── Tab (running process)
+│   └── Floating Window (overlay, not in split tree)
+└── Client (independent view into workspaces)
+```
+
+## Core Model
+
+- A single long-running daemon owns PTY sessions and workspace state
+- Running `pane` auto-starts the server if needed, then attaches a client
+- The server keeps running when clients disconnect
+- Clients can attach to the same daemon with independent focus and workspace views
+
+## Workspaces
+
+- A workspace is a full-screen split layout of windows
+- Workspaces are shared server-side state
+- Creating a workspace starts with one window containing a default shell tab
+- A workspace closes when its last window is closed
+
+## Windows
+
+- A window is a rectangular region in the split tree
+- Windows are created by splitting the focused window horizontally or vertically
+- A window contains one or more tabs and shows one tab at a time
+- Windows can also exist outside the split tree as floating overlays
+
+### Layout Controls
+
+- Mouse drag resizes split borders
+- Keyboard shortcuts support incremental resize
+- Zoom shows the focused window as an overlay on the current layout
+- Fold collapses inactive splits into a compact bar
+
+## Tabs
+
+- A tab is a running process with output and scrollback
+- Tabs can move between windows inside the same workspace
+- New tabs are created through the tab picker
+- Copy mode integrates with the system clipboard
+
+## Modes
+
+### Normal mode
+
+- Pane intercepts keys for navigation and structural commands
+- Vim-style pane movement and single-key operations are the default workflow
+- The command palette and leader map live here
+
+### Interact mode
+
+- Keys are forwarded to the focused tab process
+- `Ctrl+Space` returns to Normal mode
+
+## Workspace Crates
+
+```text
+pane-tui (binary)  -->  pane-daemon  -->  pane-protocol
+                        \-> vt100-patched
+```
+
+- `pane-protocol` contains shared types, config, keybind definitions, and the wire protocol
+- `pane-daemon` owns PTY sessions, workspaces, windows, tabs, and broadcasts state
+- `pane-tui` renders the interface with Ratatui and forwards input to the daemon
+- `vt100-patched` is a local `vt100` fork with extended terminal support
+
+## Transport
+
+Communication happens over a Unix domain socket:
+
+- default: `$TMPDIR/pane-{uid}/pane.sock`
+- debug builds: `pane-dev.sock`
+
+Set `PANE_SOCKET=name` to override the socket name.

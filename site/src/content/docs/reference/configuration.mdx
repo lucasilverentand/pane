@@ -1,0 +1,255 @@
+---
+title: Configuration
+description: Configure theme, behavior, keymaps, leader bindings, plugins, and tab picker entries.
+---
+
+`pane` is usable without any configuration. The defaults are opinionated:
+mouse support is enabled, the status bar is populated, common tools get pane
+decorations automatically, and default keymaps cover the core workflow.
+
+Configuration is read from:
+
+```text
+~/.config/pane/config.toml
+```
+
+## Configuration Shape
+
+Sections:
+
+- `[theme]`
+- `[behavior]`
+- `[keys]`
+- `[normal_keys]`
+- `[status_bar]`
+- `[leader]`
+- `[leader_keys]`
+- `[[decorations]]`
+- `[[plugins]]`
+- `[[tab_picker_entries]]`
+
+```toml
+[theme]
+preset = "catppuccin"
+
+[behavior]
+mouse = true
+nerd_fonts = true
+default_shell = "/bin/zsh"
+terminal_title_format = "{session} - {workspace}"
+
+[keys]
+"ctrl+space" = "enter_normal"
+
+[normal_keys]
+"x" = "close_tab"
+"space" = "command_palette"
+
+[leader]
+key = "space"
+timeout_ms = 300
+
+[leader_keys]
+"w" = "+Window"
+"w d" = "split_horizontal"
+"w shift+d" = "split_vertical"
+"w z" = "toggle_zoom"
+"s" = "+Session"
+"s p" = "command_palette"
+
+[status_bar]
+show_cpu = true
+show_memory = true
+show_load = true
+show_disk = false
+right = "#{cpu} #{mem} #{load}  ^⎵ normal  ⎵ leader "
+
+[[decorations]]
+process = "claude"
+border_color = "#f97316"
+
+[[plugins]]
+command = "pane-git-status"
+events = ["workspace_changed", "tick"]
+refresh_interval_secs = 5
+
+[[tab_picker_entries]]
+name = "API server"
+command = "npm run dev"
+description = "Start the local dev server"
+shell = "/bin/zsh"
+category = "project"
+```
+
+## Theme
+
+Built-in presets:
+
+- `default`
+- `dracula`
+- `catppuccin`
+- `tokyo-night`
+
+Supported keys:
+
+- `preset`
+- `accent`
+- `border_inactive`
+- `bg`
+- `fg`
+- `dim`
+- `tab_active`
+- `tab_inactive`
+
+Colors are accepted as hex strings such as `"#cba6f7"`.
+
+## Behavior
+
+Supported keys:
+
+- `fold_bar_size`
+- `vim_navigator`
+- `mouse`
+- `default_shell`
+- `auto_suspend_secs`
+- `terminal_title_format`
+- `nerd_fonts`
+
+Defaults worth knowing:
+
+- `mouse = true`
+- `auto_suspend_secs = 86400`
+- `terminal_title_format = "{session} - {workspace}"`
+
+## Key Bindings
+
+There are three input sections:
+
+- `[keys]` for bindings active in all modes
+- `[normal_keys]` for Normal mode bindings
+- `[leader_keys]` for multi-key leader sequences
+
+Key syntax examples:
+
+- `"ctrl+space"`
+- `"shift+tab"`
+- `"alt+h"`
+- `"pageup"`
+- `"f12"`
+
+Common action names:
+
+- `enter_interact`
+- `enter_normal`
+- `new_tab`
+- `close_tab`
+- `split_horizontal`
+- `split_vertical`
+- `toggle_zoom`
+- `toggle_fold`
+- `new_workspace`
+- `toggle_overview`
+- `command_palette`
+- `copy_mode`
+- `paste_clipboard`
+- `reload_config`
+
+Parameterized actions:
+
+- `switch_workspace_1` through `switch_workspace_9`
+- `focus_group_1` through `focus_group_9`
+
+## Leader Key
+
+The default leader key is `space` with a `300ms` timeout.
+
+`[leader]` supports:
+
+- `key`
+- `timeout_ms`
+
+`[leader_keys]` maps key paths to:
+
+- an action name such as `"toggle_zoom"`
+- a group label prefixed with `+`, such as `"+Window"`
+- `"passthrough"` to stop leader interception at that node
+
+```toml
+[leader]
+key = "space"
+
+[leader_keys]
+"w" = "+Window"
+"w d" = "split_horizontal"
+"w h" = "focus_left"
+"w l" = "focus_right"
+"space" = "command_palette"
+```
+
+## Status Bar
+
+Supported keys:
+
+- `show_cpu`
+- `show_memory`
+- `show_load`
+- `show_disk`
+- `update_interval_secs`
+- `left`
+- `right`
+
+Default right-hand segment:
+
+```text
+#{cpu} #{mem} #{load}  ^⎵ normal  ⎵ leader
+```
+
+## Decorations
+
+`[[decorations]]` lets you override pane border color by detected process name.
+
+Fields:
+
+- `process`
+- `border_color`
+
+`pane` already ships with defaults for tools such as `claude`, `codex`, `nvim`,
+`k9s`, `python`, `node`, and `ssh`.
+
+## Plugins
+
+`[[plugins]]` adds external commands that can contribute status-bar segments.
+
+Fields:
+
+- `command`
+- `events`
+- `refresh_interval_secs`
+
+Each plugin returns structured text segments for lightweight status
+integrations.
+
+## Tab Picker Entries
+
+`[[tab_picker_entries]]` adds custom entries to the tab picker.
+
+Fields:
+
+- `name`
+- `command`
+- `description`
+- `shell`
+- `category`
+
+This is useful for project-specific shortcuts such as local servers, test
+commands, editors, or agent entry points.
+
+## Reloading Configuration
+
+`pane` supports a `reload_config` action, but there is no hardcoded default key
+binding for it. Use the command palette or bind it yourself:
+
+```toml
+[normal_keys]
+"R" = "reload_config"
+```
