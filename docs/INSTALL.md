@@ -1,0 +1,107 @@
+# Install and Usage
+
+This document covers how to install `pane`, start a session, and learn the core
+interaction model.
+
+## Install
+
+### From source
+
+```sh
+cargo install --path crates/pane-tui
+```
+
+### Build from a checkout
+
+```sh
+git clone https://github.com/lucasilverentand/pane.git
+cd pane
+cargo build --release
+./target/release/pane --help
+```
+
+## Command-Line Interface
+
+`pane` currently exposes a small CLI surface:
+
+```text
+pane [OPTIONS] [COMMAND]
+```
+
+Commands:
+
+- `pane` starts the daemon if needed and attaches a TUI client
+- `pane -d` starts the daemon in the background without attaching
+- `pane kill` stops the running daemon and its sessions
+- `pane send-keys -t <target> <keys>` sends keys to a pane
+- `pane daemon` runs the daemon in the foreground for debugging
+- `pane tmux ...` passes common tmux-style commands through the compatibility shim
+
+## Interaction Model
+
+`pane` uses modes.
+
+### Normal mode
+
+Normal mode is the default. Keystrokes control `pane` itself instead of the
+process running in the focused tab.
+
+Common defaults:
+
+| Key | Action |
+|---|---|
+| `h` `j` `k` `l` / arrows | Focus adjacent panes |
+| `n` | Open the tab picker |
+| `s` | Split right |
+| `v` or `Shift+S` | Split down |
+| `Tab` / `Shift+Tab` | Next / previous tab |
+| `Shift+H/J/K/L` | Resize the focused pane |
+| `Alt+H/J/K/L` | Move the active tab between windows |
+| `z` | Toggle zoom |
+| `f` | Toggle fold |
+| `Shift+F` | Create a floating window |
+| `c` | Enter copy mode |
+| `:` | Open the command palette |
+| `o` | Toggle workspace overview |
+| `q` | Quit |
+
+### Interact mode
+
+Press `i` or `Enter` to enter Interact mode. In this mode, keypresses are sent
+to the focused process, so shells, editors, and TUIs behave normally.
+
+Press `Ctrl+Space` from any mode to return to Normal mode.
+
+## Workspaces, Windows, and Tabs
+
+`pane` uses the following model:
+
+- A daemon owns all runtime state
+- A workspace is a full-screen layout
+- A window is a region in the split tree
+- A tab is a running process inside a window
+
+This lets you keep multiple project layouts alive and reconnect to them later
+without keeping a single terminal instance open.
+
+## Copy, Scroll, and Palette
+
+- `Shift+PageUp` enters scroll mode
+- `c` enters copy mode
+- `p` pastes from the system clipboard
+- `:` opens the command palette for searchable actions
+
+## Socket and Environment
+
+Clients connect to the daemon over a Unix domain socket:
+
+- default: `$TMPDIR/pane-{uid}/pane.sock`
+- debug builds: `pane-dev.sock`
+
+Set `PANE_SOCKET=name` to override the socket name.
+
+## Next Steps
+
+- [Configuration](CONFIGURATION.md)
+- [Architecture](ARCHITECTURE.md)
+- [Development](DEVELOPMENT.md)
