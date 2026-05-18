@@ -1,0 +1,32 @@
+# Rust
+/target/
+Cargo.lock
+
+# Swift / Xcode
+app/.build/
+app/build/
+app/DerivedData/
+app/**/*.xcodeproj
+app/**/*.xcworkspace
+*.xcuserdata
+*.xcuserstate
+
+# Tuist
+app/Tuist/.build/
+app/.tuist-bin/
+
+# macOS
+.DS_Store
+*.swp
+*.swo
+
+# IDE
+.idea/
+.vscode/
+
+# Environment
+.env
+.env.*
+
+# Tuist generated
+app/Derived/

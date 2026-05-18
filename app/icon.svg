@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Background gradient -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="100%" stop-color="#16213e"/>
+    </linearGradient>
+
+    <!-- Pane gradients -->
+    <linearGradient id="pane1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#818cf8" stop-opacity="0.7"/>
+    </linearGradient>
+    <linearGradient id="pane2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.65"/>
+    </linearGradient>
+    <linearGradient id="pane3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c084fc" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#e9d5ff" stop-opacity="0.6"/>
+    </linearGradient>
+
+    <!-- Spark gradient -->
+    <radialGradient id="spark" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="60%" stop-color="#e0e7ff" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#a5b4fc" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Rounded rect clip for macOS icon shape -->
+    <clipPath id="iconClip">
+      <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228"/>
+    </clipPath>
+
+    <!-- Subtle inner shadow -->
+    <filter id="innerGlow">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="20" result="blur"/>
+      <feOffset dx="0" dy="4" result="offsetBlur"/>
+      <feComposite in="SourceGraphic" in2="offsetBlur" operator="over"/>
+    </filter>
+
+    <!-- Pane shadow -->
+    <filter id="paneShadow">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#000000" flood-opacity="0.3"/>
+    </filter>
+
+    <!-- Glow for spark -->
+    <filter id="sparkGlow">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Clipped content -->
+  <g clip-path="url(#iconClip)">
+    <!-- Background -->
+    <rect width="1024" height="1024" fill="url(#bg)"/>
+
+    <!-- Subtle grid texture -->
+    <g opacity="0.04" stroke="#ffffff" stroke-width="1">
+      <line x1="256" y1="0" x2="256" y2="1024"/>
+      <line x1="512" y1="0" x2="512" y2="1024"/>
+      <line x1="768" y1="0" x2="768" y2="1024"/>
+      <line x1="0" y1="256" x2="1024" y2="256"/>
+      <line x1="0" y1="512" x2="1024" y2="512"/>
+      <line x1="0" y1="768" x2="1024" y2="768"/>
+    </g>
+
+    <!-- Back pane (left, slightly rotated) -->
+    <g filter="url(#paneShadow)">
+      <rect x="180" y="240" width="380" height="520" rx="24" ry="24"
+            fill="url(#pane1)" transform="rotate(-6, 370, 500)"/>
+      <!-- Title bar -->
+      <rect x="180" y="240" width="380" height="40" rx="24" ry="0"
+            fill="rgba(255,255,255,0.1)" transform="rotate(-6, 370, 500)"/>
+      <!-- Fake code lines -->
+      <g transform="rotate(-6, 370, 500)" opacity="0.3">
+        <rect x="210" y="310" width="180" height="6" rx="3" fill="#c7d2fe"/>
+        <rect x="210" y="334" width="260" height="6" rx="3" fill="#c7d2fe"/>
+        <rect x="210" y="358" width="140" height="6" rx="3" fill="#c7d2fe"/>
+        <rect x="230" y="382" width="220" height="6" rx="3" fill="#c7d2fe"/>
+        <rect x="230" y="406" width="160" height="6" rx="3" fill="#c7d2fe"/>
+        <rect x="210" y="430" width="200" height="6" rx="3" fill="#c7d2fe"/>
+        <rect x="210" y="454" width="280" height="6" rx="3" fill="#c7d2fe"/>
+        <rect x="230" y="478" width="120" height="6" rx="3" fill="#c7d2fe"/>
+      </g>
+    </g>
+
+    <!-- Middle pane (center) -->
+    <g filter="url(#paneShadow)">
+      <rect x="320" y="200" width="380" height="520" rx="24" ry="24"
+            fill="url(#pane2)"/>
+      <!-- Title bar -->
+      <rect x="320" y="200" width="380" height="40" rx="24" ry="0"
+            fill="rgba(255,255,255,0.12)"/>
+      <!-- Dots -->
+      <circle cx="348" cy="220" r="6" fill="rgba(255,255,255,0.3)"/>
+      <circle cx="368" cy="220" r="6" fill="rgba(255,255,255,0.3)"/>
+      <circle cx="388" cy="220" r="6" fill="rgba(255,255,255,0.3)"/>
+      <!-- Fake code lines -->
+      <g opacity="0.35">
+        <rect x="350" y="268" width="220" height="6" rx="3" fill="#ddd6fe"/>
+        <rect x="350" y="292" width="300" height="6" rx="3" fill="#ddd6fe"/>
+        <rect x="350" y="316" width="160" height="6" rx="3" fill="#ddd6fe"/>
+        <rect x="370" y="340" width="240" height="6" rx="3" fill="#ddd6fe"/>
+        <rect x="370" y="364" width="180" height="6" rx="3" fill="#ddd6fe"/>
+        <rect x="350" y="388" width="260" height="6" rx="3" fill="#ddd6fe"/>
+        <rect x="350" y="412" width="140" height="6" rx="3" fill="#ddd6fe"/>
+        <rect x="370" y="436" width="200" height="6" rx="3" fill="#ddd6fe"/>
+        <rect x="350" y="460" width="280" height="6" rx="3" fill="#ddd6fe"/>
+      </g>
+    </g>
+
+    <!-- Front pane (right, slightly rotated) -->
+    <g filter="url(#paneShadow)">
+      <rect x="460" y="280" width="380" height="520" rx="24" ry="24"
+            fill="url(#pane3)" transform="rotate(4, 650, 540)"/>
+      <!-- Title bar -->
+      <rect x="460" y="280" width="380" height="40" rx="24" ry="0"
+            fill="rgba(255,255,255,0.15)" transform="rotate(4, 650, 540)"/>
+      <!-- Fake code lines -->
+      <g transform="rotate(4, 650, 540)" opacity="0.35">
+        <rect x="490" y="348" width="240" height="6" rx="3" fill="#f5f3ff"/>
+        <rect x="490" y="372" width="280" height="6" rx="3" fill="#f5f3ff"/>
+        <rect x="490" y="396" width="180" height="6" rx="3" fill="#f5f3ff"/>
+        <rect x="510" y="420" width="200" height="6" rx="3" fill="#f5f3ff"/>
+        <rect x="510" y="444" width="260" height="6" rx="3" fill="#f5f3ff"/>
+        <rect x="490" y="468" width="160" height="6" rx="3" fill="#f5f3ff"/>
+        <rect x="490" y="492" width="300" height="6" rx="3" fill="#f5f3ff"/>
+      </g>
+    </g>
+
+    <!-- AI spark at intersection -->
+    <g filter="url(#sparkGlow)">
+      <!-- Four-point star -->
+      <path d="M512 440 L520 490 L512 540 L504 490 Z" fill="url(#spark)"/>
+      <path d="M462 490 L504 498 L562 490 L520 482 Z" fill="url(#spark)" opacity="0.9"/>
+      <!-- Center dot -->
+      <circle cx="512" cy="490" r="8" fill="white" opacity="0.95"/>
+    </g>
+
+    <!-- Subtle top-left highlight -->
+    <rect width="1024" height="1024" rx="228" ry="228"
+          fill="url(#bg)" opacity="0"
+          style="mix-blend-mode: overlay"/>
+    <ellipse cx="300" cy="200" rx="400" ry="300" fill="white" opacity="0.03"/>
+  </g>
+</svg>

@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="pane1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </linearGradient>
+    <linearGradient id="pane2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="pane3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c084fc"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+
+    <filter id="shadow1">
+      <feDropShadow dx="0" dy="6" stdDeviation="12" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <filter id="shadow2">
+      <feDropShadow dx="0" dy="8" stdDeviation="14" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+    <filter id="shadow3">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    <filter id="sparkGlow">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Back pane — indigo, rotated left -->
+  <g filter="url(#shadow1)">
+    <g transform="rotate(-8, 440, 512)">
+      <rect x="200" y="220" width="340" height="480" rx="20" fill="url(#pane1)"/>
+      <!-- Title bar line -->
+      <line x1="200" y1="260" x2="540" y2="260" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+      <!-- Window dots -->
+      <circle cx="226" cy="240" r="5" fill="rgba(255,255,255,0.25)"/>
+      <circle cx="244" cy="240" r="5" fill="rgba(255,255,255,0.25)"/>
+      <circle cx="262" cy="240" r="5" fill="rgba(255,255,255,0.25)"/>
+      <!-- Code lines -->
+      <g opacity="0.25">
+        <rect x="226" y="286" width="160" height="5" rx="2.5" fill="white"/>
+        <rect x="226" y="306" width="240" height="5" rx="2.5" fill="white"/>
+        <rect x="226" y="326" width="120" height="5" rx="2.5" fill="white"/>
+        <rect x="246" y="346" width="200" height="5" rx="2.5" fill="white"/>
+        <rect x="246" y="366" width="140" height="5" rx="2.5" fill="white"/>
+        <rect x="226" y="386" width="180" height="5" rx="2.5" fill="white"/>
+        <rect x="226" y="406" width="260" height="5" rx="2.5" fill="white"/>
+        <rect x="246" y="426" width="100" height="5" rx="2.5" fill="white"/>
+        <rect x="226" y="446" width="200" height="5" rx="2.5" fill="white"/>
+        <rect x="226" y="466" width="160" height="5" rx="2.5" fill="white"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- Middle pane — violet, straight -->
+  <g filter="url(#shadow2)">
+    <rect x="340" y="190" width="340" height="480" rx="20" fill="url(#pane2)"/>
+    <!-- Title bar line -->
+    <line x1="340" y1="230" x2="680" y2="230" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+    <!-- Window dots -->
+    <circle cx="366" cy="210" r="5" fill="rgba(255,255,255,0.3)"/>
+    <circle cx="384" cy="210" r="5" fill="rgba(255,255,255,0.3)"/>
+    <circle cx="402" cy="210" r="5" fill="rgba(255,255,255,0.3)"/>
+    <!-- Code lines -->
+    <g opacity="0.3">
+      <rect x="366" y="256" width="200" height="5" rx="2.5" fill="white"/>
+      <rect x="366" y="276" width="270" height="5" rx="2.5" fill="white"/>
+      <rect x="366" y="296" width="140" height="5" rx="2.5" fill="white"/>
+      <rect x="386" y="316" width="220" height="5" rx="2.5" fill="white"/>
+      <rect x="386" y="336" width="160" height="5" rx="2.5" fill="white"/>
+      <rect x="366" y="356" width="240" height="5" rx="2.5" fill="white"/>
+      <rect x="366" y="376" width="120" height="5" rx="2.5" fill="white"/>
+      <rect x="386" y="396" width="180" height="5" rx="2.5" fill="white"/>
+      <rect x="366" y="416" width="260" height="5" rx="2.5" fill="white"/>
+      <rect x="386" y="436" width="140" height="5" rx="2.5" fill="white"/>
+      <rect x="366" y="456" width="200" height="5" rx="2.5" fill="white"/>
+    </g>
+  </g>
+
+  <!-- Front pane — purple, rotated right -->
+  <g filter="url(#shadow3)">
+    <g transform="rotate(6, 580, 512)">
+      <rect x="480" y="260" width="340" height="480" rx="20" fill="url(#pane3)"/>
+      <!-- Title bar line -->
+      <line x1="480" y1="300" x2="820" y2="300" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+      <!-- Window dots -->
+      <circle cx="506" cy="280" r="5" fill="rgba(255,255,255,0.35)"/>
+      <circle cx="524" cy="280" r="5" fill="rgba(255,255,255,0.35)"/>
+      <circle cx="542" cy="280" r="5" fill="rgba(255,255,255,0.35)"/>
+      <!-- Code lines -->
+      <g opacity="0.3">
+        <rect x="506" y="326" width="220" height="5" rx="2.5" fill="white"/>
+        <rect x="506" y="346" width="280" height="5" rx="2.5" fill="white"/>
+        <rect x="506" y="366" width="160" height="5" rx="2.5" fill="white"/>
+        <rect x="526" y="386" width="200" height="5" rx="2.5" fill="white"/>
+        <rect x="526" y="406" width="240" height="5" rx="2.5" fill="white"/>
+        <rect x="506" y="426" width="140" height="5" rx="2.5" fill="white"/>
+        <rect x="506" y="446" width="260" height="5" rx="2.5" fill="white"/>
+        <rect x="526" y="466" width="180" height="5" rx="2.5" fill="white"/>
+        <rect x="506" y="486" width="200" height="5" rx="2.5" fill="white"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- AI spark at the convergence point -->
+  <g filter="url(#sparkGlow)">
+    <path d="M510 440 L518 486 L510 532 L502 486 Z" fill="white" opacity="0.95"/>
+    <path d="M464 486 L510 494 L556 486 L510 478 Z" fill="white" opacity="0.85"/>
+    <circle cx="510" cy="486" r="7" fill="white"/>
+  </g>
+</svg>
