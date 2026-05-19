@@ -1,0 +1,18 @@
+[package]
+name = "pane-protocol"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib"]
+name = "pane_protocol"
+
+[dependencies]
+pane-core = { workspace = true }
+pane-agent = { workspace = true }
+uniffi = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+
+[build-dependencies]
+uniffi = { workspace = true, features = ["build"] }
